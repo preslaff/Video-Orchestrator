@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Local run artifacts
+runs/
+mcp.log
+
+# Machine-local Claude Code settings
+.claude/settings.local.json
+
+# Image assets (real faces) — kept local, not published
+assets/
+reference/

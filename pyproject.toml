@@ -1,0 +1,32 @@
+[project]
+name = "vorch"
+version = "0.1.0"
+description = "Local, self-contained AI video-production orchestrator (Gemma 4 + ComfyUI)"
+requires-python = ">=3.10"
+# Phase 1 (walking skeleton) needs only an HTTP client.
+dependencies = [
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+# Phase 2 — structured eval, backend, and the NiceGUI dashboard. Not imported yet.
+app = [
+    "instructor>=1.0",
+    "pydantic>=2.0",
+    "fastapi>=0.110",
+    "sse-starlette>=2.0",
+    "nicegui>=2.0",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+vorch = "vorch.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["vorch*"]
