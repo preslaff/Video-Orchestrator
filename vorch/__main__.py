@@ -20,7 +20,8 @@ import sys
 from . import config
 from .clients import comfy
 from .evaluator import EvaluationError, evaluate_image
-from .pipeline import run_scene
+from .media import MediaError
+from .pipeline import Scene, run_scene, run_sequence
 from .steps.animate import animate
 from .steps.faceswap import faceswap
 from .steps.keyframe import keyframe
@@ -80,6 +81,56 @@ def _cmd_run_scene(args) -> int:
     return 0
 
 
+def _load_scenes(path: str) -> list[Scene]:
+    """Parse a YAML scenes file into Scene objects.
+
+    Expected shape: a list of mappings, each with ``keyframe_prompt`` and
+    ``animation_prompt`` (required) and optional ``continuous`` (bool).
+    """
+    import yaml  # local import: pyyaml is only needed for run-sequence
+
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not isinstance(data, list) or not data:
+        raise ValueError(f"{path}: expected a non-empty list of scenes")
+    scenes: list[Scene] = []
+    for i, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}: scene {i} is not a mapping")
+        try:
+            scenes.append(
+                Scene(
+                    keyframe_prompt=item["keyframe_prompt"],
+                    animation_prompt=item["animation_prompt"],
+                    continuous=bool(item.get("continuous", False)),
+                )
+            )
+        except KeyError as e:
+            raise ValueError(f"{path}: scene {i} missing required field {e}") from e
+    return scenes
+
+
+def _cmd_run_sequence(args) -> int:
+    scenes = _load_scenes(args.scenes)
+    results = run_sequence(
+        scenes,
+        args.master,
+        seed=args.seed,
+        evaluate=args.evaluate,
+        relock_identity=not args.no_relock,
+        max_attempts=args.max_attempts,
+    )
+    for i, r in enumerate(results):
+        tag = "continuous" if r.continued_from_previous else "fresh"
+        print(f"scene {i + 1} [{tag}]")
+        print(f"  start:  {r.start_image}")
+        print(f"  video:  {r.video}")
+        if r.keyframe_verdict is not None:
+            v = r.keyframe_verdict
+            print(f"  verdict: {v.verdict} (score={v.score})")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vorch", description=__doc__.split("\n")[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -123,6 +174,15 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--max-attempts", type=int, default=2)
     rs.set_defaults(func=_cmd_run_scene)
 
+    rq = sub.add_parser("run-sequence", help="chain scenes with last-frame continuity")
+    rq.add_argument("scenes", help="YAML file: list of {keyframe_prompt, animation_prompt, continuous?}")
+    rq.add_argument("--master", required=True, help="master face image path")
+    rq.add_argument("--seed", type=int, default=config.SEED_RANDOM)
+    rq.add_argument("--evaluate", action="store_true", help="judge + retry fresh keyframes")
+    rq.add_argument("--no-relock", action="store_true", help="don't re-swap master onto carried frames")
+    rq.add_argument("--max-attempts", type=int, default=2)
+    rq.set_defaults(func=_cmd_run_sequence)
+
     return p
 
 
@@ -131,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (comfy.ComfyError, EvaluationError, FileNotFoundError, ValueError) as e:
+    except (comfy.ComfyError, EvaluationError, MediaError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 

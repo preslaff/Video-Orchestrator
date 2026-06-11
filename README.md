@@ -48,8 +48,10 @@ chain end-to-end (keyframe → face swap → animate).
 
 **Phase 2 — in progress.** The **evaluator** is built: Gemma vision scores a keyframe into a
 validated `Verdict` and the pipeline retries with the fix suggestion (`run-scene --evaluate`,
-or the standalone `evaluate` command). Still to come: state persistence + decision log, multi-scene
-phased orchestration with approval gates, the VRAM manager, and the NiceGUI dashboard
+or the standalone `evaluate` command). **Sequential continuity** is built too: `run-sequence`
+chains scenes so the last frame of one clip seeds the next (`continuous: true`), re-locking
+identity each step. Still to come: state persistence + decision log, multi-scene phased
+orchestration with approval gates, the VRAM manager, and the NiceGUI dashboard
 (all designed in `DESIGN.md`).
 
 ## Repository layout
@@ -96,7 +98,24 @@ python -m vorch run-scene \
 # ...with self-evaluation: judge the keyframe and retry with the fix (max N)
 python -m vorch run-scene --evaluate --max-attempts 2 \
   --keyframe-prompt "..." --animation-prompt "..." --master master_face.jpeg
+
+# A sequence of scenes — continuous scenes start on the previous clip's last frame
+python -m vorch run-sequence scenes.yaml --master master_face.jpeg
 ```
+
+`scenes.yaml` is a list of scenes; flag `continuous: true` to seed a scene from the previous
+clip's last frame (otherwise it gets a fresh identity-locked keyframe):
+
+```yaml
+- keyframe_prompt: "a castle at dawn, oil painting, impasto"
+  animation_prompt: "slow camera pan left"
+- keyframe_prompt: "(ignored when continuous)"
+  animation_prompt: "push in on the gate"
+  continuous: true
+```
+
+Carried frames are re-locked to the master face by default (ReActor swap, countering Wan drift);
+pass `--no-relock` to disable. See [`docs/sequential-continuity-plan.md`](docs/sequential-continuity-plan.md).
 
 Evaluation requires Gemma started with `--mmproj` (vision projector); without it the model is
 blind and verdicts are meaningless.

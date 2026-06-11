@@ -1,0 +1,71 @@
+"""Media helpers — extract a still frame from a generated video clip.
+
+Used by sequential continuity (DESIGN.md / docs/sequential-continuity-plan.md):
+the last frame of scene N's clip becomes the start image for scene N+1. Pure I/O
+via ffprobe + ffmpeg (no GPU); mirrors the frame-extraction pattern in
+skills/gemma-evaluate.md.
+"""
+
+from __future__ import annotations
+
+import logging
+import subprocess
+from pathlib import Path
+
+log = logging.getLogger("vorch.media")
+
+
+class MediaError(RuntimeError):
+    """Raised when ffprobe/ffmpeg fail or produce no frame."""
+
+
+def _count_frames(video_path: Path) -> int | None:
+    """Return the exact frame count via ffprobe, or None if probing fails."""
+    try:
+        out = subprocess.check_output(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-count_frames", "-show_entries", "stream=nb_read_frames",
+                "-of", "csv=p=0", str(video_path),
+            ],
+            stderr=subprocess.STDOUT,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log.warning("ffprobe failed for %s: %s", video_path, e)
+        return None
+    text = out.decode().strip()
+    return int(text) if text.isdigit() else None
+
+
+def last_frame(video_path: str | Path, dest: str | Path | None = None) -> Path:
+    """Extract the final frame of ``video_path`` to a PNG and return its path.
+
+    Probes the exact frame count and selects frame ``TOTAL-1``; if probing fails
+    (e.g. a container without frame counts), falls back to seeking near the end
+    (``-sseof``). ``dest`` defaults to ``<video>_last.png`` beside the clip.
+    """
+    video_path = Path(video_path).expanduser()
+    if not video_path.is_file():
+        raise FileNotFoundError(f"video not found: {video_path}")
+    dest = Path(dest) if dest is not None else video_path.with_name(f"{video_path.stem}_last.png")
+
+    total = _count_frames(video_path)
+    if total is not None and total > 0:
+        # Exact: pick the last frame by index. Clips are short (~49 frames), trivial.
+        select = f"select=eq(n\\,{total - 1})"
+        cmd = ["ffmpeg", "-y", "-i", str(video_path),
+               "-vf", select, "-frames:v", "1", str(dest)]
+    else:
+        # Fallback: seek 0.2s before the end and grab one frame.
+        log.warning("frame count unavailable for %s; using -sseof fallback", video_path)
+        cmd = ["ffmpeg", "-y", "-sseof", "-0.2", "-i", str(video_path),
+               "-frames:v", "1", str(dest)]
+
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        raise MediaError(f"ffmpeg failed to extract last frame of {video_path}: {e}") from e
+    if not dest.is_file():
+        raise MediaError(f"ffmpeg produced no frame for {video_path}")
+    log.info("last frame: %s -> %s", video_path, dest)
+    return dest

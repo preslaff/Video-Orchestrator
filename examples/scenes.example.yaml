@@ -1,0 +1,18 @@
+# Example scene sequence for `python -m vorch run-sequence scenes.yaml --master face.jpg`.
+#
+# Each scene needs keyframe_prompt + animation_prompt. A scene is a CUT by default
+# (fresh Klein keyframe, identity-locked to the master). Set `continuous: true` to
+# seed it from the previous clip's last frame instead — keyframe_prompt is then
+# ignored. Scene 0 is always a cut.
+
+- keyframe_prompt: "a stone castle on a hill at dawn, oil painting, impasto, visible brushstrokes"
+  animation_prompt: "slow camera pan to the left, drifting clouds"
+
+# Continues the shot — starts on the final frame of scene 1's clip.
+- keyframe_prompt: "(ignored when continuous)"
+  animation_prompt: "push in toward the castle gate"
+  continuous: true
+
+# A hard cut to a new location — fresh keyframe, not chained.
+- keyframe_prompt: "interior of a candlelit great hall, oil painting, warm light"
+  animation_prompt: "gentle dolly forward down the hall"

@@ -180,9 +180,10 @@ Per `NOTES.md` §9 — narrow and end-to-end first:
 
 **Phase 2 — intelligence & scale:**
 6. ✅ `evaluator.py` + retry loop (vision feedback) — `Verdict` (Pydantic), `evaluate_image`, `generate_keyframe_evaluated`; wired into `run_scene(evaluate=True)` and the `evaluate` CLI command.
-7. `state.py` (persisted Job, decision log) + structured logging
-8. Multi-scene, phased orchestration + semi-auto gates
-9. `vram.py` guards / Option-B refinements
+7. ✅ Sequential continuity — `media.last_frame` + `run_sequence`/`Scene`; the `run-sequence` CLI (YAML scene list). See §13.
+8. `state.py` (persisted Job, decision log) + structured logging
+9. Multi-scene, phased orchestration + semi-auto gates
+10. `vram.py` guards / Option-B refinements
 
 ## 10. Open / deferred
 
@@ -266,3 +267,18 @@ decision and selected a Python-native stack. The whole app runs as **one local p
 - ComfyUI server.py: https://github.com/comfyanonymous/ComfyUI/blob/master/server.py
 - ComfyUI memory/device management: https://deepwiki.com/Comfy-Org/ComfyUI/2.6-memory-and-device-management
 - ComfyUI API guide: https://www.runflow.io/blog/comfyui-api-developer-guide
+
+## 13. Sequential continuity (last-frame → next keyframe)
+
+`run_sequence(scenes, master_face, …)` chains scenes so consecutive clips flow into each other.
+Full design rationale: [`docs/sequential-continuity-plan.md`](docs/sequential-continuity-plan.md).
+
+- **Two modes, opt-in.** Each `Scene` is a *cut* by default — a fresh Klein keyframe, identity-locked
+  to the master via ReActor. Flag `continuous: true` and the scene is instead seeded by the **previous
+  clip's last frame** (`media.last_frame`, ffprobe+ffmpeg). Scene 0 is always a cut.
+- **Drift control.** Wan drifts identity across a clip; chaining compounds it. Carried frames are
+  re-locked to the master (ReActor swap) before animating — default on, `--no-relock` to disable.
+- **Phasing tension.** Continuity is inherently sequential (scene N depends on N-1's video), so a
+  chained run **cannot** batch the Wan phase the way NOTES §5 prescribes. Klein loads once for the cut
+  scenes; the Wan+ReActor chain then runs scene-by-scene. Resolution aligns for free — a carried
+  832×480 frame is already Wan-native.
