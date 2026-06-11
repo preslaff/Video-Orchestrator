@@ -19,12 +19,18 @@ import sys
 
 from . import config
 from .clients import comfy
+from .clients.gemma import GemmaError
 from .evaluator import EvaluationError, evaluate_image
 from .media import MediaError
+from .orchestrator import GATE_KEYFRAMES, GATE_STORYBOARD, Orchestrator
 from .pipeline import Scene, run_scene, run_sequence
+from .state import JobStatus, Store
 from .steps.animate import animate
 from .steps.faceswap import faceswap
 from .steps.keyframe import keyframe
+from .storyboard import StoryboardError
+
+GATES = {GATE_STORYBOARD, GATE_KEYFRAMES}
 
 
 def _cmd_keyframe(args) -> int:
@@ -131,6 +137,108 @@ def _cmd_run_sequence(args) -> int:
     return 0
 
 
+def _open_store() -> Store:
+    config.STATE_DB.parent.mkdir(parents=True, exist_ok=True)
+    return Store(config.STATE_DB)
+
+
+def _print_job(job, store: Store) -> None:
+    print(f"job {job.id}  [{job.status.value}]  {job.idea!r}")
+    for s in job.scenes:
+        kf = s.keyframe_path or "-"
+        vid = s.video_path or "-"
+        print(f"  scene {s.index} [{s.status.value}]  kf={kf}  video={vid}")
+    if job.status is JobStatus.NEEDS_APPROVAL:
+        done = {d.phase for d in store.decisions(job.id) if d.action == "approved"}
+        gate = GATE_KEYFRAMES if GATE_STORYBOARD in done else GATE_STORYBOARD
+        print(f"  -> paused. approve with:  python -m vorch approve {job.id} {gate}")
+
+
+def _orchestrator(store: Store, spec: dict) -> Orchestrator:
+    retry = spec.get("retry") or {}
+    return Orchestrator(
+        store,
+        n_scenes=spec.get("n_scenes"),
+        seed=int(spec.get("seed", config.SEED_RANDOM)),
+        max_attempts=int(retry.get("max_attempts", 2)),
+        evaluate=bool(spec.get("evaluate", True)),
+    )
+
+
+def _cmd_run(args) -> int:
+    import yaml  # local import: pyyaml only needed for job specs
+
+    with open(args.spec, encoding="utf-8") as f:
+        spec = yaml.safe_load(f) or {}
+    if not spec.get("idea"):
+        raise ValueError(f"{args.spec}: 'idea' is required")
+    if not spec.get("master_face"):
+        raise ValueError(f"{args.spec}: 'master_face' is required")
+
+    store = _open_store()
+    try:
+        o = _orchestrator(store, spec)
+        job = o.create_job(
+            spec["idea"],
+            style=spec.get("style", ""),
+            master_face=spec["master_face"],
+            autonomy=spec.get("autonomy", "semi"),
+        )
+        o.run(job)
+        _print_job(job, store)
+    finally:
+        store.close()
+    return 0
+
+
+def _cmd_approve(args) -> int:
+    if args.gate not in GATES:
+        raise ValueError(f"unknown gate {args.gate!r}; expected one of {sorted(GATES)}")
+    store = _open_store()
+    try:
+        job = store.load_job(args.job_id)
+        if job is None:
+            raise ValueError(f"no job with id {args.job_id}")
+        spec = {"n_scenes": len(job.scenes) or None}
+        o = _orchestrator(store, spec)
+        o.approve(job, args.gate)
+        _print_job(job, store)
+    finally:
+        store.close()
+    return 0
+
+
+def _cmd_jobs(args) -> int:
+    store = _open_store()
+    try:
+        rows = store.list_jobs()
+        if not rows:
+            print("no jobs")
+        for r in rows:
+            print(f"{r.id}  [{r.status.value}]  {r.updated_at}  {r.idea!r}")
+    finally:
+        store.close()
+    return 0
+
+
+def _cmd_job(args) -> int:
+    store = _open_store()
+    try:
+        job = store.load_job(args.job_id)
+        if job is None:
+            raise ValueError(f"no job with id {args.job_id}")
+        _print_job(job, store)
+        print("decision log:")
+        for d in store.decisions(job.id):
+            scene = "job" if d.scene_index is None else f"s{d.scene_index}"
+            score = "" if d.score is None else f" score={d.score}"
+            reason = f"  {d.reason}" if d.reason else ""
+            print(f"  [{d.created_at}] {scene} {d.phase}/{d.action}{score}{reason}")
+    finally:
+        store.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vorch", description=__doc__.split("\n")[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -183,6 +291,22 @@ def build_parser() -> argparse.ArgumentParser:
     rq.add_argument("--max-attempts", type=int, default=2)
     rq.set_defaults(func=_cmd_run_sequence)
 
+    rn = sub.add_parser("run", help="drive a full job from a YAML spec (storyboard -> clips)")
+    rn.add_argument("spec", help="job spec YAML (idea, master_face, n_scenes, style, autonomy)")
+    rn.set_defaults(func=_cmd_run)
+
+    ap = sub.add_parser("approve", help="clear a semi-auto gate and continue a job")
+    ap.add_argument("job_id")
+    ap.add_argument("gate", help=f"one of {sorted(GATES)}")
+    ap.set_defaults(func=_cmd_approve)
+
+    js = sub.add_parser("jobs", help="list persisted jobs")
+    js.set_defaults(func=_cmd_jobs)
+
+    jb = sub.add_parser("job", help="show a job's scenes and decision log")
+    jb.add_argument("job_id")
+    jb.set_defaults(func=_cmd_job)
+
     return p
 
 
@@ -191,7 +315,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (comfy.ComfyError, EvaluationError, MediaError, FileNotFoundError, ValueError) as e:
+    except (
+        comfy.ComfyError, EvaluationError, MediaError, GemmaError, StoryboardError,
+        FileNotFoundError, ValueError,
+    ) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 

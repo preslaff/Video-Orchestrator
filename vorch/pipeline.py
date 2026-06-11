@@ -52,7 +52,7 @@ class SceneResult:
     keyframe_verdict: Verdict | None = None
 
 
-def _swap_master_onto(frame_path: Path, master_name: str, *, label: str = "faceswap") -> Path:
+def swap_master_onto(frame_path: Path, master_name: str, *, label: str = "faceswap") -> Path:
     """Stage ``frame_path`` and impose the (already-staged) master face onto it."""
     frame_name = comfy.upload_image(frame_path)
     log.info("%s: imposing master face", label)
@@ -61,7 +61,7 @@ def _swap_master_onto(frame_path: Path, master_name: str, *, label: str = "faces
     return swapped
 
 
-def _animate_frame(frame_path: Path, animation_prompt: str, *, seed: int) -> Path:
+def animate_frame(frame_path: Path, animation_prompt: str, *, seed: int) -> Path:
     """Stage ``frame_path``, reclaim VRAM, and animate it into a clip."""
     frame_name = comfy.upload_image(frame_path)
     log.info("free: reclaiming VRAM before Wan")
@@ -147,8 +147,8 @@ def run_scene(
             keyframe_prompt, seed=seed, evaluate=False, max_attempts=max_attempts
         )
 
-    swapped_path = _swap_master_onto(kf_path, master_name)
-    video_path = _animate_frame(swapped_path, animation_prompt, seed=seed)
+    swapped_path = swap_master_onto(kf_path, master_name)
+    video_path = animate_frame(swapped_path, animation_prompt, seed=seed)
 
     return SceneResult(
         video=video_path,
@@ -196,7 +196,7 @@ def run_sequence(
             kf_path = None
             verdict = None
             if relock_identity:
-                swapped = _swap_master_onto(frame, master_name, label=f"scene {i + 1} relock")
+                swapped = swap_master_onto(frame, master_name, label=f"scene {i + 1} relock")
                 start_image = swapped
             else:
                 swapped = None
@@ -206,10 +206,10 @@ def run_sequence(
             kf_path, verdict = _fresh_keyframe(
                 scene.keyframe_prompt, seed=seed, evaluate=evaluate, max_attempts=max_attempts
             )
-            swapped = _swap_master_onto(kf_path, master_name, label=f"scene {i + 1} faceswap")
+            swapped = swap_master_onto(kf_path, master_name, label=f"scene {i + 1} faceswap")
             start_image = swapped
 
-        video_path = _animate_frame(start_image, scene.animation_prompt, seed=seed)
+        video_path = animate_frame(start_image, scene.animation_prompt, seed=seed)
         results.append(
             SceneResult(
                 video=video_path,

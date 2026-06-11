@@ -1,0 +1,13 @@
+# Job spec for `python -m vorch run job.yaml` (DESIGN.md §7).
+# Drives the full phased pipeline: storyboard -> per-scene prompts -> keyframes
+# (+eval/retry) -> videos, persisting to SQLite with a decision log.
+
+idea: "Жена меси хляб в селска кухня на разсъмване"   # the story prompt (Bulgarian or English)
+n_scenes: 5                                           # ~how many scenes (omit to let the model decide)
+style: "oil painting, impasto, visible brushstrokes"  # FLUX.2 keyframe aesthetic
+master_face: assets/jena-cropped.jpeg                 # ReActor source — injected at runtime, not hardcoded
+autonomy: semi                                        # semi (pause at gates) | full (run straight through)
+evaluate: true                                        # judge keyframes with Gemma vision + retry
+seed: 0                                               # 0 = random
+retry:
+  max_attempts: 2

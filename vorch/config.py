@@ -44,3 +44,6 @@ REACTOR_RESTORE_MODEL = "GFPGANv1.4.pth"
 # --- Behaviour ---------------------------------------------------------------
 RUN_TIMEOUT = int(os.environ.get("VORCH_RUN_TIMEOUT", "600"))  # seconds to wait per workflow
 SEED_RANDOM = 0  # ComfyUI convention: 0 = random seed
+
+# Job state + decision log (SQLite). Defaults under runs/ (DESIGN §7 output_dir).
+STATE_DB = Path(os.environ.get("VORCH_STATE_DB", "runs/vorch.db")).expanduser()

@@ -50,11 +50,12 @@ chain end-to-end (keyframe → face swap → animate).
 validated `Verdict` and the pipeline retries with the fix suggestion (`run-scene --evaluate`,
 or the standalone `evaluate` command). **Sequential continuity** is built too: `run-sequence`
 chains scenes so the last frame of one clip seeds the next (`continuous: true`), re-locking
-identity each step. **State** is persisted too: `state.py` stores each `Job`/`Scene` in SQLite
+identity each step. **State** is persisted: `state.py` stores each `Job`/`Scene` in SQLite
 (resumable) with an append-only **decision log** recording why every frame was accepted or
-retried. Still to come: multi-scene phased orchestration with approval gates (wiring the
-evaluator/continuity/state together), the VRAM manager, and the NiceGUI dashboard
-(all designed in `DESIGN.md`).
+retried. And the **orchestrator** ties it together: from a one-line idea it generates a
+storyboard (Gemma), then drives storyboard → keyframes (+eval/retry) → videos as a phased,
+resumable state machine with **semi-autonomous approval gates** (`run` / `approve` / `jobs`).
+Still to come: the VRAM manager and the async queue + NiceGUI dashboard (designed in `DESIGN.md`).
 
 ## Repository layout
 
@@ -118,6 +119,29 @@ clip's last frame (otherwise it gets a fresh identity-locked keyframe):
 
 Carried frames are re-locked to the master face by default (ReActor swap, countering Wan drift);
 pass `--no-relock` to disable. See [`docs/sequential-continuity-plan.md`](docs/sequential-continuity-plan.md).
+
+### Full job from an idea (the orchestrator)
+
+Drive the whole phased pipeline from a one-line idea via a YAML job spec
+(see [`examples/job.example.yaml`](examples/job.example.yaml)):
+
+```bash
+python -m vorch run job.yaml          # storyboard -> keyframes (+eval) -> videos
+python -m vorch jobs                  # list persisted jobs + status
+python -m vorch job <job_id>          # scenes + full decision log
+```
+
+In `autonomy: semi` the run pauses at approval gates (after the storyboard, and again before the
+expensive Wan phase); inspect, then continue:
+
+```bash
+python -m vorch approve <job_id> storyboard   # release the storyboard gate
+python -m vorch approve <job_id> keyframes    # release the pre-Wan gate
+```
+
+`autonomy: full` runs straight through. State + the decision log persist to SQLite
+(`VORCH_STATE_DB`, default `runs/vorch.db`), so a job is **resumable** and every accept/retry is
+auditable.
 
 Evaluation requires Gemma started with `--mmproj` (vision projector); without it the model is
 blind and verdicts are meaningless.

@@ -48,8 +48,11 @@ vorch/
 │   ├── animate.py   # Wan image-to-video
 │   └── faceswap.py  # ReActor
 ├── evaluator.py     # Gemma vision → Verdict (Instructor/Pydantic); retry-with-fix helper   [Phase 2]
-├── pipeline.py      # deterministic phase machine + semi-auto gates
+├── storyboard.py    # Gemma text → scene briefs + keyframe/animation prompts                [Phase 2]
+├── pipeline.py      # per-scene chains: run_scene / run_sequence (continuity)
+├── orchestrator.py  # job-level phase machine + semi-auto gates over state.Store            [Phase 2]
 ├── state.py         # Job/Scene model, SQLite-persisted (resumable + decision log)          [Phase 2]
+├── media.py         # last_frame() — ffprobe+ffmpeg frame extraction for continuity         [Phase 2]
 ├── vram.py          # gpu_free_mb(), free_comfyui(), guards (thin under Option B)            [Phase 2]
 ├── queue.py         # asyncio job queue over SQLite (sequence long jobs, cancel, resume)     [Phase 2]
 ├── server.py        # FastAPI routes + SSE progress stream (lives inside the NiceGUI app)    [Phase 2]
@@ -182,8 +185,9 @@ Per `NOTES.md` §9 — narrow and end-to-end first:
 6. ✅ `evaluator.py` + retry loop (vision feedback) — `Verdict` (Pydantic), `evaluate_image`, `generate_keyframe_evaluated`; wired into `run_scene(evaluate=True)` and the `evaluate` CLI command.
 7. ✅ Sequential continuity — `media.last_frame` + `run_sequence`/`Scene`; the `run-sequence` CLI (YAML scene list). See §13.
 8. ✅ `state.py` — SQLite-persisted `Job`/`Scene` (resumable) + append-only decision log (`Store`, `Decision`, `record_verdict`). Structured logging still pending.
-9. Multi-scene, phased orchestration + semi-auto gates
+9. ✅ Multi-scene phased orchestration + semi-auto gates — `storyboard.py` (Gemma narrative) + `orchestrator.py` (`Orchestrator`: storyboard ⏸ → keyframes+eval ⏸ → videos, persisted to `Store`); CLI `run`/`approve`/`jobs`/`job`. Resumable from reloaded state; gates cleared via logged approvals.
 10. `vram.py` guards / Option-B refinements
+11. `queue.py` + `server.py` + `app/` — async queue, SSE, NiceGUI dashboard
 
 ## 10. Open / deferred
 
