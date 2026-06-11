@@ -179,7 +179,7 @@ Per `NOTES.md` §9 — narrow and end-to-end first:
 > Independent step CLI commands make reordering trivial.
 
 **Phase 2 — intelligence & scale:**
-6. `evaluator.py` + retry loop (vision feedback)
+6. ✅ `evaluator.py` + retry loop (vision feedback) — `Verdict` (Pydantic), `evaluate_image`, `generate_keyframe_evaluated`; wired into `run_scene(evaluate=True)` and the `evaluate` CLI command.
 7. `state.py` (persisted Job, decision log) + structured logging
 8. Multi-scene, phased orchestration + semi-auto gates
 9. `vram.py` guards / Option-B refinements

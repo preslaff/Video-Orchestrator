@@ -43,10 +43,14 @@ keyframe evaluation.
 
 ## Status
 
-**Phase 1 — walking skeleton.** A deterministic single-scene driver that proves the ComfyUI chain
-end-to-end (keyframe → face swap → animate), with no evaluation yet. The evaluator + retry loop,
-state persistence, VRAM manager, and the NiceGUI dashboard are designed (see `DESIGN.md`) but not
-yet built.
+**Phase 1 — walking skeleton** ✅ — a deterministic single-scene driver that proves the ComfyUI
+chain end-to-end (keyframe → face swap → animate).
+
+**Phase 2 — in progress.** The **evaluator** is built: Gemma vision scores a keyframe into a
+validated `Verdict` and the pipeline retries with the fix suggestion (`run-scene --evaluate`,
+or the standalone `evaluate` command). Still to come: state persistence + decision log, multi-scene
+phased orchestration with approval gates, the VRAM manager, and the NiceGUI dashboard
+(all designed in `DESIGN.md`).
 
 ## Repository layout
 
@@ -80,12 +84,22 @@ python -m vorch keyframe "oil painting, woman kneading bread, impasto, visible b
 python -m vorch animate keyframe.png "slow camera push-in, hands kneading dough"
 python -m vorch faceswap scene.png master_face.jpeg
 
+# Score an image against an intent (Gemma vision → accept/retry verdict)
+python -m vorch evaluate keyframe.png "woman kneading bread, oil painting"
+
 # Full single scene: keyframe → swap → animate
 python -m vorch run-scene \
   --keyframe-prompt "..." \
   --animation-prompt "..." \
   --master master_face.jpeg
+
+# ...with self-evaluation: judge the keyframe and retry with the fix (max N)
+python -m vorch run-scene --evaluate --max-attempts 2 \
+  --keyframe-prompt "..." --animation-prompt "..." --master master_face.jpeg
 ```
+
+Evaluation requires Gemma started with `--mmproj` (vision projector); without it the model is
+blind and verdicts are meaningless.
 
 Run the GPU-free registry checks with:
 

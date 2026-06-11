@@ -19,6 +19,7 @@ import sys
 
 from . import config
 from .clients import comfy
+from .evaluator import EvaluationError, evaluate_image
 from .pipeline import run_scene
 from .steps.animate import animate
 from .steps.faceswap import faceswap
@@ -54,16 +55,28 @@ def _cmd_faceswap(args) -> int:
     return 0
 
 
+def _cmd_evaluate(args) -> int:
+    verdict = evaluate_image(args.image, args.task)
+    print(verdict.model_dump_json(indent=2))
+    return 0 if verdict.verdict == "accept" else 2
+
+
 def _cmd_run_scene(args) -> int:
     result = run_scene(
         args.keyframe_prompt,
         args.animation_prompt,
         args.master,
         seed=args.seed,
+        evaluate=args.evaluate,
+        task=args.task,
+        max_attempts=args.max_attempts,
     )
     print(f"keyframe: {result.keyframe}")
     print(f"swapped:  {result.swapped}")
     print(f"video:    {result.video}")
+    if result.keyframe_verdict is not None:
+        v = result.keyframe_verdict
+        print(f"verdict:  {v.verdict} (score={v.score})")
     return 0
 
 
@@ -95,11 +108,19 @@ def build_parser() -> argparse.ArgumentParser:
     fs.add_argument("--restore-model", default=config.REACTOR_RESTORE_MODEL)
     fs.set_defaults(func=_cmd_faceswap)
 
+    ev = sub.add_parser("evaluate", help="score an image against a task (Gemma vision)")
+    ev.add_argument("image", help="local path to the image to evaluate")
+    ev.add_argument("task", help="the intent to judge the image against")
+    ev.set_defaults(func=_cmd_evaluate)
+
     rs = sub.add_parser("run-scene", help="full chain: keyframe -> swap -> animate")
     rs.add_argument("--keyframe-prompt", required=True)
     rs.add_argument("--animation-prompt", required=True)
     rs.add_argument("--master", required=True, help="master face image path")
     rs.add_argument("--seed", type=int, default=config.SEED_RANDOM)
+    rs.add_argument("--evaluate", action="store_true", help="judge + retry the keyframe")
+    rs.add_argument("--task", default=None, help="eval intent (defaults to keyframe prompt)")
+    rs.add_argument("--max-attempts", type=int, default=2)
     rs.set_defaults(func=_cmd_run_scene)
 
     return p
@@ -110,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (comfy.ComfyError, FileNotFoundError, ValueError) as e:
+    except (comfy.ComfyError, EvaluationError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
