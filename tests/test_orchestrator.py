@@ -26,6 +26,13 @@ def _verdict(score=8):
     )
 
 
+def _verdict_retry():
+    return Verdict(
+        action_correct=False, identity_match=True, style_match=True, artifacts=True,
+        composition_ok=True, score=2, verdict="retry", fix_suggestion="use a peel",
+    )
+
+
 @pytest.fixture
 def wired(monkeypatch, tmp_path):
     """Store + monkeypatched generation seams; returns (store, master_path, calls)."""
@@ -43,9 +50,12 @@ def wired(monkeypatch, tmp_path):
         storyboard, "animation_prompt", lambda b: PromptPair(positive=f"an::{b.description}")
     )
 
-    def fake_kf_eval(prompt, task, *, seed, max_attempts):
+    def fake_kf_eval(prompt, task, *, seed, max_attempts, on_attempt=None):
         calls["keyframe"] += 1
-        return f"/kf/{calls['keyframe']}.png", _verdict()
+        path, v = f"/kf/{calls['keyframe']}.png", _verdict()
+        if on_attempt:
+            on_attempt(1, path, v)
+        return path, v
 
     def fake_kf(prompt, *, seed):
         calls["keyframe"] += 1
@@ -155,8 +165,11 @@ def test_low_score_accept_logs_review_flag(wired, monkeypatch):
     """An objectively-accepted keyframe with a low score gets a 'review' flag."""
     store, master, _ = wired
 
-    def low_score(prompt, task, *, seed, max_attempts):
-        return "/kf/x.png", _verdict(score=1)  # objective accept, advisory score low
+    def low_score(prompt, task, *, seed, max_attempts, on_attempt=None):
+        path, v = "/kf/x.png", _verdict(score=1)  # objective accept, advisory score low
+        if on_attempt:
+            on_attempt(1, path, v)
+        return path, v
 
     monkeypatch.setattr(pipeline, "generate_keyframe_evaluated", low_score)
     o = Orchestrator(store, n_scenes=2)
@@ -166,6 +179,37 @@ def test_low_score_accept_logs_review_flag(wired, monkeypatch):
     actions = [d.action for d in store.decisions(job.id) if d.phase == "keyframe"]
     assert actions.count("accept") == 2  # both keyframes accepted (objective gate)
     assert actions.count("review") == 2  # both flagged for review (score=1)
+
+
+def test_run_config_persisted_and_restored_on_resume(wired):
+    """create_job stores seed/max_attempts/evaluate; from_job restores them."""
+    store, master, _ = wired
+    o = Orchestrator(store, n_scenes=2, seed=11, max_attempts=4, evaluate=False)
+    job = o.create_job("idea", master_face=str(master), autonomy="semi")
+
+    reloaded = store.load_job(job.id)
+    assert reloaded.seed == 11 and reloaded.max_attempts == 4 and reloaded.evaluate is False
+
+    o2 = Orchestrator.from_job(store, reloaded)
+    assert o2.seed == 11 and o2.max_attempts == 4 and o2.evaluate is False and o2.n_scenes == 2
+
+
+def test_every_keyframe_attempt_is_logged(wired, monkeypatch):
+    """A retry-then-accept keyframe logs both attempts to the decision log."""
+    store, master, _ = wired
+
+    def retry_then_accept(prompt, task, *, seed, max_attempts, on_attempt=None):
+        on_attempt(1, "/kf/a.png", _verdict_retry())
+        on_attempt(2, "/kf/b.png", _verdict(score=8))
+        return "/kf/b.png", _verdict(score=8)
+
+    monkeypatch.setattr(pipeline, "generate_keyframe_evaluated", retry_then_accept)
+    o = Orchestrator(store, n_scenes=1)
+    job = o.create_job("idea", master_face=str(master), autonomy="full")
+    o.run(job)
+
+    kf = [(d.attempt, d.action) for d in store.decisions(job.id) if d.phase == "keyframe"]
+    assert (1, "retry") in kf and (2, "accept") in kf
 
 
 def test_resume_from_reloaded_job(wired):

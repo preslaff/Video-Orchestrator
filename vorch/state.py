@@ -85,6 +85,12 @@ class Job:
     style: str = ""
     master_face: str = ""
     autonomy: str = "semi"  # semi | full
+    # Run-config — persisted so a resumed run (approve/reload) reconstructs the
+    # orchestrator faithfully instead of falling back to defaults.
+    n_scenes: int | None = None
+    seed: int = 0
+    max_attempts: int = 2
+    evaluate: bool = True
     status: JobStatus = JobStatus.PENDING
     scenes: list[Scene] = field(default_factory=list)
     created_at: str = ""
@@ -112,6 +118,10 @@ def new_job(
     style: str = "",
     master_face: str = "",
     autonomy: str = "semi",
+    n_scenes: int | None = None,
+    seed: int = 0,
+    max_attempts: int = 2,
+    evaluate: bool = True,
     scenes: list[Scene] | None = None,
 ) -> Job:
     """Create a fresh Job with a generated id and creation timestamp."""
@@ -122,6 +132,10 @@ def new_job(
         style=style,
         master_face=master_face,
         autonomy=autonomy,
+        n_scenes=n_scenes,
+        seed=seed,
+        max_attempts=max_attempts,
+        evaluate=evaluate,
         scenes=scenes or [],
         created_at=ts,
         updated_at=ts,
@@ -186,6 +200,10 @@ def job_to_dict(job: Job) -> dict:
         "style": job.style,
         "master_face": job.master_face,
         "autonomy": job.autonomy,
+        "n_scenes": job.n_scenes,
+        "seed": job.seed,
+        "max_attempts": job.max_attempts,
+        "evaluate": job.evaluate,
         "status": job.status.value,
         "scenes": [_scene_to_dict(s) for s in job.scenes],
         "created_at": job.created_at,
@@ -200,6 +218,10 @@ def job_from_dict(d: dict) -> Job:
         style=d.get("style", ""),
         master_face=d.get("master_face", ""),
         autonomy=d.get("autonomy", "semi"),
+        n_scenes=d.get("n_scenes"),
+        seed=d.get("seed", 0),
+        max_attempts=d.get("max_attempts", 2),
+        evaluate=d.get("evaluate", True),
         status=JobStatus(d.get("status", "pending")),
         scenes=[_scene_from_dict(s) for s in d.get("scenes", [])],
         created_at=d.get("created_at", ""),

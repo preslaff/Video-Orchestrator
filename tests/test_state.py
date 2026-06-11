@@ -74,6 +74,15 @@ def test_job_roundtrip_preserves_scene_and_verdict(store):
     assert s.keyframe_verdict.fix_suggestion == "fix the hands"
 
 
+def test_run_config_persists(store):
+    """seed/max_attempts/evaluate/n_scenes survive a save/load round-trip."""
+    job = new_job(idea="x", n_scenes=3, seed=11, max_attempts=4, evaluate=False)
+    store.save_job(job)
+    loaded = store.load_job(job.id)
+    assert loaded.n_scenes == 3 and loaded.seed == 11
+    assert loaded.max_attempts == 4 and loaded.evaluate is False
+
+
 def test_save_updates_in_place_and_bumps_updated_at(store):
     job = new_job(idea="x")
     store.save_job(job)

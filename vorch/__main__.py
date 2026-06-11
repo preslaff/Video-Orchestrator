@@ -202,8 +202,7 @@ def _cmd_approve(args) -> int:
         job = store.load_job(args.job_id)
         if job is None:
             raise ValueError(f"no job with id {args.job_id}")
-        spec = {"n_scenes": len(job.scenes) or None}
-        o = _orchestrator(store, spec)
+        o = Orchestrator.from_job(store, job)  # run-config restored from the job
         o.approve(job, args.gate)
         _print_job(job, store)
     finally:

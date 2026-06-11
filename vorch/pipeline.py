@@ -14,7 +14,7 @@ phase. State persistence and the UI remain later Phase-2 increments.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,11 +78,15 @@ def generate_keyframe_evaluated(
     *,
     seed: int = config.SEED_RANDOM,
     max_attempts: int = 2,
+    on_attempt: Callable[[int, Path, Verdict], None] | None = None,
 ) -> tuple[Path, Verdict]:
     """Generate a keyframe, evaluate it, and retry with the fix up to N times.
 
     Returns the (path, verdict) of the accepted attempt, or of the final attempt
     if none were accepted — the caller's human gate decides what to do then.
+    ``on_attempt(attempt, path, verdict)`` is invoked after each evaluation so the
+    caller can log every attempt to its decision log (DESIGN.md §8), not just the
+    final one.
     """
     attempt_prompt = prompt
     kf_path: Path
@@ -93,6 +97,8 @@ def generate_keyframe_evaluated(
         log.info("keyframe: attempt %d/%d (seed=%s)", attempt, max_attempts, attempt_seed)
         kf_path = keyframe(attempt_prompt, seed=attempt_seed)
         verdict = evaluate_image(kf_path, task)
+        if on_attempt is not None:
+            on_attempt(attempt, kf_path, verdict)
         if verdict.decision == "accept":
             return kf_path, verdict
         # Feed the fix back into the prompt for the next attempt (NOTES.md §6).
