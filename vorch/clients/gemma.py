@@ -27,10 +27,19 @@ def complete_text(
     *,
     max_tokens: int = 800,
     temperature: float = 0.7,
+    think: bool = False,
     timeout: int = 300,
 ) -> str:
-    """Return the assistant message text for a system+user prompt."""
-    payload = {
+    """Return the assistant message text for a system+user prompt.
+
+    Gemma 4 is a reasoning model: by default it emits ``reasoning_content``
+    (thinking) that consumes the ``max_tokens`` budget *before* the answer,
+    truncating or emptying structured output. ``think=False`` (the default)
+    disables thinking via ``chat_template_kwargs`` (needs llama-server ``--jinja``)
+    so the whole budget goes to the answer — essential for the JSON-returning
+    storyboard/prompt calls. Set ``think=True`` only for free-form prose.
+    """
+    payload: dict[str, Any] = {
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -38,6 +47,8 @@ def complete_text(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    if not think:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     resp = requests.post(
         f"{config.GEMMA_URL}/v1/chat/completions", json=payload, timeout=timeout
     )
@@ -63,6 +74,7 @@ def complete_vision(
     response_format: dict | None = None,
     max_tokens: int = 400,
     temperature: float = 0.2,
+    think: bool = False,
     timeout: int = 300,
 ) -> str:
     """Return the assistant text for a vision prompt (images + text).
@@ -70,7 +82,9 @@ def complete_vision(
     Requires llama-server started with ``--mmproj`` (else Gemma is blind —
     SKILL.md invariant 4). Pass ``response_format`` (a json_schema spec) to
     constrain output at the source; always validate the result externally,
-    since llama.cpp grammar can 'fail open'.
+    since llama.cpp grammar can 'fail open'. ``think=False`` (default) disables
+    Gemma's reasoning channel so the token budget produces the verdict JSON
+    rather than being spent on thinking (see ``complete_text``).
     """
     content: list[dict[str, Any]] = [
         {"type": "image_url", "image_url": {"url": encode_image(p)}}
@@ -86,6 +100,8 @@ def complete_vision(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    if not think:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     if response_format is not None:
         payload["response_format"] = response_format
 
