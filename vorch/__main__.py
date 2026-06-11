@@ -65,7 +65,10 @@ def _cmd_faceswap(args) -> int:
 def _cmd_evaluate(args) -> int:
     verdict = evaluate_image(args.image, args.task)
     print(verdict.model_dump_json(indent=2))
-    return 0 if verdict.verdict == "accept" else 2
+    print(f"decision: {verdict.decision}", file=sys.stderr)
+    if verdict.needs_review:
+        print(f"flag: accepted but score={verdict.score} — review", file=sys.stderr)
+    return 0 if verdict.decision == "accept" else 2
 
 
 def _cmd_run_scene(args) -> int:

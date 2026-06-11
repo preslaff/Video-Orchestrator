@@ -78,6 +78,39 @@ def test_evaluate_image_retries_then_succeeds(monkeypatch):
     assert v.verdict == "accept"
 
 
+def test_objective_gate_overrides_inconsistent_accept():
+    """All objective checks pass but score=1 & verdict=accept -> accept, flagged."""
+    raw = json.loads(ACCEPT_JSON) | {"score": 1}
+    v = Verdict.model_validate(raw)
+    assert v.objective_accept is True
+    assert v.decision == "accept"
+    assert v.needs_review is True  # accepted but score below threshold
+    assert v.disagreement is False  # gemma also said accept
+
+
+def test_objective_gate_overrides_optimistic_accept():
+    """Gemma says accept but there are artifacts -> objective gate forces retry."""
+    raw = json.loads(ACCEPT_JSON) | {"artifacts": True}
+    v = Verdict.model_validate(raw)
+    assert v.objective_accept is False
+    assert v.decision == "retry"
+    assert v.disagreement is True  # gemma said accept, gate says retry
+    assert v.needs_review is False
+
+
+def test_decision_retry_when_action_wrong():
+    v = Verdict.model_validate_json(RETRY_JSON)
+    assert v.decision == "retry" and v.objective_accept is False
+
+
+def test_evaluate_image_uses_objective_decision(monkeypatch):
+    """A high score with artifacts must still come back as a retry decision."""
+    bad = json.dumps(json.loads(ACCEPT_JSON) | {"artifacts": True, "score": 9})
+    monkeypatch.setattr(evaluator.gemma, "complete_vision", lambda *a, **k: bad)
+    v = evaluate_image("fake.png", "task", attempts=1)
+    assert v.decision == "retry"
+
+
 def test_evaluate_image_raises_after_exhausting_attempts(monkeypatch):
     monkeypatch.setattr(
         evaluator.gemma, "complete_vision", lambda *a, **k: "still not json"

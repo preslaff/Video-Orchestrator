@@ -24,9 +24,20 @@ from .clients import gemma
 
 log = logging.getLogger("vorch.evaluator")
 
+# An accepted frame whose (weak, subjective) score is below this is flagged for
+# human review — not blocked. SKILL.md invariant 7 / Georgi's working style.
+REVIEW_SCORE_THRESHOLD = 4
+
 
 class Verdict(BaseModel):
-    """Structured judgement of one generated image (NOTES.md §6)."""
+    """Structured judgement of one generated image (NOTES.md §6).
+
+    The ``verdict`` field is Gemma's *suggestion*; the authoritative accept/retry
+    is ``decision``, derived from the reliable objective booleans (Gemma's verdict
+    and score can contradict each other — e.g. all checks pass yet score=1). Score
+    stays advisory: a low score on an accepted frame raises ``needs_review``, it
+    does not block.
+    """
 
     action_correct: bool = Field(description="Does the subject perform the described action?")
     identity_match: bool = Field(description="Correct character? true if identity is not applicable.")
@@ -36,6 +47,31 @@ class Verdict(BaseModel):
     score: int = Field(ge=0, le=10, description="Overall quality 0-10.")
     verdict: Literal["accept", "retry"]
     fix_suggestion: str = Field(default="", description="If retry: what to change in the prompt.")
+
+    @property
+    def objective_accept(self) -> bool:
+        """The reliable signal: right action, right identity, framed, no artifacts."""
+        return (
+            self.action_correct
+            and self.identity_match
+            and self.composition_ok
+            and not self.artifacts
+        )
+
+    @property
+    def decision(self) -> Literal["accept", "retry"]:
+        """Authoritative accept/retry — the objective gate, not Gemma's free verdict."""
+        return "accept" if self.objective_accept else "retry"
+
+    @property
+    def needs_review(self) -> bool:
+        """Accepted on objective grounds but the advisory score is low — flag it."""
+        return self.objective_accept and self.score < REVIEW_SCORE_THRESHOLD
+
+    @property
+    def disagreement(self) -> bool:
+        """Gemma's own verdict contradicts the objective gate."""
+        return self.verdict != self.decision
 
 
 class EvaluationError(RuntimeError):
@@ -88,13 +124,24 @@ def evaluate_image(
         )
         try:
             verdict = _parse_verdict(raw)
+            name = Path(image_path).name
             log.info(
                 "eval %s: %s (score=%s)%s",
-                Path(image_path).name,
-                verdict.verdict,
+                name,
+                verdict.decision,
                 verdict.score,
-                "" if verdict.verdict == "accept" else f" — fix: {verdict.fix_suggestion}",
+                "" if verdict.decision == "accept" else f" — fix: {verdict.fix_suggestion}",
             )
+            if verdict.disagreement:
+                log.info(
+                    "eval %s: gemma said %r; objective gate -> %r",
+                    name, verdict.verdict, verdict.decision,
+                )
+            if verdict.needs_review:
+                log.warning(
+                    "eval %s: accepted but score=%d (<%d) — flagged for review",
+                    name, verdict.score, REVIEW_SCORE_THRESHOLD,
+                )
             return verdict
         except (ValidationError, json.JSONDecodeError, ValueError) as e:
             last_err = e

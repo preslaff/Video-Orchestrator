@@ -22,11 +22,14 @@ from vorch.state import (
 
 
 def _verdict(verdict="accept", score=8, fix="") -> Verdict:
+    # Keep objective fields consistent with the intended decision so the
+    # objective gate (evaluator.Verdict.decision) yields `verdict`.
+    ok = verdict == "accept"
     return Verdict(
-        action_correct=True,
+        action_correct=ok,
         identity_match=True,
         style_match=True,
-        artifacts=False,
+        artifacts=not ok,
         composition_ok=True,
         score=score,
         verdict=verdict,

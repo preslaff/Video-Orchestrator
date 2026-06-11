@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from . import config, pipeline, storyboard
+from . import config, evaluator, pipeline, storyboard
 from .clients import comfy
 from .state import Decision, Job, JobStatus, Scene, SceneStatus, Store, new_job
 
@@ -140,6 +140,7 @@ class Orchestrator:
                 )
                 scene.keyframe_verdict = verdict
                 self.store.record_verdict(job.id, scene.index, "keyframe", verdict)
+                self._flag_verdict(job, scene.index, verdict)
             else:
                 path = pipeline.keyframe(scene.keyframe_prompt, seed=self.seed)
                 self.store.log_decision(
@@ -149,6 +150,25 @@ class Orchestrator:
             scene.keyframe_path = str(path)
             scene.status = SceneStatus.KEYFRAME
             self.store.save_job(job)  # persist per scene — resumable
+
+    def _flag_verdict(self, job: Job, scene_index: int, verdict) -> None:
+        """Log advisory flags alongside a recorded verdict (never blocks)."""
+        if verdict.disagreement:
+            self.store.log_decision(
+                Decision(
+                    job_id=job.id, scene_index=scene_index, phase="keyframe", attempt=1,
+                    action="disagreement",
+                    reason=f"gemma said {verdict.verdict!r}; objective gate -> {verdict.decision!r}",
+                )
+            )
+        if verdict.needs_review:
+            self.store.log_decision(
+                Decision(
+                    job_id=job.id, scene_index=scene_index, phase="keyframe", attempt=1,
+                    action="review", score=verdict.score,
+                    reason=f"accepted but score={verdict.score} (< {evaluator.REVIEW_SCORE_THRESHOLD})",
+                )
+            )
 
     def _phase_videos(self, job: Job) -> None:
         master_name = comfy.upload_image(job.master_face)

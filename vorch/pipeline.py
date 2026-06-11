@@ -93,7 +93,7 @@ def generate_keyframe_evaluated(
         log.info("keyframe: attempt %d/%d (seed=%s)", attempt, max_attempts, attempt_seed)
         kf_path = keyframe(attempt_prompt, seed=attempt_seed)
         verdict = evaluate_image(kf_path, task)
-        if verdict.verdict == "accept":
+        if verdict.decision == "accept":
             return kf_path, verdict
         # Feed the fix back into the prompt for the next attempt (NOTES.md §6).
         attempt_prompt = f"{prompt}. Correction: {verdict.fix_suggestion}".strip()

@@ -151,6 +151,23 @@ def test_evaluate_false_skips_verdicts(wired):
     assert all(d.action == "generated" for d in kf_decisions)
 
 
+def test_low_score_accept_logs_review_flag(wired, monkeypatch):
+    """An objectively-accepted keyframe with a low score gets a 'review' flag."""
+    store, master, _ = wired
+
+    def low_score(prompt, task, *, seed, max_attempts):
+        return "/kf/x.png", _verdict(score=1)  # objective accept, advisory score low
+
+    monkeypatch.setattr(pipeline, "generate_keyframe_evaluated", low_score)
+    o = Orchestrator(store, n_scenes=2)
+    job = o.create_job("idea", master_face=str(master), autonomy="full")
+    o.run(job)
+
+    actions = [d.action for d in store.decisions(job.id) if d.phase == "keyframe"]
+    assert actions.count("accept") == 2  # both keyframes accepted (objective gate)
+    assert actions.count("review") == 2  # both flagged for review (score=1)
+
+
 def test_resume_from_reloaded_job(wired):
     """Persist at the storyboard gate, reload, and finish with a fresh Orchestrator."""
     store, master, calls = wired

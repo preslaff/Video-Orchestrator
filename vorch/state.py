@@ -353,14 +353,15 @@ class Store:
         *,
         attempt: int = 1,
     ) -> Decision:
-        """Log a Gemma verdict as a decision (action/score/fix straight from it)."""
+        """Log a verdict as a decision — the authoritative ``decision``, not the
+        raw model ``verdict`` (which can disagree; see evaluator.Verdict)."""
         return self.log_decision(
             Decision(
                 job_id=job_id,
                 scene_index=scene_index,
                 phase=phase,
                 attempt=attempt,
-                action=verdict.verdict,
+                action=verdict.decision,
                 score=verdict.score,
                 reason=verdict.fix_suggestion,
             )
