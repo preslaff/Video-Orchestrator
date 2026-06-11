@@ -50,8 +50,10 @@ chain end-to-end (keyframe → face swap → animate).
 validated `Verdict` and the pipeline retries with the fix suggestion (`run-scene --evaluate`,
 or the standalone `evaluate` command). **Sequential continuity** is built too: `run-sequence`
 chains scenes so the last frame of one clip seeds the next (`continuous: true`), re-locking
-identity each step. Still to come: state persistence + decision log, multi-scene phased
-orchestration with approval gates, the VRAM manager, and the NiceGUI dashboard
+identity each step. **State** is persisted too: `state.py` stores each `Job`/`Scene` in SQLite
+(resumable) with an append-only **decision log** recording why every frame was accepted or
+retried. Still to come: multi-scene phased orchestration with approval gates (wiring the
+evaluator/continuity/state together), the VRAM manager, and the NiceGUI dashboard
 (all designed in `DESIGN.md`).
 
 ## Repository layout

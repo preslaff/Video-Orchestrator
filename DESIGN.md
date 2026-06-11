@@ -181,7 +181,7 @@ Per `NOTES.md` §9 — narrow and end-to-end first:
 **Phase 2 — intelligence & scale:**
 6. ✅ `evaluator.py` + retry loop (vision feedback) — `Verdict` (Pydantic), `evaluate_image`, `generate_keyframe_evaluated`; wired into `run_scene(evaluate=True)` and the `evaluate` CLI command.
 7. ✅ Sequential continuity — `media.last_frame` + `run_sequence`/`Scene`; the `run-sequence` CLI (YAML scene list). See §13.
-8. `state.py` (persisted Job, decision log) + structured logging
+8. ✅ `state.py` — SQLite-persisted `Job`/`Scene` (resumable) + append-only decision log (`Store`, `Decision`, `record_verdict`). Structured logging still pending.
 9. Multi-scene, phased orchestration + semi-auto gates
 10. `vram.py` guards / Option-B refinements
 
