@@ -20,6 +20,7 @@ def keyframe(
     timeout: int | None = None,
 ) -> Path:
     """Generate one keyframe image; return its output path."""
+    seed = config.resolve_seed(seed)  # materialize random seed so it can be recorded
     params = dict(
         positive=prompt, width=width, height=height, steps=steps, cfg=cfg, seed=seed
     )

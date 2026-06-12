@@ -28,6 +28,7 @@ def animate(
     node reads by name) — use comfy.upload_image() first. ``length`` must be 4n+1;
     the registry validates this.
     """
+    seed = config.resolve_seed(seed)  # materialize random seed so it can be recorded
     return run_step(
         "animate",
         timeout=timeout,

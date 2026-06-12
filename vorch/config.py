@@ -8,6 +8,7 @@ matching VORCH_* environment variable.
 from __future__ import annotations
 
 import os
+import random
 from pathlib import Path
 
 # --- Service endpoints -------------------------------------------------------
@@ -43,7 +44,17 @@ REACTOR_RESTORE_MODEL = "GFPGANv1.4.pth"
 
 # --- Behaviour ---------------------------------------------------------------
 RUN_TIMEOUT = int(os.environ.get("VORCH_RUN_TIMEOUT", "600"))  # seconds to wait per workflow
-SEED_RANDOM = 0  # ComfyUI convention: 0 = random seed
+
+# Seeds. 0 is our "pick a random one" sentinel — NOT sent to ComfyUI verbatim
+# (the API has no randomize step, so seed 0 would be deterministic). resolve_seed
+# materializes a concrete seed so the value we record actually reproduces the run.
+SEED_RANDOM = 0
+_SEED_MIN, _SEED_MAX = 1, 2**31 - 1
+
+
+def resolve_seed(seed: int) -> int:
+    """Concrete seed: pass a fixed one through; materialize a random one for SEED_RANDOM."""
+    return seed if seed != SEED_RANDOM else random.randint(_SEED_MIN, _SEED_MAX)
 
 # Job state + decision log (SQLite). Defaults under runs/ (DESIGN §7 output_dir).
 STATE_DB = Path(os.environ.get("VORCH_STATE_DB", "runs/vorch.db")).expanduser()

@@ -143,6 +143,13 @@ python -m vorch approve <job_id> keyframes    # release the pre-Wan gate
 (`VORCH_STATE_DB`, default `runs/vorch.db`), so a job is **resumable** and every accept/retry is
 auditable.
 
+### Reproducibility
+
+Every generated image/video gets a sidecar manifest next to it — `<output>.json` — recording the
+exact prompt(s), the seed, the template, and all params that produced it. A `seed` of `0` means
+"pick a random one": a concrete seed is materialized, used, and recorded (so the saved value
+actually reproduces the result — re-running with that seed + prompt regenerates the same frame).
+
 Evaluation requires Gemma started with `--mmproj` (vision projector); without it the model is
 blind and verdicts are meaningless.
 
