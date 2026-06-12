@@ -16,8 +16,9 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
-from . import config
+from . import config, provenance
 from .clients import comfy
 from .clients.gemma import GemmaError
 from .evaluator import EvaluationError, evaluate_image
@@ -157,6 +158,33 @@ def _print_job(job, store: Store) -> None:
         print(f"  -> paused. approve with:  python -m vorch approve {job.id} {gate}")
 
 
+def _print_provenance(job) -> None:
+    """Show the recorded seed + prompt for each scene's media (from sidecars)."""
+    rows = []
+    for s in job.scenes:
+        for label, path in (("keyframe", s.keyframe_path), ("video", s.video_path)):
+            if not path:
+                continue
+            m = provenance.read_manifest(path)
+            name = Path(path).name
+            if not m:
+                rows.append((s.index, label, None, None, name))
+                continue
+            p = m.get("params", {})
+            seed = p.get("seed", p.get("seed_high"))
+            rows.append((s.index, label, seed, p.get("positive", ""), name))
+    if not rows:
+        return
+    print("provenance (seed + prompt per output):")
+    for idx, label, seed, prompt, name in rows:
+        if seed is None and prompt is None:
+            print(f"  s{idx} {label:8} {name}  (no manifest)")
+            continue
+        print(f"  s{idx} {label:8} seed={seed}  {name}")
+        if prompt:
+            print(f"           prompt: {prompt}")
+
+
 def _orchestrator(store: Store, spec: dict) -> Orchestrator:
     retry = spec.get("retry") or {}
     return Orchestrator(
@@ -236,6 +264,7 @@ def _cmd_job(args) -> int:
             score = "" if d.score is None else f" score={d.score}"
             reason = f"  {d.reason}" if d.reason else ""
             print(f"  [{d.created_at}] {scene} {d.phase}/{d.action}{score}{reason}")
+        _print_provenance(job)
     finally:
         store.close()
     return 0

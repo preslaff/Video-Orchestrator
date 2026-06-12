@@ -37,6 +37,15 @@ def test_write_manifest_records_prompt_seed_and_output(tmp_path):
     assert data["params"]["seed"] == 7
 
 
+def test_read_manifest_roundtrip_and_missing(tmp_path):
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"v")
+    provenance.write_manifest(media, "animate", {"positive": "pan", "seed_high": 5})
+    got = provenance.read_manifest(media)
+    assert got["params"]["seed_high"] == 5
+    assert provenance.read_manifest(tmp_path / "none.png") is None
+
+
 def test_run_step_writes_sidecar(monkeypatch, tmp_path):
     """run_step writes a manifest beside each produced output."""
     out = tmp_path / "Wan22_00010_.mp4"

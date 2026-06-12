@@ -25,6 +25,14 @@ def manifest_path(media_path: str | Path) -> Path:
     return media_path.with_name(media_path.name + ".json")
 
 
+def read_manifest(media_path: str | Path) -> dict | None:
+    """Load the manifest beside ``media_path``; None if absent/unreadable."""
+    try:
+        return json.loads(manifest_path(media_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def write_manifest(media_path: str | Path, step: str, params: dict) -> Path | None:
     """Write the generation manifest beside ``media_path``; return its path or None."""
     media_path = Path(media_path)
