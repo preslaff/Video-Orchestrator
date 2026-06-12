@@ -251,6 +251,21 @@ def _cmd_jobs(args) -> int:
     return 0
 
 
+def _cmd_vram(args) -> int:
+    from . import vram
+
+    s = vram.snapshot()
+    if s is None:
+        print("GPU: unavailable (no nvidia-smi)")
+    else:
+        pct = 100 * s["free"] / s["total"] if s["total"] else 0
+        print(f"GPU: used={s['used']} free={s['free']} total={s['total']} MB ({pct:.0f}% free)")
+    if args.free:
+        after = vram.reclaim()
+        print(f"reclaimed — free now: {after if after is not None else 'unknown'} MB")
+    return 0
+
+
 def _cmd_job(args) -> int:
     store = _open_store()
     try:
@@ -337,6 +352,10 @@ def build_parser() -> argparse.ArgumentParser:
     jb = sub.add_parser("job", help="show a job's scenes and decision log")
     jb.add_argument("job_id")
     jb.set_defaults(func=_cmd_job)
+
+    vr = sub.add_parser("vram", help="show GPU memory; --free to reclaim ComfyUI VRAM")
+    vr.add_argument("--free", action="store_true", help="POST /free and report new headroom")
+    vr.set_defaults(func=_cmd_vram)
 
     return p
 

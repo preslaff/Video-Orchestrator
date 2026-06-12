@@ -56,5 +56,11 @@ def resolve_seed(seed: int) -> int:
     """Concrete seed: pass a fixed one through; materialize a random one for SEED_RANDOM."""
     return seed if seed != SEED_RANDOM else random.randint(_SEED_MIN, _SEED_MAX)
 
+
+# --- VRAM (16GB ceiling; Option B = Gemma on CPU, ComfyUI owns the GPU) -------
+# Reclaim ComfyUI VRAM before a heavy step if free falls below the guard.
+VRAM_GUARD_MB = int(os.environ.get("VORCH_VRAM_GUARD_MB", "10000"))
+VRAM_SETTLE_SEC = float(os.environ.get("VORCH_VRAM_SETTLE_SEC", "3"))
+
 # Job state + decision log (SQLite). Defaults under runs/ (DESIGN §7 output_dir).
 STATE_DB = Path(os.environ.get("VORCH_STATE_DB", "runs/vorch.db")).expanduser()

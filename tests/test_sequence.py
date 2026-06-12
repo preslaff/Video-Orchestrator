@@ -55,6 +55,10 @@ def recorder(monkeypatch):
     monkeypatch.setattr(pipeline, "last_frame", fake_last_frame)
     monkeypatch.setattr(pipeline.comfy, "upload_image", fake_upload)
     monkeypatch.setattr(pipeline.comfy, "free", lambda *a, **k: None)
+    # animate_frame is the real helper here; keep VRAM reclaim out of the unit test
+    # (no nvidia-smi / sleep).
+    monkeypatch.setattr(pipeline.vram, "reclaim", lambda *a, **k: None)
+    monkeypatch.setattr(pipeline.vram, "log_state", lambda *a, **k: None)
     return calls
 
 

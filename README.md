@@ -92,6 +92,10 @@ python -m vorch faceswap scene.png master_face.jpeg
 # Score an image against an intent (Gemma vision → accept/retry verdict)
 python -m vorch evaluate keyframe.png "woman kneading bread, oil painting"
 
+# Show GPU memory (and optionally reclaim ComfyUI VRAM)
+python -m vorch vram
+python -m vorch vram --free
+
 # Full single scene: keyframe → swap → animate
 python -m vorch run-scene \
   --keyframe-prompt "..." \

@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config
+from . import config, vram
 from .clients import comfy
 from .evaluator import Verdict, evaluate_image
 from .media import last_frame
@@ -62,10 +62,14 @@ def swap_master_onto(frame_path: Path, master_name: str, *, label: str = "facesw
 
 
 def animate_frame(frame_path: Path, animation_prompt: str, *, seed: int) -> Path:
-    """Stage ``frame_path``, reclaim VRAM, and animate it into a clip."""
+    """Stage ``frame_path``, reclaim VRAM, and animate it into a clip.
+
+    Wan (dual-model) is the heaviest step, so reclaim ComfyUI VRAM at this phase
+    boundary and confirm headroom before dispatching (NOTES.md §4).
+    """
     frame_name = comfy.upload_image(frame_path)
-    log.info("free: reclaiming VRAM before Wan")
-    comfy.free()
+    vram.reclaim()  # Klein/ReActor -> Wan boundary: free everything first
+    vram.log_state("before Wan")
     log.info("animate: %s frames @ %sfps", config.WAN_LENGTH, config.WAN_FPS)
     video_path = animate(frame_name, animation_prompt, seed=seed)
     log.info("animate: %s", video_path)
