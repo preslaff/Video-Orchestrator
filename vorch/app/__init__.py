@@ -72,6 +72,8 @@ def _index_page() -> None:
             seed = ui.number("Seed (0=random)", value=0, format="%d")
             autonomy = ui.select(["semi", "full"], value="semi", label="Autonomy")
             evaluate = ui.switch("Evaluate", value=True)
+            face_swap = ui.switch("Face swap", value=True)
+        master.bind_visibility_from(face_swap, "value")  # master only matters when swapping
 
         async def submit() -> None:
             if not idea.value:
@@ -86,6 +88,7 @@ def _index_page() -> None:
                     n_scenes=int(n_scenes.value) if n_scenes.value else None,
                     seed=int(seed.value or 0),
                     evaluate=evaluate.value,
+                    face_swap=face_swap.value,
                 )
             except FileNotFoundError as e:
                 ui.notify(str(e), type="negative")

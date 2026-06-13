@@ -26,13 +26,14 @@ class JobSpec(BaseModel):
     """Request body for creating a job (mirrors the YAML job spec / DESIGN §7)."""
 
     idea: str
-    master_face: str
+    master_face: str = ""  # required only when face_swap is on
     style: str = ""
     autonomy: str = "semi"
     n_scenes: int | None = None
     seed: int = 0
     max_attempts: int = 2
     evaluate: bool = True
+    face_swap: bool = True
 
 
 def register_routes(app: FastAPI, manager: JobManager, store: Store) -> None:
@@ -50,6 +51,7 @@ def register_routes(app: FastAPI, manager: JobManager, store: Store) -> None:
                 seed=spec.seed,
                 max_attempts=spec.max_attempts,
                 evaluate=spec.evaluate,
+                face_swap=spec.face_swap,
             )
         except FileNotFoundError as e:
             raise HTTPException(status_code=400, detail=str(e))

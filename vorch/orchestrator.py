@@ -45,12 +45,14 @@ class Orchestrator:
         seed: int = config.SEED_RANDOM,
         max_attempts: int = 2,
         evaluate: bool = True,
+        face_swap: bool = True,
     ):
         self.store = store
         self.n_scenes = n_scenes
         self.seed = seed
         self.max_attempts = max_attempts
         self.evaluate = evaluate
+        self.face_swap = face_swap
         # Progress sink for live UIs (set by queue.py). No-op by default so the
         # CLI path is unaffected. Each event is a small JSON-able dict.
         self.emit: Callable[[dict], None] = lambda event: None
@@ -67,6 +69,7 @@ class Orchestrator:
             seed=job.seed,
             max_attempts=job.max_attempts,
             evaluate=job.evaluate,
+            face_swap=job.face_swap,
         )
 
     # -- job lifecycle --
@@ -76,27 +79,35 @@ class Orchestrator:
         idea: str,
         *,
         style: str = "",
-        master_face: str | Path,
+        master_face: str | Path = "",
         autonomy: str = "semi",
     ) -> Job:
-        """Create and persist a fresh Job (validates the master face exists).
+        """Create and persist a fresh Job.
 
-        The orchestrator's run-config (n_scenes/seed/max_attempts/evaluate) is
-        stored on the job so a later ``approve``/resume reconstructs it exactly
-        (see ``from_job``) instead of falling back to defaults.
+        The run-config (n_scenes/seed/max_attempts/evaluate/face_swap) is stored
+        on the job so a later ``approve``/resume reconstructs it exactly (see
+        ``from_job``). The master face is required and validated only when
+        ``face_swap`` is on; otherwise it may be empty.
         """
-        master = Path(master_face).expanduser()
-        if not master.is_file():
-            raise FileNotFoundError(f"master face not found: {master}")
+        # Master face only matters (and is only validated) when swapping.
+        master_str = ""
+        if self.face_swap:
+            master = Path(master_face).expanduser()
+            if not master.is_file():
+                raise FileNotFoundError(f"master face not found: {master}")
+            master_str = str(master)
+        elif master_face:
+            master_str = str(Path(master_face).expanduser())
         job = new_job(
             idea=idea,
             style=style,
-            master_face=str(master),
+            master_face=master_str,
             autonomy=autonomy,
             n_scenes=self.n_scenes,
             seed=self.seed,
             max_attempts=self.max_attempts,
             evaluate=self.evaluate,
+            face_swap=self.face_swap,
         )
         return self.store.save_job(job)
 
@@ -212,20 +223,26 @@ class Orchestrator:
             )
 
     def _phase_videos(self, job: Job) -> None:
-        master_name = comfy.upload_image(job.master_face)
+        do_swap = self.face_swap and bool(job.master_face)
+        master_name = comfy.upload_image(job.master_face) if do_swap else None
         for scene in job.scenes:
             if scene.video_path:
                 continue  # resume: already done
             if not scene.keyframe_path:
                 log.warning("job %s: scene %d has no keyframe; skipping", job.id, scene.index)
                 continue
-            log.info("job %s: video scene %d (swap -> animate)", job.id, scene.index)
-            swapped = pipeline.swap_master_onto(scene.keyframe_path, master_name)
-            scene.swapped_path = str(swapped)
-            scene.status = SceneStatus.SWAP
-            self.store.save_job(job)
+            if do_swap:
+                log.info("job %s: video scene %d (swap -> animate)", job.id, scene.index)
+                swapped = pipeline.swap_master_onto(scene.keyframe_path, master_name)
+                scene.swapped_path = str(swapped)
+                scene.status = SceneStatus.SWAP
+                self.store.save_job(job)
+                frame = swapped
+            else:
+                log.info("job %s: video scene %d (animate keyframe, no swap)", job.id, scene.index)
+                frame = scene.keyframe_path
 
-            video = pipeline.animate_frame(swapped, scene.animation_prompt, seed=self.seed)
+            video = pipeline.animate_frame(frame, scene.animation_prompt, seed=self.seed)
             scene.video_path = str(video)
             scene.status = SceneStatus.COMPLETE
             self.store.log_decision(

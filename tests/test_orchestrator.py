@@ -139,6 +139,26 @@ def test_full_run_to_completion(wired):
     assert len(video_decisions) == 2
 
 
+def test_face_swap_off_skips_swap_and_animates_keyframe(wired):
+    store, master, calls = wired
+    o = Orchestrator(store, n_scenes=2, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)
+
+    assert job.status is JobStatus.DONE
+    assert calls["swap"] == 0           # no ReActor swap ran
+    assert calls["animate"] == 2        # both keyframes animated directly
+    assert all(s.swapped_path is None for s in job.scenes)
+    assert all(s.video_path for s in job.scenes)
+
+
+def test_create_job_allows_empty_master_when_face_swap_off(wired):
+    store, _master, _ = wired
+    o = Orchestrator(store, face_swap=False)
+    job = o.create_job("idea")  # no master_face — must not raise
+    assert job.face_swap is False and job.master_face == ""
+
+
 def test_full_autonomy_runs_straight_through(wired):
     store, master, calls = wired
     o = Orchestrator(store, n_scenes=2)

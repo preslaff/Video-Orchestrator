@@ -121,6 +121,21 @@ def test_submit_creates_validates_and_runs(tmp_path):
     assert final is JobStatus.DONE
 
 
+def test_submit_no_master_ok_when_face_swap_off(tmp_path):
+    async def go():
+        store = Store(str(tmp_path / "q.db"))
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+        job = await mgr.submit("a landscape", autonomy="full", face_swap=False)  # no master
+        await asyncio.gather(*list(mgr._tasks))
+        final = store.load_job(job.id).status
+        store.close()
+        return job, final
+
+    job, final = asyncio.run(go())
+    assert job.face_swap is False and job.master_face == ""
+    assert final is JobStatus.DONE
+
+
 def test_submit_rejects_missing_master(tmp_path):
     async def go():
         store = Store(str(tmp_path / "q.db"))

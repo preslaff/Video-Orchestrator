@@ -54,6 +54,12 @@ def test_create_job_bad_master_is_400(client):
     assert r.status_code == 400
 
 
+def test_create_job_no_master_ok_when_face_swap_off(client):
+    r = client.post("/api/jobs", json={"idea": "a landscape", "face_swap": False})
+    assert r.status_code == 200
+    assert r.json()["face_swap"] is False
+
+
 def test_create_then_list_and_get(client):
     jid = client.post(
         "/api/jobs", json={"idea": "bread", "master_face": client.master}

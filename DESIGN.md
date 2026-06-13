@@ -165,6 +165,11 @@ Phased per `NOTES.md` §5; **⏸ = semi-autonomous human gate**:
 Retry policy: feed the original prompt + `fix_suggestion` back to the prompt generator,
 regenerate, re-evaluate, up to `max_attempts`. Log every attempt to state.
 
+The **ReActor swap is optional** — a per-job `face_swap` flag (default on, persisted as run-config
+like `evaluate`). When off, the keyframe is animated directly and `master_face` is not required
+(landscapes/objects/generic characters). In the implemented skeleton ordering the swap runs on the
+keyframe *before* Wan (DESIGN §9), so "no swap" simply animates the raw keyframe.
+
 ## 9. Build order (walking skeleton → full)
 
 Per `NOTES.md` §9 — narrow and end-to-end first:

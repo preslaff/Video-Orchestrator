@@ -130,23 +130,27 @@ def _fresh_keyframe(
 def run_scene(
     keyframe_prompt: str,
     animation_prompt: str,
-    master_face: str | Path,
+    master_face: str | Path = "",
     *,
     seed: int = config.SEED_RANDOM,
     evaluate: bool = False,
     task: str | None = None,
     max_attempts: int = 2,
+    face_swap: bool = True,
 ) -> SceneResult:
     """Run one scene through the full chain and return the artifact paths.
 
     With ``evaluate=True`` the keyframe is judged by Gemma and retried with the
     fix suggestion (up to ``max_attempts``); ``task`` is the intent to score
-    against (defaults to the keyframe prompt).
+    against (defaults to the keyframe prompt). With ``face_swap=False`` the
+    keyframe is animated directly and ``master_face`` is ignored.
     """
-    master_face = Path(master_face).expanduser()
-    if not master_face.is_file():
-        raise FileNotFoundError(f"master face not found: {master_face}")
-    master_name = comfy.upload_image(master_face)
+    master_name = None
+    if face_swap:
+        master_face = Path(master_face).expanduser()
+        if not master_face.is_file():
+            raise FileNotFoundError(f"master face not found: {master_face}")
+        master_name = comfy.upload_image(master_face)
 
     if evaluate:
         kf_path, verdict = generate_keyframe_evaluated(
@@ -157,12 +161,12 @@ def run_scene(
             keyframe_prompt, seed=seed, evaluate=False, max_attempts=max_attempts
         )
 
-    swapped_path = swap_master_onto(kf_path, master_name)
-    video_path = animate_frame(swapped_path, animation_prompt, seed=seed)
+    swapped_path = swap_master_onto(kf_path, master_name) if face_swap else None
+    video_path = animate_frame(swapped_path or kf_path, animation_prompt, seed=seed)
 
     return SceneResult(
         video=video_path,
-        start_image=swapped_path,
+        start_image=swapped_path or kf_path,
         keyframe=kf_path,
         swapped=swapped_path,
         continued_from_previous=False,
@@ -172,12 +176,13 @@ def run_scene(
 
 def run_sequence(
     scenes: Sequence[Scene],
-    master_face: str | Path,
+    master_face: str | Path = "",
     *,
     seed: int = config.SEED_RANDOM,
     evaluate: bool = False,
     relock_identity: bool = True,
     max_attempts: int = 2,
+    face_swap: bool = True,
 ) -> list[SceneResult]:
     """Run a sequence of scenes, chaining continuity where requested.
 
@@ -186,13 +191,19 @@ def run_sequence(
     previous clip's last frame seeds it. Carried frames are re-locked to the
     master face when ``relock_identity`` is set (default), countering Wan drift.
 
+    With ``face_swap=False`` no swap runs at all (fresh keyframes and carried
+    frames animate raw) and ``relock_identity`` / ``master_face`` are ignored.
+
     Continuity is inherently sequential (scene N depends on N-1's video), so this
     diverges from the phase-by-stage batching of NOTES.md §5.
     """
-    master_face = Path(master_face).expanduser()
-    if not master_face.is_file():
-        raise FileNotFoundError(f"master face not found: {master_face}")
-    master_name = comfy.upload_image(master_face)
+    master_name = None
+    if face_swap:
+        master_face = Path(master_face).expanduser()
+        if not master_face.is_file():
+            raise FileNotFoundError(f"master face not found: {master_face}")
+        master_name = comfy.upload_image(master_face)
+    relock = relock_identity and face_swap
 
     results: list[SceneResult] = []
     prev_video: Path | None = None
@@ -205,7 +216,7 @@ def run_sequence(
             frame = last_frame(prev_video)
             kf_path = None
             verdict = None
-            if relock_identity:
+            if relock:
                 swapped = swap_master_onto(frame, master_name, label=f"scene {i + 1} relock")
                 start_image = swapped
             else:
@@ -216,8 +227,12 @@ def run_sequence(
             kf_path, verdict = _fresh_keyframe(
                 scene.keyframe_prompt, seed=seed, evaluate=evaluate, max_attempts=max_attempts
             )
-            swapped = swap_master_onto(kf_path, master_name, label=f"scene {i + 1} faceswap")
-            start_image = swapped
+            if face_swap:
+                swapped = swap_master_onto(kf_path, master_name, label=f"scene {i + 1} faceswap")
+                start_image = swapped
+            else:
+                swapped = None
+                start_image = kf_path
 
         video_path = animate_frame(start_image, scene.animation_prompt, seed=seed)
         results.append(

@@ -5,9 +5,10 @@
 idea: "Жена меси хляб в селска кухня на разсъмване"   # the story prompt (Bulgarian or English)
 n_scenes: 5                                           # ~how many scenes (omit to let the model decide)
 style: "oil painting, impasto, visible brushstrokes"  # FLUX.2 keyframe aesthetic
-master_face: assets/jena-cropped.jpeg                 # ReActor source — injected at runtime, not hardcoded
+master_face: assets/jena-cropped.jpeg                 # ReActor source — required only when face_swap is on
 autonomy: semi                                        # semi (pause at gates) | full (run straight through)
 evaluate: true                                        # judge keyframes with Gemma vision + retry
+face_swap: true                                       # impose master_face via ReActor; false = animate keyframe as-is
 seed: 0                                               # 0 = random
 retry:
   max_attempts: 2

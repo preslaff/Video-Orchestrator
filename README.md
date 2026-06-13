@@ -150,6 +150,11 @@ python -m vorch approve <job_id> keyframes    # release the pre-Wan gate
 (`VORCH_STATE_DB`, default `runs/vorch.db`), so a job is **resumable** and every accept/retry is
 auditable.
 
+**Face swap is optional.** Set `face_swap: false` in the job spec (or the *Face swap* switch in the
+dashboard, or `--no-face-swap` on `run-scene`/`run-sequence`) to animate the keyframe directly
+without imposing a master face — useful for landscapes, objects, or generic characters. `master_face`
+is then not required.
+
 ### Web dashboard
 
 A NiceGUI dashboard (job form, live keyframe/video gallery, approval-gate buttons, decision log +

@@ -73,14 +73,17 @@ def _cmd_evaluate(args) -> int:
 
 
 def _cmd_run_scene(args) -> int:
+    if not args.no_face_swap and not args.master:
+        raise ValueError("--master is required unless --no-face-swap is given")
     result = run_scene(
         args.keyframe_prompt,
         args.animation_prompt,
-        args.master,
+        args.master or "",
         seed=args.seed,
         evaluate=args.evaluate,
         task=args.task,
         max_attempts=args.max_attempts,
+        face_swap=not args.no_face_swap,
     )
     print(f"keyframe: {result.keyframe}")
     print(f"swapped:  {result.swapped}")
@@ -121,14 +124,17 @@ def _load_scenes(path: str) -> list[Scene]:
 
 
 def _cmd_run_sequence(args) -> int:
+    if not args.no_face_swap and not args.master:
+        raise ValueError("--master is required unless --no-face-swap is given")
     scenes = _load_scenes(args.scenes)
     results = run_sequence(
         scenes,
-        args.master,
+        args.master or "",
         seed=args.seed,
         evaluate=args.evaluate,
         relock_identity=not args.no_relock,
         max_attempts=args.max_attempts,
+        face_swap=not args.no_face_swap,
     )
     for i, r in enumerate(results):
         tag = "continuous" if r.continued_from_previous else "fresh"
@@ -193,6 +199,7 @@ def _orchestrator(store: Store, spec: dict) -> Orchestrator:
         seed=int(spec.get("seed", config.SEED_RANDOM)),
         max_attempts=int(retry.get("max_attempts", 2)),
         evaluate=bool(spec.get("evaluate", True)),
+        face_swap=bool(spec.get("face_swap", True)),
     )
 
 
@@ -203,8 +210,8 @@ def _cmd_run(args) -> int:
         spec = yaml.safe_load(f) or {}
     if not spec.get("idea"):
         raise ValueError(f"{args.spec}: 'idea' is required")
-    if not spec.get("master_face"):
-        raise ValueError(f"{args.spec}: 'master_face' is required")
+    if spec.get("face_swap", True) and not spec.get("master_face"):
+        raise ValueError(f"{args.spec}: 'master_face' is required when face_swap is on")
 
     store = _open_store()
     try:
@@ -212,7 +219,7 @@ def _cmd_run(args) -> int:
         job = o.create_job(
             spec["idea"],
             style=spec.get("style", ""),
-            master_face=spec["master_face"],
+            master_face=spec.get("master_face", ""),
             autonomy=spec.get("autonomy", "semi"),
         )
         o.run(job)
@@ -341,7 +348,8 @@ def build_parser() -> argparse.ArgumentParser:
     rs = sub.add_parser("run-scene", help="full chain: keyframe -> swap -> animate")
     rs.add_argument("--keyframe-prompt", required=True)
     rs.add_argument("--animation-prompt", required=True)
-    rs.add_argument("--master", required=True, help="master face image path")
+    rs.add_argument("--master", default=None, help="master face image path (omit with --no-face-swap)")
+    rs.add_argument("--no-face-swap", action="store_true", help="animate the keyframe without a face swap")
     rs.add_argument("--seed", type=int, default=config.SEED_RANDOM)
     rs.add_argument("--evaluate", action="store_true", help="judge + retry the keyframe")
     rs.add_argument("--task", default=None, help="eval intent (defaults to keyframe prompt)")
@@ -350,7 +358,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     rq = sub.add_parser("run-sequence", help="chain scenes with last-frame continuity")
     rq.add_argument("scenes", help="YAML file: list of {keyframe_prompt, animation_prompt, continuous?}")
-    rq.add_argument("--master", required=True, help="master face image path")
+    rq.add_argument("--master", default=None, help="master face image path (omit with --no-face-swap)")
+    rq.add_argument("--no-face-swap", action="store_true", help="animate keyframes/frames without a face swap")
     rq.add_argument("--seed", type=int, default=config.SEED_RANDOM)
     rq.add_argument("--evaluate", action="store_true", help="judge + retry fresh keyframes")
     rq.add_argument("--no-relock", action="store_true", help="don't re-swap master onto carried frames")

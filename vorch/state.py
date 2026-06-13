@@ -92,6 +92,7 @@ class Job:
     seed: int = 0
     max_attempts: int = 2
     evaluate: bool = True
+    face_swap: bool = True
     status: JobStatus = JobStatus.PENDING
     scenes: list[Scene] = field(default_factory=list)
     created_at: str = ""
@@ -123,6 +124,7 @@ def new_job(
     seed: int = 0,
     max_attempts: int = 2,
     evaluate: bool = True,
+    face_swap: bool = True,
     scenes: list[Scene] | None = None,
 ) -> Job:
     """Create a fresh Job with a generated id and creation timestamp."""
@@ -137,6 +139,7 @@ def new_job(
         seed=seed,
         max_attempts=max_attempts,
         evaluate=evaluate,
+        face_swap=face_swap,
         scenes=scenes or [],
         created_at=ts,
         updated_at=ts,
@@ -205,6 +208,7 @@ def job_to_dict(job: Job) -> dict:
         "seed": job.seed,
         "max_attempts": job.max_attempts,
         "evaluate": job.evaluate,
+        "face_swap": job.face_swap,
         "status": job.status.value,
         "scenes": [_scene_to_dict(s) for s in job.scenes],
         "created_at": job.created_at,
@@ -223,6 +227,7 @@ def job_from_dict(d: dict) -> Job:
         seed=d.get("seed", 0),
         max_attempts=d.get("max_attempts", 2),
         evaluate=d.get("evaluate", True),
+        face_swap=d.get("face_swap", True),
         status=JobStatus(d.get("status", "pending")),
         scenes=[_scene_from_dict(s) for s in d.get("scenes", [])],
         created_at=d.get("created_at", ""),

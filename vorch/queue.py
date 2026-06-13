@@ -69,16 +69,18 @@ class JobManager:
         idea: str,
         *,
         style: str = "",
-        master_face: str,
+        master_face: str = "",
         autonomy: str = "semi",
         n_scenes: int | None = None,
         seed: int = 0,
         max_attempts: int = 2,
         evaluate: bool = True,
+        face_swap: bool = True,
     ) -> Job:
-        """Create + persist a job (validates the master face) and start it running."""
+        """Create + persist a job (validates the master face when swapping) and run it."""
         orch = Orchestrator(
-            self.store, n_scenes=n_scenes, seed=seed, max_attempts=max_attempts, evaluate=evaluate
+            self.store, n_scenes=n_scenes, seed=seed, max_attempts=max_attempts,
+            evaluate=evaluate, face_swap=face_swap,
         )
         job = orch.create_job(idea, style=style, master_face=master_face, autonomy=autonomy)
         self._active.add(job.id)

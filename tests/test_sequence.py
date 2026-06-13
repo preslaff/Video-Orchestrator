@@ -142,6 +142,19 @@ def test_missing_master_raises(recorder, tmp_path):
         run_sequence([Scene("a", "m")], tmp_path / "nope.jpg")
 
 
+def test_face_swap_off_does_no_swaps(recorder, tmp_path):
+    """With face_swap=False, no master is needed and no faceswap call happens."""
+    results = run_sequence(
+        [Scene("a", "m1"), Scene("b", "m2", continuous=True)],
+        master_face="",  # no master
+        face_swap=False,
+    )
+    assert recorder["faceswap"] == []  # zero swaps (fresh + carried)
+    assert all(r.swapped is None for r in results)
+    # scene 1 still carries the previous clip's last frame
+    assert recorder["last_frame"] == ["video_1.mp4"]
+
+
 # --- media.last_frame --------------------------------------------------------
 
 
