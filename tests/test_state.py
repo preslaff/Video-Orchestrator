@@ -7,6 +7,8 @@ across reopen proves the data is on disk, not just in the connection.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from vorch.evaluator import Verdict
@@ -147,6 +149,46 @@ def test_delete_job_cascades_decisions(store):
     store.delete_job(job.id)
     assert store.load_job(job.id) is None
     assert store.decisions(job.id) == []  # cascaded away
+
+
+def test_concurrent_readers_and_writers_do_not_misuse(tmp_path):
+    """Writer (executor) + reader (UI) threads share one connection safely."""
+    from vorch.state import Decision
+
+    store = Store(tmp_path / "c.db")
+    job = new_job(idea="x")
+    store.save_job(job)
+    errors: list[Exception] = []
+
+    def writer():
+        try:
+            for i in range(60):
+                store.log_decision(
+                    Decision(job_id=job.id, scene_index=0, phase="keyframe",
+                             attempt=i, action="generated")
+                )
+                store.save_job(job)
+        except Exception as e:  # noqa: BLE001 - capturing for the assertion
+            errors.append(e)
+
+    def reader():
+        try:
+            for _ in range(60):
+                store.decisions(job.id)
+                store.load_job(job.id)
+                store.list_jobs()
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=writer) for _ in range(2)]
+    threads += [threading.Thread(target=reader) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, errors
+    store.close()
 
 
 def test_persists_across_reopen(tmp_path):

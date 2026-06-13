@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -276,13 +277,13 @@ class Store:
 
     def __init__(self, path: str | Path = ":memory:"):
         self.path = str(path)
-        # check_same_thread=False so the future asyncio queue can call from an
-        # executor thread; access is otherwise serialized by the caller.
+        # check_same_thread=False so the orchestrator (executor thread) and the
+        # UI/API (loop thread) can share one connection — but a single connection
+        # can't run two statements at once, so _lock serializes every access.
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
         self._conn.execute("PRAGMA foreign_keys = ON")
-        # Server runs orchestrator writes on executor threads while the API reads
-        # on the loop thread — wait out a brief writer lock instead of erroring.
         self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
@@ -295,38 +296,41 @@ class Store:
         if not job.created_at:
             job.created_at = now
         job.updated_at = now
-        self._conn.execute(
-            """
-            INSERT INTO jobs (id, status, idea, created_at, updated_at, data)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                status=excluded.status,
-                idea=excluded.idea,
-                updated_at=excluded.updated_at,
-                data=excluded.data
-            """,
-            (
-                job.id,
-                job.status.value,
-                job.idea,
-                job.created_at,
-                job.updated_at,
-                json.dumps(job_to_dict(job), ensure_ascii=False),
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO jobs (id, status, idea, created_at, updated_at, data)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    status=excluded.status,
+                    idea=excluded.idea,
+                    updated_at=excluded.updated_at,
+                    data=excluded.data
+                """,
+                (
+                    job.id,
+                    job.status.value,
+                    job.idea,
+                    job.created_at,
+                    job.updated_at,
+                    json.dumps(job_to_dict(job), ensure_ascii=False),
+                ),
+            )
+            self._conn.commit()
         return job
 
     def load_job(self, job_id: str) -> Job | None:
-        row = self._conn.execute(
-            "SELECT data FROM jobs WHERE id = ?", (job_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT data FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
         return job_from_dict(json.loads(row["data"])) if row else None
 
     def list_jobs(self) -> list[JobSummary]:
-        rows = self._conn.execute(
-            "SELECT id, status, idea, updated_at FROM jobs ORDER BY updated_at DESC"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, status, idea, updated_at FROM jobs ORDER BY updated_at DESC"
+            ).fetchall()
         return [
             JobSummary(
                 id=r["id"],
@@ -339,8 +343,9 @@ class Store:
 
     def delete_job(self, job_id: str) -> None:
         """Delete a job and (via ON DELETE CASCADE) its decision log."""
-        self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            self._conn.commit()
 
     # -- decision log --
 
@@ -348,25 +353,26 @@ class Store:
         """Append one entry to the decision log; returns it with ``id`` set."""
         if not decision.created_at:
             decision.created_at = _now()
-        cur = self._conn.execute(
-            """
-            INSERT INTO decisions
-                (job_id, scene_index, phase, attempt, action, score, reason, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                decision.job_id,
-                decision.scene_index,
-                decision.phase,
-                decision.attempt,
-                decision.action,
-                decision.score,
-                decision.reason,
-                decision.created_at,
-            ),
-        )
-        self._conn.commit()
-        decision.id = cur.lastrowid
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                INSERT INTO decisions
+                    (job_id, scene_index, phase, attempt, action, score, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    decision.job_id,
+                    decision.scene_index,
+                    decision.phase,
+                    decision.attempt,
+                    decision.action,
+                    decision.score,
+                    decision.reason,
+                    decision.created_at,
+                ),
+            )
+            self._conn.commit()
+            decision.id = cur.lastrowid
         return decision
 
     def record_verdict(
@@ -394,9 +400,10 @@ class Store:
 
     def decisions(self, job_id: str) -> list[Decision]:
         """The decision log for a job, oldest first."""
-        rows = self._conn.execute(
-            "SELECT * FROM decisions WHERE job_id = ? ORDER BY id", (job_id,)
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM decisions WHERE job_id = ? ORDER BY id", (job_id,)
+            ).fetchall()
         return [
             Decision(
                 id=r["id"],
