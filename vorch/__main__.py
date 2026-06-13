@@ -262,6 +262,15 @@ def _cmd_serve(args) -> int:
     return 0
 
 
+def _cmd_dashboard(args) -> int:
+    from .app import run  # lazy: NiceGUI only needed for the dashboard
+
+    config.STATE_DB.parent.mkdir(parents=True, exist_ok=True)
+    print(f"dashboard on http://{args.host}:{args.port}")
+    run(host=args.host, port=args.port)
+    return 0
+
+
 def _cmd_vram(args) -> int:
     from . import vram
 
@@ -372,6 +381,11 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8000)
     sv.set_defaults(func=_cmd_serve)
+
+    db = sub.add_parser("dashboard", help="run the NiceGUI web dashboard")
+    db.add_argument("--host", default="127.0.0.1")
+    db.add_argument("--port", type=int, default=8090)
+    db.set_defaults(func=_cmd_dashboard)
 
     return p
 

@@ -187,7 +187,7 @@ Per `NOTES.md` §9 — narrow and end-to-end first:
 8. ✅ `state.py` — SQLite-persisted `Job`/`Scene` (resumable) + append-only decision log (`Store`, `Decision`, `record_verdict`). Structured logging still pending.
 9. ✅ Multi-scene phased orchestration + semi-auto gates — `storyboard.py` (Gemma narrative) + `orchestrator.py` (`Orchestrator`: storyboard ⏸ → keyframes+eval ⏸ → videos, persisted to `Store`); CLI `run`/`approve`/`jobs`/`job`. Resumable from reloaded state; gates cleared via logged approvals.
 10. ✅ `vram.py` — `gpu_free_mb`/`snapshot`/`log_state` (nvidia-smi, best-effort) + `reclaim()` guard at the Klein/ReActor→Wan boundary; `vram` CLI. Thin under Option B (Gemma on CPU).
-11. `queue.py` + `server.py` + `app/` — async queue, SSE, NiceGUI dashboard
+11. ✅ `queue.py` + `server.py` + `app/` — async `JobManager` (Orchestrator in a thread executor, one-GPU lock, event Broker) → FastAPI `/api` + SSE (`vorch serve`) → NiceGUI dashboard (`vorch dashboard`: job form, live keyframe/video gallery, approval-gate buttons, decision log + provenance). One process; media served from ComfyUI's output dir.
 
 ## 10. Open / deferred
 

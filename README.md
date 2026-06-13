@@ -55,7 +55,10 @@ identity each step. **State** is persisted: `state.py` stores each `Job`/`Scene`
 retried. And the **orchestrator** ties it together: from a one-line idea it generates a
 storyboard (Gemma), then drives storyboard → keyframes (+eval/retry) → videos as a phased,
 resumable state machine with **semi-autonomous approval gates** (`run` / `approve` / `jobs`).
-Still to come: the VRAM manager and the async queue + NiceGUI dashboard (designed in `DESIGN.md`).
+A **VRAM guard** (`vram.py`) reclaims GPU memory at the Wan boundary, and a **web dashboard**
+(NiceGUI + FastAPI/SSE) drives the whole pipeline from the browser with a live gallery and the
+approval gates. Phase 2 is feature-complete and has been validated end-to-end against live
+Gemma + ComfyUI.
 
 ## Repository layout
 
@@ -146,6 +149,17 @@ python -m vorch approve <job_id> keyframes    # release the pre-Wan gate
 `autonomy: full` runs straight through. State + the decision log persist to SQLite
 (`VORCH_STATE_DB`, default `runs/vorch.db`), so a job is **resumable** and every accept/retry is
 auditable.
+
+### Web dashboard
+
+A NiceGUI dashboard (job form, live keyframe/video gallery, approval-gate buttons, decision log +
+provenance) runs the whole pipeline from the browser — one local process, FastAPI `/api` + SSE
+mounted alongside the UI. Needs the `[app]` extra (`pip install -e ".[app]"`):
+
+```bash
+python -m vorch dashboard          # http://127.0.0.1:8090
+python -m vorch serve              # headless HTTP API + SSE only (no UI)
+```
 
 ### Reproducibility
 
