@@ -21,6 +21,7 @@ then animating (Klein -> ReActor -> Wan), since the ReActor template is image-ba
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from . import config, evaluator, pipeline, storyboard
@@ -50,6 +51,12 @@ class Orchestrator:
         self.seed = seed
         self.max_attempts = max_attempts
         self.evaluate = evaluate
+        # Progress sink for live UIs (set by queue.py). No-op by default so the
+        # CLI path is unaffected. Each event is a small JSON-able dict.
+        self.emit: Callable[[dict], None] = lambda event: None
+
+    def _event(self, job: Job, type: str, **data) -> None:
+        self.emit({"job_id": job.id, "type": type, **data})
 
     @classmethod
     def from_job(cls, store: Store, job: Job) -> "Orchestrator":
@@ -97,6 +104,7 @@ class Orchestrator:
         """Advance the job as far as autonomy allows; pause at unapproved gates."""
         job.status = JobStatus.RUNNING
         self.store.save_job(job)
+        self._event(job, "status", status=job.status.value)
 
         if not job.scenes:
             self._phase_storyboard(job)
@@ -114,6 +122,7 @@ class Orchestrator:
         job.status = JobStatus.DONE
         self.store.save_job(job)
         log.info("job %s complete (%d scenes)", job.id, len(job.scenes))
+        self._event(job, "status", status=job.status.value)
         return job
 
     def approve(self, job: Job, gate: str) -> Job:
@@ -152,6 +161,7 @@ class Orchestrator:
             )
         )
         self.store.save_job(job)
+        self._event(job, "storyboard", scenes=len(scenes))
 
     def _phase_keyframes(self, job: Job) -> None:
         for scene in job.scenes:
@@ -163,6 +173,8 @@ class Orchestrator:
                     # Every attempt -> decision log (DESIGN §8), not just the last.
                     self.store.record_verdict(job.id, _idx, "keyframe", verdict, attempt=attempt)
                     self._flag_verdict(job, _idx, verdict, attempt=attempt)
+                    self._event(job, "verdict", index=_idx, attempt=attempt,
+                                decision=verdict.decision, score=verdict.score)
 
                 path, verdict = pipeline.generate_keyframe_evaluated(
                     scene.keyframe_prompt, scene.keyframe_prompt,
@@ -178,6 +190,7 @@ class Orchestrator:
             scene.keyframe_path = str(path)
             scene.status = SceneStatus.KEYFRAME
             self.store.save_job(job)  # persist per scene — resumable
+            self._event(job, "keyframe", index=scene.index, path=scene.keyframe_path)
 
     def _flag_verdict(self, job: Job, scene_index: int, verdict, *, attempt: int = 1) -> None:
         """Log advisory flags alongside a recorded verdict (never blocks)."""
@@ -220,6 +233,7 @@ class Orchestrator:
                          attempt=1, action="generated")
             )
             self.store.save_job(job)
+            self._event(job, "video", index=scene.index, path=scene.video_path)
 
     # -- gates & phase predicates --
 
@@ -230,6 +244,7 @@ class Orchestrator:
         job.status = JobStatus.NEEDS_APPROVAL
         self.store.save_job(job)
         log.info("job %s: paused at gate %r (awaiting approval)", job.id, name)
+        self._event(job, "gate", gate=name, status=job.status.value)
         return True
 
     def _approved(self, job: Job, name: str) -> bool:
