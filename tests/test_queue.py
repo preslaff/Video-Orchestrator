@@ -134,6 +134,29 @@ def test_submit_rejects_missing_master(tmp_path):
     asyncio.run(go())
 
 
+def test_duplicate_approve_ignored_while_active(tmp_path):
+    """A second approve while a run segment is in flight is a no-op."""
+    calls = {"n": 0}
+
+    class CountingOrch(FakeOrch):
+        def approve(self, job, gate):
+            calls["n"] += 1
+
+    async def go():
+        store = Store(str(tmp_path / "q.db"))
+        job = new_job(idea="x")
+        job.status = JobStatus.NEEDS_APPROVAL
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: CountingOrch(s, j))
+        mgr._active.add(job.id)  # simulate an in-flight run segment
+        await mgr.approve(job.id, "storyboard")  # must be ignored
+        store.close()
+        return calls["n"], mgr
+
+    n, mgr = asyncio.run(go())
+    assert n == 0 and not mgr._tasks  # nothing spawned
+
+
 def test_approve_loads_and_runs(tmp_path):
     async def go():
         store = Store(str(tmp_path / "q.db"))

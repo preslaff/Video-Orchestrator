@@ -58,6 +58,7 @@ class JobManager:
         self.broker = Broker()
         self._lock = asyncio.Lock()  # one generation at a time (single GPU)
         self._tasks: set[asyncio.Task] = set()
+        self._active: set[str] = set()  # jobs with a run segment in flight
         # How to rebuild an Orchestrator for a job (run-config lives on the job).
         self._factory = orchestrator_factory or Orchestrator.from_job
 
@@ -80,14 +81,24 @@ class JobManager:
             self.store, n_scenes=n_scenes, seed=seed, max_attempts=max_attempts, evaluate=evaluate
         )
         job = orch.create_job(idea, style=style, master_face=master_face, autonomy=autonomy)
+        self._active.add(job.id)
         self._spawn(self._execute(job, lambda o, j: o.run(j)))
         return job
 
     async def approve(self, job_id: str, gate: str) -> Job:
-        """Clear a gate and resume the job in the background; returns its current state."""
+        """Clear a gate and resume the job in the background; returns its current state.
+
+        Idempotent while a run segment is in flight: a duplicate approve (double
+        click, repeated request) for an already-running job is a no-op, so the
+        pipeline can't be driven twice in parallel.
+        """
         job = self.store.load_job(job_id)
         if job is None:
             raise KeyError(job_id)
+        if job_id in self._active:
+            log.info("job %s already running; ignoring duplicate approve", job_id)
+            return job
+        self._active.add(job_id)
         self._spawn(self._execute(job, lambda o, j: o.approve(j, gate)))
         return job
 
@@ -113,6 +124,7 @@ class JobManager:
                 self.store.save_job(job)
                 self.broker.publish(job.id, {"job_id": job.id, "type": "error", "error": str(e)})
             finally:
+                self._active.discard(job.id)
                 self.broker.publish(job.id, {"job_id": job.id, "type": "end"})
 
     def _spawn(self, coro) -> asyncio.Task:
