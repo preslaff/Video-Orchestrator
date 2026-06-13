@@ -281,6 +281,9 @@ class Store:
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        # Server runs orchestrator writes on executor threads while the API reads
+        # on the loop thread — wait out a brief writer lock instead of erroring.
+        self._conn.execute("PRAGMA busy_timeout = 5000")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 

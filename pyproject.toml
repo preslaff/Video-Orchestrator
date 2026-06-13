@@ -16,10 +16,12 @@ app = [
     "instructor>=1.0",
     "fastapi>=0.110",
     "sse-starlette>=2.0",
+    "uvicorn>=0.30",
     "nicegui>=2.0",
 ]
 dev = [
     "pytest>=8.0",
+    "httpx>=0.27",
 ]
 
 [project.scripts]

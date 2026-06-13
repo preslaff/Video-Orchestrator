@@ -251,6 +251,17 @@ def _cmd_jobs(args) -> int:
     return 0
 
 
+def _cmd_serve(args) -> int:
+    import uvicorn
+
+    from .server import create_app
+
+    app = create_app(_open_store())
+    print(f"serving on http://{args.host}:{args.port}  (API under /api)")
+    uvicorn.run(app, host=args.host, port=args.port)
+    return 0
+
+
 def _cmd_vram(args) -> int:
     from . import vram
 
@@ -356,6 +367,11 @@ def build_parser() -> argparse.ArgumentParser:
     vr = sub.add_parser("vram", help="show GPU memory; --free to reclaim ComfyUI VRAM")
     vr.add_argument("--free", action="store_true", help="POST /free and report new headroom")
     vr.set_defaults(func=_cmd_vram)
+
+    sv = sub.add_parser("serve", help="run the HTTP API + SSE server")
+    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=8000)
+    sv.set_defaults(func=_cmd_serve)
 
     return p
 
