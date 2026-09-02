@@ -114,7 +114,7 @@ def test_orchestrator_edit_job_copies_refs_to_scenes(make_store, tmp_path, monke
     monkeypatch.setattr(storyboard, "animation_prompt", lambda b, **kw: PromptPair(positive="an"))
     seen = {}
 
-    def fake_fresh(prompt, *, seed, evaluate, max_attempts, params, negative, mode, references):
+    def fake_fresh(prompt, *, seed, evaluate, max_attempts, params, negative, mode, references, **kw):
         seen.update(mode=mode, references=tuple(references))
         return "/kf.png", None
 

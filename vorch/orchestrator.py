@@ -27,6 +27,7 @@ from pathlib import Path
 from . import config, pipeline, profiles, provenance, storyboard
 from .clients import comfy
 from .genparams import DEFAULT, GenParams
+from .steps.postprocess import run_chain
 from .state import Decision, Job, JobStatus, Scene, SceneStatus, Store, Variant, new_job
 
 log = logging.getLogger("vorch.orchestrator")
@@ -45,6 +46,14 @@ def choose_variant(variants: list[Variant]) -> Variant:
     if pool:
         return max(pool, key=lambda v: v.verdict.score)
     return variants[-1]
+
+
+def output_prefix(job: Job, scene_index: int, kind: str, variant: int | None = None) -> str:
+    """ComfyUI filename_prefix that groups a job's outputs: output/vorch/<job8>/s01_keyframe."""
+    tag = f"s{scene_index:02d}_{kind}"
+    if variant is not None:
+        tag += f"_v{variant + 1}"
+    return f"vorch/{job.id[:8]}/{tag}"
 
 
 def _seed_used(path, requested: int) -> int | None:
@@ -280,6 +289,7 @@ class Orchestrator:
             self._event(job, "keyframe", index=scene.index, path=scene.keyframe_path)
 
     def _one_keyframe(self, job: Job, scene: Scene, *, seed: int, refs, variant: int):
+        prefix = output_prefix(job, scene.index, "keyframe", variant if self.variants_per_scene > 1 else None)
         if self.evaluate:
             def log_attempt(attempt, _path, verdict, _idx=scene.index):
                 # Every attempt -> decision log (DESIGN §8), not just the last.
@@ -292,12 +302,12 @@ class Orchestrator:
                 scene.keyframe_prompt, scene.keyframe_prompt,
                 seed=seed, max_attempts=self.max_attempts, on_attempt=log_attempt,
                 params=self.params, negative=scene.keyframe_negative or None,
-                mode=scene.mode, references=refs,
+                mode=scene.mode, references=refs, filename_prefix=prefix,
             )
         path, _ = pipeline._fresh_keyframe(
             scene.keyframe_prompt, seed=seed, evaluate=False, max_attempts=1,
             params=self.params, negative=scene.keyframe_negative or None,
-            mode=scene.mode, references=refs,
+            mode=scene.mode, references=refs, filename_prefix=prefix,
         )
         self.store.log_decision(
             Decision(job_id=job.id, scene_index=scene.index, phase="keyframe",
@@ -331,6 +341,7 @@ class Orchestrator:
                     swapped = pipeline.swap_master_onto(
                         variant.path, master_name, params=self.params,
                         label=f"scene {scene.index} variant {v} faceswap",
+                        filename_prefix=output_prefix(job, scene.index, "swapped", v if len(scene.variants) > 1 else None),
                     )
                     variant.swapped_path = str(swapped)
                     self.store.save_job(job)
@@ -339,8 +350,23 @@ class Orchestrator:
                     scene.swapped_path = chosen.swapped_path
                 elif not scene.swapped_path:
                     scene.swapped_path = str(pipeline.swap_master_onto(
-                        scene.keyframe_path, master_name, params=self.params))
+                        scene.keyframe_path, master_name, params=self.params,
+                        filename_prefix=output_prefix(job, scene.index, "swapped")))
                 scene.status = SceneStatus.SWAP
+            if self.params.post_steps:
+                for v, variant in enumerate(scene.variants):
+                    if variant.post_paths:
+                        continue
+                    src = variant.swapped_path or variant.path
+                    outs = run_chain(
+                        src, self.params.post_steps, seed=variant.seed,
+                        filename_prefix=output_prefix(job, scene.index, "post", v if len(scene.variants) > 1 else None),
+                    )
+                    variant.post_paths = [str(o) for o in outs]
+                    self.store.save_job(job)
+                chosen = next((x for x in scene.variants if x.path == scene.keyframe_path), None)
+                if chosen is not None:
+                    scene.post_paths = list(chosen.post_paths)
             scene.status = SceneStatus.COMPLETE
             self.store.log_decision(
                 Decision(job_id=job.id, scene_index=scene.index, phase="stills",
@@ -380,7 +406,10 @@ class Orchestrator:
             provenance.set_context(scene=scene.index)
             if do_swap:
                 log.info("job %s: video scene %d (swap -> animate)", job.id, scene.index)
-                swapped = pipeline.swap_master_onto(scene.keyframe_path, master_name, params=self.params)
+                swapped = pipeline.swap_master_onto(
+                    scene.keyframe_path, master_name, params=self.params,
+                    filename_prefix=output_prefix(job, scene.index, "swapped"),
+                )
                 scene.swapped_path = str(swapped)
                 scene.status = SceneStatus.SWAP
                 self.store.save_job(job)
@@ -389,18 +418,36 @@ class Orchestrator:
                 log.info("job %s: video scene %d (animate keyframe, no swap)", job.id, scene.index)
                 frame = scene.keyframe_path
 
+            seed = config.derive_seed(self.seed, scene=scene.index)
             video = pipeline.animate_frame(
-                frame, scene.animation_prompt, seed=config.derive_seed(self.seed, scene=scene.index),
+                frame, scene.animation_prompt, seed=seed,
                 params=self.params, negative=scene.animation_negative or None,
+                filename_prefix=output_prefix(job, scene.index, "clip"),
             )
+            scene.raw_video_path = str(video)
             scene.video_path = str(video)
-            scene.status = SceneStatus.COMPLETE
             self.store.log_decision(
                 Decision(job_id=job.id, scene_index=scene.index, phase="video",
                          attempt=1, action="generated")
             )
             self.store.save_job(job)
             self._event(job, "video", index=scene.index, path=scene.video_path)
+            if self.params.post_steps:
+                outs = run_chain(
+                    video, self.params.post_steps, fps=self.params.fps, seed=seed,
+                    filename_prefix=output_prefix(job, scene.index, "post"),
+                )
+                if outs:
+                    scene.post_paths = [str(o) for o in outs]
+                    scene.video_path = str(outs[-1])
+                    self.store.log_decision(
+                        Decision(job_id=job.id, scene_index=scene.index, phase="post", attempt=1,
+                                 action="generated", reason=", ".join(s.workflow for s in self.params.post_steps))
+                    )
+                    for i, o in enumerate(outs):
+                        self._event(job, "postprocess", index=scene.index, step=i, path=str(o))
+            scene.status = SceneStatus.COMPLETE
+            self.store.save_job(job)
 
     # -- gates & phase predicates --
 

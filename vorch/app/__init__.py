@@ -48,10 +48,9 @@ def _pending_gate(job, store) -> str:
 
 
 def _outputs_url(path: str | None, *, video: bool = False) -> str | None:
-    if not path:
-        return None
-    name = Path(path).name
-    return f"/outputs/video/{name}" if video else f"/outputs/{name}"
+    from ..api.public import media_url
+
+    return media_url(path)
 
 
 # --- pages -------------------------------------------------------------------
@@ -236,7 +235,7 @@ def setup(store: Store | None = None) -> None:
     _ctx["manager"] = JobManager(store)
     register_routes(nicegui_app, _ctx["manager"], store)
     if config.COMFY_OUTPUT.exists():
-        nicegui_app.add_static_files("/outputs", str(config.COMFY_OUTPUT))
+        nicegui_app.add_static_files("/media", str(config.COMFY_OUTPUT))
     else:
         log.warning("COMFY_OUTPUT %s missing; media won't render", config.COMFY_OUTPUT)
 
