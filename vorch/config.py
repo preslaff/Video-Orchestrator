@@ -62,5 +62,10 @@ def resolve_seed(seed: int) -> int:
 VRAM_GUARD_MB = int(os.environ.get("VORCH_VRAM_GUARD_MB", "10000"))
 VRAM_SETTLE_SEC = float(os.environ.get("VORCH_VRAM_SETTLE_SEC", "3"))
 
-# Job state + decision log (SQLite). Defaults under runs/ (DESIGN §7 output_dir).
+# Job state + decision log: PostgreSQL. Default = local socket, peer auth, db "vorch"
+# (`vorch db init` creates it). Tests use VORCH_TEST_DATABASE_URL (tests/conftest.py).
+DATABASE_URL = os.environ.get("VORCH_DATABASE_URL", "postgresql:///vorch")
+
+# Legacy SQLite file from before the PostgreSQL move — only `vorch db import-sqlite`
+# reads it now.
 STATE_DB = Path(os.environ.get("VORCH_STATE_DB", "runs/vorch.db")).expanduser()

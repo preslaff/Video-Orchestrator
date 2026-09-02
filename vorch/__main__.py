@@ -148,8 +148,7 @@ def _cmd_run_sequence(args) -> int:
 
 
 def _open_store() -> Store:
-    config.STATE_DB.parent.mkdir(parents=True, exist_ok=True)
-    return Store(config.STATE_DB)
+    return Store.open()
 
 
 def _print_job(job, store: Store) -> None:
@@ -272,7 +271,6 @@ def _cmd_serve(args) -> int:
 def _cmd_dashboard(args) -> int:
     from .app import run  # lazy: NiceGUI only needed for the dashboard
 
-    config.STATE_DB.parent.mkdir(parents=True, exist_ok=True)
     print(f"dashboard on http://{args.host}:{args.port}")
     run(host=args.host, port=args.port)
     return 0

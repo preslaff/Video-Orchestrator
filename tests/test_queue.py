@@ -63,9 +63,9 @@ def test_broker_fans_out_and_unsubscribes():
     assert got == {"a": 1} and empty_after is True
 
 
-def test_execute_streams_events_and_completes(tmp_path):
+def test_execute_streams_events_and_completes(tmp_path, make_store):
     async def go():
-        store = Store(str(tmp_path / "q.db"))
+        store = make_store()
         job = new_job(idea="x")
         store.save_job(job)
         mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
@@ -83,9 +83,9 @@ def test_execute_streams_events_and_completes(tmp_path):
     assert events[-1]["type"] == "end"
 
 
-def test_execute_reports_failure_as_state_and_event(tmp_path):
+def test_execute_reports_failure_as_state_and_event(tmp_path, make_store):
     async def go():
-        store = Store(str(tmp_path / "q.db"))
+        store = make_store()
         job = new_job(idea="x")
         store.save_job(job)
         mgr = JobManager(store, orchestrator_factory=lambda s, j: BoomOrch(s, j))
@@ -103,12 +103,12 @@ def test_execute_reports_failure_as_state_and_event(tmp_path):
     assert events[-1]["type"] == "end"
 
 
-def test_submit_creates_validates_and_runs(tmp_path):
+def test_submit_creates_validates_and_runs(tmp_path, make_store):
     master = tmp_path / "m.jpg"
     master.write_bytes(b"\xff\xd8\xff")
 
     async def go():
-        store = Store(str(tmp_path / "q.db"))
+        store = make_store()
         mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
         job = await mgr.submit("idea", master_face=str(master), autonomy="full", n_scenes=1)
         await asyncio.gather(*list(mgr._tasks))  # let the background run finish
@@ -121,9 +121,9 @@ def test_submit_creates_validates_and_runs(tmp_path):
     assert final is JobStatus.DONE
 
 
-def test_submit_no_master_ok_when_face_swap_off(tmp_path):
+def test_submit_no_master_ok_when_face_swap_off(tmp_path, make_store):
     async def go():
-        store = Store(str(tmp_path / "q.db"))
+        store = make_store()
         mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
         job = await mgr.submit("a landscape", autonomy="full", face_swap=False)  # no master
         await asyncio.gather(*list(mgr._tasks))
@@ -136,9 +136,9 @@ def test_submit_no_master_ok_when_face_swap_off(tmp_path):
     assert final is JobStatus.DONE
 
 
-def test_submit_rejects_missing_master(tmp_path):
+def test_submit_rejects_missing_master(tmp_path, make_store):
     async def go():
-        store = Store(str(tmp_path / "q.db"))
+        store = make_store()
         mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
         try:
             with pytest.raises(FileNotFoundError):
@@ -149,11 +149,11 @@ def test_submit_rejects_missing_master(tmp_path):
     asyncio.run(go())
 
 
-def test_update_scenes_applies_edits(tmp_path):
+def test_update_scenes_applies_edits(tmp_path, make_store):
     from vorch.state import Scene
 
     async def go():
-        store = Store(str(tmp_path / "q.db"))
+        store = make_store()
         job = new_job(idea="x")
         job.status = JobStatus.NEEDS_APPROVAL
         job.scenes = [Scene(index=0, keyframe_prompt="old kf", animation_prompt="old an")]
@@ -170,9 +170,9 @@ def test_update_scenes_applies_edits(tmp_path):
     assert j.scenes[0].animation_prompt == "old an"  # untouched (not in edit)
 
 
-def test_update_scenes_rejected_while_active(tmp_path):
+def test_update_scenes_rejected_while_active(tmp_path, make_store):
     async def go():
-        store = Store(str(tmp_path / "q.db"))
+        store = make_store()
         job = new_job(idea="x")
         store.save_job(job)
         mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
@@ -186,7 +186,7 @@ def test_update_scenes_rejected_while_active(tmp_path):
     asyncio.run(go())
 
 
-def test_duplicate_approve_ignored_while_active(tmp_path):
+def test_duplicate_approve_ignored_while_active(tmp_path, make_store):
     """A second approve while a run segment is in flight is a no-op."""
     calls = {"n": 0}
 
@@ -195,7 +195,7 @@ def test_duplicate_approve_ignored_while_active(tmp_path):
             calls["n"] += 1
 
     async def go():
-        store = Store(str(tmp_path / "q.db"))
+        store = make_store()
         job = new_job(idea="x")
         job.status = JobStatus.NEEDS_APPROVAL
         store.save_job(job)
@@ -209,9 +209,9 @@ def test_duplicate_approve_ignored_while_active(tmp_path):
     assert n == 0 and not mgr._tasks  # nothing spawned
 
 
-def test_approve_loads_and_runs(tmp_path):
+def test_approve_loads_and_runs(tmp_path, make_store):
     async def go():
-        store = Store(str(tmp_path / "q.db"))
+        store = make_store()
         job = new_job(idea="x", autonomy="semi")
         job.status = JobStatus.NEEDS_APPROVAL
         store.save_job(job)

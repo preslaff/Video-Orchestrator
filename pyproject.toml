@@ -3,11 +3,13 @@ name = "vorch"
 version = "0.1.0"
 description = "Local, self-contained AI video-production orchestrator (Gemma 4 + ComfyUI)"
 requires-python = ">=3.10"
-# Core: HTTP client, structured-output validation, YAML scene specs.
+# Core: HTTP client, structured-output validation, YAML scene specs, PostgreSQL state.
 dependencies = [
     "requests>=2.31",
     "pydantic>=2.0",
     "pyyaml>=6.0",
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
 ]
 
 [project.optional-dependencies]

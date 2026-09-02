@@ -133,8 +133,7 @@ def register_routes(app: FastAPI, manager: JobManager, store: Store) -> None:
 def create_app(store: Store | None = None, manager: JobManager | None = None) -> FastAPI:
     """Build a standalone FastAPI app with the job API wired to a JobManager."""
     if store is None:
-        config.STATE_DB.parent.mkdir(parents=True, exist_ok=True)
-        store = Store(config.STATE_DB)
+        store = Store.open()
     manager = manager or JobManager(store)
     app = FastAPI(title="Video Orchestrator")
     app.state.store = store

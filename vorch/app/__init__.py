@@ -231,8 +231,7 @@ def setup(store: Store | None = None) -> None:
     if _ctx:
         return  # idempotent — register once per process
     if store is None:
-        config.STATE_DB.parent.mkdir(parents=True, exist_ok=True)
-        store = Store(config.STATE_DB)
+        store = Store.open()
     _ctx["store"] = store
     _ctx["manager"] = JobManager(store)
     register_routes(nicegui_app, _ctx["manager"], store)

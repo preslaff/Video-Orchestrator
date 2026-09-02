@@ -34,7 +34,7 @@ def _verdict_retry():
 
 
 @pytest.fixture
-def wired(monkeypatch, tmp_path):
+def wired(monkeypatch, tmp_path, make_store):
     """Store + monkeypatched generation seams; returns (store, master_path, calls)."""
     calls = {"keyframe": 0, "swap": 0, "animate": 0}
 
@@ -78,9 +78,8 @@ def wired(monkeypatch, tmp_path):
     master = tmp_path / "master.jpg"
     master.write_bytes(b"\xff\xd8\xff")
 
-    store = Store(tmp_path / "vorch.db")
+    store = make_store()
     yield store, master, calls
-    store.close()
 
 
 def test_create_job_validates_master(wired):

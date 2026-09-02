@@ -2,7 +2,7 @@
 
 A run is a **Job** (idea/style/master) holding a list of **Scene** records, each
 tracking its generated prompts, artifact paths, and Gemma **Verdict**s through the
-keyframe -> video -> swap chain. Two things are persisted to one SQLite file:
+keyframe -> video -> swap chain. Two things are persisted to PostgreSQL:
 
 - the whole Job, as a JSON blob in ``jobs`` — the **resumable state** (reload and
   continue from each scene's status / which artifacts already exist);
@@ -10,22 +10,30 @@ keyframe -> video -> swap chain. Two things are persisted to one SQLite file:
   accept/retry/approval, so "why was this frame retried?" is answerable after the
   fact (Georgi's debugging requirement).
 
-Stdlib ``sqlite3``, synchronous. The later asyncio ``queue.py`` wraps these calls
-in an executor; nothing here assumes an event loop. GPU-free and unit-testable.
+psycopg 3, synchronous, behind a small thread-safe connection pool (see ``db.py``
+for DSN/migrations). The asyncio ``queue.py`` calls these from an executor
+thread and from the loop; nothing here assumes an event loop. GPU-free and
+unit-testable against a throwaway schema (tests/conftest.py).
 """
 
 from __future__ import annotations
 
-import json
-import sqlite3
-import threading
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from pathlib import Path
 
+import psycopg
+from psycopg import sql
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
+
+from . import config, db
 from .evaluator import Verdict
+
+log = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -237,29 +245,14 @@ def job_from_dict(d: dict) -> Job:
 
 # --- Store -------------------------------------------------------------------
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS jobs (
-    id          TEXT PRIMARY KEY,
-    status      TEXT NOT NULL,
-    idea        TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL,
-    data        TEXT NOT NULL            -- full Job as JSON (resumable state)
-);
-CREATE TABLE IF NOT EXISTS decisions (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id      TEXT NOT NULL,
-    scene_index INTEGER,
-    phase       TEXT NOT NULL,
-    attempt     INTEGER NOT NULL DEFAULT 1,
-    action      TEXT NOT NULL,
-    score       INTEGER,
-    reason      TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL,
-    FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_decisions_job ON decisions(job_id, id);
-"""
+def _to_ts(iso: str) -> datetime:
+    return datetime.fromisoformat(iso)
+
+
+def _from_ts(ts: datetime) -> str:
+    # timestamptz comes back in the session time zone; normalise to UTC so the
+    # strings round-trip exactly with what _now() produced.
+    return ts.astimezone(timezone.utc).isoformat()
 
 
 @dataclass
@@ -273,25 +266,55 @@ class JobSummary:
 
 
 class Store:
-    """SQLite-backed persistence for jobs and the decision log.
+    """PostgreSQL-backed persistence for jobs and the decision log.
 
-    Use as a context manager (closes the connection on exit) or call ``close()``.
-    ``path`` may be a file path or ``":memory:"`` (the latter lives only as long
-    as this Store instance).
+    ``dsn`` defaults to ``config.DATABASE_URL``. ``schema`` (optional) is put at
+    the head of ``search_path`` on every pooled connection — production leaves it
+    unset (``public``); tests pass a throwaway schema. Pending migrations are
+    applied on construction. Use as a context manager or call ``close()``.
+
+    The Store does **not** create the database itself; use :meth:`open` (or
+    ``vorch db init``) for that.
     """
 
-    def __init__(self, path: str | Path = ":memory:"):
-        self.path = str(path)
-        # check_same_thread=False so the orchestrator (executor thread) and the
-        # UI/API (loop thread) can share one connection — but a single connection
-        # can't run two statements at once, so _lock serializes every access.
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = threading.RLock()
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.execute("PRAGMA busy_timeout = 5000")
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+    def __init__(
+        self,
+        dsn: str | None = None,
+        *,
+        schema: str | None = None,
+        pool_size: int = 4,
+    ):
+        self.dsn = dsn or config.DATABASE_URL
+        self.schema = schema
+        self._closed = False
+        try:
+            self._pool = ConnectionPool(
+                self.dsn,
+                min_size=1,
+                max_size=pool_size,
+                open=True,
+                configure=self._configure,
+                kwargs={"row_factory": dict_row},
+            )
+            self._pool.wait(timeout=10)
+            with self._pool.connection() as conn:
+                self.version = db.migrate(conn)
+        except psycopg.OperationalError as e:
+            raise db.DatabaseUnavailable(db._unavailable_msg(self.dsn, e)) from e
+
+    @classmethod
+    def open(cls, dsn: str | None = None) -> Store:
+        """Create the database if missing, then return a migrated Store."""
+        dsn = dsn or config.DATABASE_URL
+        db.ensure_database(dsn)
+        return cls(dsn)
+
+    def _configure(self, conn: psycopg.Connection) -> None:
+        if self.schema:
+            conn.execute(
+                sql.SQL("SET search_path TO {}, public").format(sql.Identifier(self.schema))
+            )
+            conn.commit()
 
     # -- jobs --
 
@@ -301,39 +324,36 @@ class Store:
         if not job.created_at:
             job.created_at = now
         job.updated_at = now
-        with self._lock:
-            self._conn.execute(
+        with self._pool.connection() as conn:
+            conn.execute(
                 """
                 INSERT INTO jobs (id, status, idea, created_at, updated_at, data)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    status=excluded.status,
-                    idea=excluded.idea,
-                    updated_at=excluded.updated_at,
-                    data=excluded.data
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    idea = EXCLUDED.idea,
+                    updated_at = EXCLUDED.updated_at,
+                    data = EXCLUDED.data
                 """,
                 (
                     job.id,
                     job.status.value,
                     job.idea,
-                    job.created_at,
-                    job.updated_at,
-                    json.dumps(job_to_dict(job), ensure_ascii=False),
+                    _to_ts(job.created_at),
+                    _to_ts(job.updated_at),
+                    Jsonb(job_to_dict(job)),
                 ),
             )
-            self._conn.commit()
         return job
 
     def load_job(self, job_id: str) -> Job | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT data FROM jobs WHERE id = ?", (job_id,)
-            ).fetchone()
-        return job_from_dict(json.loads(row["data"])) if row else None
+        with self._pool.connection() as conn:
+            row = conn.execute("SELECT data FROM jobs WHERE id = %s", (job_id,)).fetchone()
+        return job_from_dict(row["data"]) if row else None
 
     def list_jobs(self) -> list[JobSummary]:
-        with self._lock:
-            rows = self._conn.execute(
+        with self._pool.connection() as conn:
+            rows = conn.execute(
                 "SELECT id, status, idea, updated_at FROM jobs ORDER BY updated_at DESC"
             ).fetchall()
         return [
@@ -341,16 +361,15 @@ class Store:
                 id=r["id"],
                 status=JobStatus(r["status"]),
                 idea=r["idea"],
-                updated_at=r["updated_at"],
+                updated_at=_from_ts(r["updated_at"]),
             )
             for r in rows
         ]
 
     def delete_job(self, job_id: str) -> None:
         """Delete a job and (via ON DELETE CASCADE) its decision log."""
-        with self._lock:
-            self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
-            self._conn.commit()
+        with self._pool.connection() as conn:
+            conn.execute("DELETE FROM jobs WHERE id = %s", (job_id,))
 
     # -- decision log --
 
@@ -358,12 +377,13 @@ class Store:
         """Append one entry to the decision log; returns it with ``id`` set."""
         if not decision.created_at:
             decision.created_at = _now()
-        with self._lock:
-            cur = self._conn.execute(
+        with self._pool.connection() as conn:
+            row = conn.execute(
                 """
                 INSERT INTO decisions
                     (job_id, scene_index, phase, attempt, action, score, reason, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
                 """,
                 (
                     decision.job_id,
@@ -373,11 +393,10 @@ class Store:
                     decision.action,
                     decision.score,
                     decision.reason,
-                    decision.created_at,
+                    _to_ts(decision.created_at),
                 ),
-            )
-            self._conn.commit()
-            decision.id = cur.lastrowid
+            ).fetchone()
+        decision.id = row["id"]
         return decision
 
     def record_verdict(
@@ -405,9 +424,9 @@ class Store:
 
     def decisions(self, job_id: str) -> list[Decision]:
         """The decision log for a job, oldest first."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM decisions WHERE job_id = ? ORDER BY id", (job_id,)
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM decisions WHERE job_id = %s ORDER BY id", (job_id,)
             ).fetchall()
         return [
             Decision(
@@ -419,15 +438,21 @@ class Store:
                 action=r["action"],
                 score=r["score"],
                 reason=r["reason"],
-                created_at=r["created_at"],
+                created_at=_from_ts(r["created_at"]),
             )
             for r in rows
         ]
 
     # -- lifecycle --
 
+    def schema_version(self) -> int:
+        with self._pool.connection() as conn:
+            return max(db.applied_versions(conn), default=0)
+
     def close(self) -> None:
-        self._conn.close()
+        if not self._closed:
+            self._closed = True
+            self._pool.close()
 
     def __enter__(self) -> Store:
         return self

@@ -30,8 +30,8 @@ class FakeOrch:
 
 
 @pytest.fixture
-def client(tmp_path):
-    store = Store(str(tmp_path / "srv.db"))
+def client(tmp_path, make_store):
+    store = make_store()
     manager = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
     app = create_app(store=store, manager=manager)
     master = tmp_path / "m.jpg"
@@ -40,7 +40,6 @@ def client(tmp_path):
         c.master = str(master)  # stash for tests
         c.store = store
         yield c
-    store.close()
 
 
 def test_create_job_returns_job(client):

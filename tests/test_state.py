@@ -39,12 +39,6 @@ def _verdict(verdict="accept", score=8, fix="") -> Verdict:
     )
 
 
-@pytest.fixture
-def store(tmp_path):
-    with Store(tmp_path / "vorch.db") as s:
-        yield s
-
-
 def test_new_job_has_id_and_timestamps():
     j = new_job(idea="a woman kneading bread", style="oil painting")
     assert j.id and j.created_at and j.updated_at == j.created_at
@@ -152,11 +146,10 @@ def test_delete_job_cascades_decisions(store):
     assert store.decisions(job.id) == []  # cascaded away
 
 
-def test_concurrent_readers_and_writers_do_not_misuse(tmp_path):
-    """Writer (executor) + reader (UI) threads share one connection safely."""
+def test_concurrent_readers_and_writers_do_not_misuse(store):
+    """Writer (executor) + reader (UI) threads share one pooled Store safely."""
     from vorch.state import Decision
 
-    store = Store(tmp_path / "c.db")
     job = new_job(idea="x")
     store.save_job(job)
     errors: list[Exception] = []
@@ -189,21 +182,54 @@ def test_concurrent_readers_and_writers_do_not_misuse(tmp_path):
         t.join()
 
     assert not errors, errors
-    store.close()
 
 
-def test_persists_across_reopen(tmp_path):
-    db = tmp_path / "persist.db"
-    with Store(db) as s:
+def test_persists_across_reopen(make_store):
+    with make_store() as s:
         job = new_job(idea="durable")
         job.scenes = [Scene(index=0, keyframe_verdict=_verdict("accept", 9))]
         s.save_job(job)
         s.record_verdict(job.id, 0, "keyframe", _verdict("accept", 9))
         job_id = job.id
 
-    # Fresh Store, same file — data must still be there.
-    with Store(db) as s2:
+    # Fresh Store (new pool), same schema — data must still be there.
+    with make_store() as s2:
         loaded = s2.load_job(job_id)
         assert loaded is not None and loaded.idea == "durable"
         assert loaded.scenes[0].keyframe_verdict.score == 9
         assert len(s2.decisions(job_id)) == 1
+
+
+# --- PostgreSQL specifics -----------------------------------------------------
+
+
+def test_migrations_applied_once_and_idempotent(make_store):
+    from vorch import db
+
+    s1 = make_store()
+    assert s1.schema_version() == db.latest_version() >= 1
+    # A second Store on the same schema finds nothing pending and does not fail.
+    s2 = make_store()
+    assert s2.schema_version() == s1.schema_version()
+    assert len(s2.decisions("nope")) == 0
+
+
+def test_jsonb_roundtrip_unicode(store):
+    job = new_job(idea="жена меси хляб — „impasto“", style="маслени бои")
+    job.scenes = [Scene(index=0, description="кухня, топла светлина", keyframe_prompt="x")]
+    store.save_job(job)
+    loaded = store.load_job(job.id)
+    assert loaded.idea == job.idea and loaded.style == job.style
+    assert loaded.scenes[0].description == "кухня, топла светлина"
+
+
+def test_timestamps_roundtrip_iso(store):
+    from datetime import datetime
+
+    job = store.save_job(new_job(idea="t"))
+    summary = store.list_jobs()[0]
+    # Stored as timestamptz, read back as the same ISO-8601 UTC string.
+    assert summary.updated_at == job.updated_at
+    assert datetime.fromisoformat(summary.updated_at).utcoffset().total_seconds() == 0
+    d = store.log_decision(Decision(job_id=job.id, scene_index=None, phase="p", attempt=1, action="a"))
+    assert store.decisions(job.id)[0].created_at == d.created_at
