@@ -9,7 +9,12 @@ import type { paths } from './schema'
  */
 export const apiOrigin = (): string => process.env.NEXT_PUBLIC_API_ORIGIN ?? ''
 
-export const api = createClient<paths>({ baseUrl: apiOrigin() })
+/** Absolute base for the client: Node's Request (jsdom tests, SSR) rejects relative URLs. */
+export const apiBase = (): string =>
+  apiOrigin() || (typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8000')
+
+// `fetch` is resolved per call so test doubles (vi.stubGlobal) and polyfills apply.
+export const api = createClient<paths>({ baseUrl: apiBase(), fetch: (req) => globalThis.fetch(req) })
 
 /** Human message from the backend's `{ error: { code, message, details } }` envelope. */
 export function errorMessage(err: unknown, fallback = 'Request failed'): string {

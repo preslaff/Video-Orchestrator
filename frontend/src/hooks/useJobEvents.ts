@@ -28,13 +28,15 @@ export function useJobEvents(jobId: string | undefined, opts: UseJobEventsOption
   const lastId = useRef(0)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onEventRef = useRef(onEvent)
-  onEventRef.current = onEvent
+
+  useEffect(() => {
+    onEventRef.current = onEvent
+  }, [onEvent])
 
   useEffect(() => {
     if (!jobId || !enabled || typeof EventSource === 'undefined') return
     const url = `${apiOrigin()}/api/jobs/${jobId}/events?after=${lastId.current}`
     const es = new EventSource(url)
-    setEnded(false)
 
     const invalidateJob = () => {
       if (timer.current) clearTimeout(timer.current)
@@ -78,7 +80,10 @@ export function useJobEvents(jobId: string | undefined, opts: UseJobEventsOption
     }
   }, [jobId, enabled, generation, qc])
 
-  const reconnect = useCallback(() => setGeneration((g) => g + 1), [])
+  const reconnect = useCallback(() => {
+    setEnded(false)
+    setGeneration((g) => g + 1)
+  }, [])
 
-  return { events, connected, ended, lastId: lastId.current, reconnect }
+  return { events, connected, ended, reconnect }
 }
