@@ -24,15 +24,35 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from . import config, pipeline, provenance, storyboard
+from . import config, pipeline, profiles, provenance, storyboard
 from .clients import comfy
 from .genparams import DEFAULT, GenParams
-from .state import Decision, Job, JobStatus, Scene, SceneStatus, Store, new_job
+from .state import Decision, Job, JobStatus, Scene, SceneStatus, Store, Variant, new_job
 
 log = logging.getLogger("vorch.orchestrator")
 
 GATE_STORYBOARD = "storyboard"
 GATE_KEYFRAMES = "keyframes"
+
+
+def choose_variant(variants: list[Variant]) -> Variant:
+    """Best candidate: accepted with the highest score, else highest score, else the last."""
+    if not variants:
+        raise ValueError("no variants to choose from")
+    scored = [v for v in variants if v.verdict is not None]
+    accepted = [v for v in scored if v.verdict.decision == "accept"]
+    pool = accepted or scored
+    if pool:
+        return max(pool, key=lambda v: v.verdict.score)
+    return variants[-1]
+
+
+def _seed_used(path, requested: int) -> int | None:
+    """The seed that actually produced ``path`` (manifest), else the requested one."""
+    m = provenance.read_manifest(path)
+    if m and isinstance(m.get("params"), dict) and m["params"].get("seed") is not None:
+        return m["params"]["seed"]
+    return requested if requested != config.SEED_RANDOM else None
 
 
 class Orchestrator:
@@ -42,22 +62,25 @@ class Orchestrator:
         self,
         store: Store,
         *,
+        profile: profiles.OutputProfile | None = None,
+        params: GenParams | None = None,
         n_scenes: int | None = None,
         seed: int = config.SEED_RANDOM,
-        max_attempts: int = 2,
-        evaluate: bool = True,
-        face_swap: bool = True,
-        params: GenParams | None = None,
+        max_attempts: int | None = None,
+        evaluate: bool | None = None,
+        face_swap: bool | None = None,
     ):
+        """``profile`` (or ``params``) carries the generation settings; the explicit
+        ``max_attempts`` / ``evaluate`` / ``face_swap`` override it (legacy CLI/tests).
+        Without either, DEFAULT reproduces the pre-profile constants."""
         self.store = store
+        self.profile = profile
+        self.params = params or (GenParams.from_profile(profile) if profile is not None else DEFAULT)
         self.n_scenes = n_scenes
         self.seed = seed
-        self.max_attempts = max_attempts
-        self.evaluate = evaluate
-        self.face_swap = face_swap
-        # Generation settings (sizes, length, fps, negatives, workflow names);
-        # DEFAULT reproduces the pre-profile constants.
-        self.params = params or DEFAULT
+        self.max_attempts = max_attempts if max_attempts is not None else self.params.max_attempts
+        self.evaluate = evaluate if evaluate is not None else self.params.evaluate
+        self.face_swap = face_swap if face_swap is not None else self.params.face_swap
         # Progress sink for live UIs (set by queue.py). No-op by default so the
         # CLI path is unaffected. Each event is a small JSON-able dict.
         self.emit: Callable[[dict], None] = lambda event: None
@@ -67,17 +90,23 @@ class Orchestrator:
 
     @classmethod
     def from_job(cls, store: Store, job: Job) -> "Orchestrator":
-        """Rebuild an Orchestrator from a job's persisted run-config (for resume)."""
-        snapshot = getattr(job, "profile", None)
-        params = GenParams.from_profile(snapshot) if snapshot else None
+        """Rebuild an Orchestrator from a job's persisted run-config (for resume).
+
+        Jobs carry a frozen profile snapshot; older rows without one get the
+        default profile plus their stored evaluate/face_swap/max_attempts.
+        """
+        if job.profile:
+            profile = profiles.OutputProfile.model_validate(job.profile)
+        else:
+            profile = profiles.legacy_profile_for_job(job)
         return cls(
             store,
+            profile=profile,
             n_scenes=job.n_scenes,
             seed=job.seed,
             max_attempts=job.max_attempts,
             evaluate=job.evaluate,
             face_swap=job.face_swap,
-            params=params,
         )
 
     # -- job lifecycle --
@@ -91,13 +120,14 @@ class Orchestrator:
         autonomy: str = "semi",
         mode: str = "t2i",
         reference_images: list[str] | None = None,
+        project_id: str | None = None,
     ) -> Job:
         """Create and persist a fresh Job.
 
-        The run-config (n_scenes/seed/max_attempts/evaluate/face_swap) is stored
-        on the job so a later ``approve``/resume reconstructs it exactly (see
-        ``from_job``). The master face is required and validated only when
-        ``face_swap`` is on; otherwise it may be empty.
+        The profile snapshot + run-config (n_scenes/seed/max_attempts/evaluate/
+        face_swap) are stored on the job so a later ``approve``/resume
+        reconstructs it exactly (see ``from_job``). The master face is required
+        and validated only when ``face_swap`` is on; otherwise it may be empty.
         """
         # Master face only matters (and is only validated) when swapping.
         master_str = ""
@@ -129,6 +159,10 @@ class Orchestrator:
             face_swap=self.face_swap,
             mode=mode,
             reference_images=refs,
+            project_id=project_id,
+            profile_id=self.profile.id if self.profile is not None else None,
+            profile=self.profile.snapshot() if self.profile is not None else None,
+            kind=self.params.kind,
         )
         return self.store.save_job(job)
 
@@ -152,11 +186,16 @@ class Orchestrator:
 
         if self._needs_keyframes(job):
             self._phase_keyframes(job)
-        if self._gate(job, GATE_KEYFRAMES):
-            return job
 
-        if self._needs_videos(job):
-            self._phase_videos(job)
+        if job.kind == "stills":
+            # Everything after the keyframes is cheap: no second gate.
+            if self._needs_stills_finish(job):
+                self._phase_finish_stills(job)
+        else:
+            if self._gate(job, GATE_KEYFRAMES):
+                return job
+            if self._needs_videos(job):
+                self._phase_videos(job)
 
         job.status = JobStatus.DONE
         self.store.save_job(job)
@@ -207,47 +246,108 @@ class Orchestrator:
         self.store.save_job(job)
         self._event(job, "storyboard", scenes=len(scenes))
 
+    @property
+    def variants_per_scene(self) -> int:
+        return max(1, self.params.variants_per_scene)
+
     def _phase_keyframes(self, job: Job) -> None:
+        """One keyframe per scene — or ``variants_per_scene`` candidates, the best
+        of which becomes ``keyframe_path``. Persisted after every variant, so a
+        resumed run continues mid-scene."""
         ref_cache: dict = {}  # reference path -> staged name (upload once per run)
+        n = self.variants_per_scene
         for scene in job.scenes:
-            if scene.keyframe_path and scene.status is not SceneStatus.PENDING:
+            if not self._scene_needs_keyframes(scene, n):
                 continue  # resume: already done
-            log.info("job %s: keyframe scene %d", job.id, scene.index)
-            provenance.set_context(scene=scene.index)
-            seed = config.derive_seed(self.seed, scene=scene.index)
+            log.info("job %s: keyframes scene %d (%d variant(s))", job.id, scene.index, n)
             refs = (
                 pipeline.stage_references(scene.references, self.params, cache=ref_cache)
                 if scene.mode == "edit" else ()
             )
-            if self.evaluate:
-                def log_attempt(attempt, _path, verdict, _idx=scene.index):
-                    # Every attempt -> decision log (DESIGN §8), not just the last.
-                    self.store.record_verdict(job.id, _idx, "keyframe", verdict, attempt=attempt)
-                    self._flag_verdict(job, _idx, verdict, attempt=attempt)
-                    self._event(job, "verdict", index=_idx, attempt=attempt,
-                                decision=verdict.decision, score=verdict.score)
-
-                path, verdict = pipeline.generate_keyframe_evaluated(
-                    scene.keyframe_prompt, scene.keyframe_prompt,
-                    seed=seed, max_attempts=self.max_attempts, on_attempt=log_attempt,
-                    params=self.params, negative=scene.keyframe_negative or None,
-                    mode=scene.mode, references=refs,
-                )
-                scene.keyframe_verdict = verdict
-            else:
-                path, _ = pipeline._fresh_keyframe(
-                    scene.keyframe_prompt, seed=seed, evaluate=False, max_attempts=1,
-                    params=self.params, negative=scene.keyframe_negative or None,
-                    mode=scene.mode, references=refs,
-                )
-                self.store.log_decision(
-                    Decision(job_id=job.id, scene_index=scene.index, phase="keyframe",
-                             attempt=1, action="generated")
-                )
-            scene.keyframe_path = str(path)
+            for v in range(len(scene.variants), n):
+                provenance.set_context(scene=scene.index, variant=v if n > 1 else None)
+                seed = config.derive_seed(self.seed, scene=scene.index, variant=v)
+                path, verdict = self._one_keyframe(job, scene, seed=seed, refs=refs, variant=v)
+                scene.variants.append(Variant(path=str(path), seed=_seed_used(path, seed), verdict=verdict))
+                self.store.save_job(job)  # persist per variant — resumable
+                if n > 1:
+                    self._event(job, "variant", index=scene.index, variant=v, path=str(path))
+            chosen = choose_variant(scene.variants)
+            scene.keyframe_path = chosen.path
+            scene.keyframe_verdict = chosen.verdict
             scene.status = SceneStatus.KEYFRAME
             self.store.save_job(job)  # persist per scene — resumable
             self._event(job, "keyframe", index=scene.index, path=scene.keyframe_path)
+
+    def _one_keyframe(self, job: Job, scene: Scene, *, seed: int, refs, variant: int):
+        if self.evaluate:
+            def log_attempt(attempt, _path, verdict, _idx=scene.index):
+                # Every attempt -> decision log (DESIGN §8), not just the last.
+                self.store.record_verdict(job.id, _idx, "keyframe", verdict, attempt=attempt)
+                self._flag_verdict(job, _idx, verdict, attempt=attempt)
+                self._event(job, "verdict", index=_idx, attempt=attempt, variant=variant,
+                            decision=verdict.decision, score=verdict.score)
+
+            return pipeline.generate_keyframe_evaluated(
+                scene.keyframe_prompt, scene.keyframe_prompt,
+                seed=seed, max_attempts=self.max_attempts, on_attempt=log_attempt,
+                params=self.params, negative=scene.keyframe_negative or None,
+                mode=scene.mode, references=refs,
+            )
+        path, _ = pipeline._fresh_keyframe(
+            scene.keyframe_prompt, seed=seed, evaluate=False, max_attempts=1,
+            params=self.params, negative=scene.keyframe_negative or None,
+            mode=scene.mode, references=refs,
+        )
+        self.store.log_decision(
+            Decision(job_id=job.id, scene_index=scene.index, phase="keyframe",
+                     attempt=1, action="generated", reason=f"variant {variant}" if self.variants_per_scene > 1 else "")
+        )
+        return path, None
+
+    @staticmethod
+    def _scene_needs_keyframes(scene: Scene, n: int) -> bool:
+        if scene.keyframe_path is None or scene.status is SceneStatus.PENDING:
+            return True
+        return n > 1 and len(scene.variants) < n
+
+    def _phase_finish_stills(self, job: Job) -> None:
+        """Stills jobs: impose the master face on every variant (when enabled) and
+        mark the scenes complete. Post-steps for stills hook in here."""
+        do_swap = self.face_swap and bool(job.master_face)
+        master_name = comfy.upload_image(job.master_face) if do_swap else None
+        for scene in job.scenes:
+            if scene.status is SceneStatus.COMPLETE:
+                continue
+            if not scene.keyframe_path:
+                log.warning("job %s: scene %d has no keyframe; skipping", job.id, scene.index)
+                continue
+            provenance.set_context(scene=scene.index)
+            if do_swap:
+                for v, variant in enumerate(scene.variants):
+                    if variant.swapped_path:
+                        continue
+                    provenance.set_context(variant=v if len(scene.variants) > 1 else None)
+                    swapped = pipeline.swap_master_onto(
+                        variant.path, master_name, params=self.params,
+                        label=f"scene {scene.index} variant {v} faceswap",
+                    )
+                    variant.swapped_path = str(swapped)
+                    self.store.save_job(job)
+                chosen = next((x for x in scene.variants if x.path == scene.keyframe_path), None)
+                if chosen is not None:
+                    scene.swapped_path = chosen.swapped_path
+                elif not scene.swapped_path:
+                    scene.swapped_path = str(pipeline.swap_master_onto(
+                        scene.keyframe_path, master_name, params=self.params))
+                scene.status = SceneStatus.SWAP
+            scene.status = SceneStatus.COMPLETE
+            self.store.log_decision(
+                Decision(job_id=job.id, scene_index=scene.index, phase="stills",
+                         attempt=1, action="generated", reason=f"{len(scene.variants)} variant(s)")
+            )
+            self.store.save_job(job)
+            self._event(job, "stills", index=scene.index, variants=len(scene.variants))
 
     def _flag_verdict(self, job: Job, scene_index: int, verdict, *, attempt: int = 1) -> None:
         """Log advisory flags alongside a recorded verdict (never blocks)."""
@@ -306,8 +406,8 @@ class Orchestrator:
 
     @staticmethod
     def gates(job: Job) -> list[str]:
-        """The approval gates this job passes through, in order."""
-        return [GATE_STORYBOARD, GATE_KEYFRAMES]
+        """The approval gates this job passes through, in order (by kind)."""
+        return profiles.gates_for({"kind": getattr(job, "kind", "video")})
 
     @classmethod
     def next_gate(cls, job: Job, store: Store) -> str | None:
@@ -341,10 +441,14 @@ class Orchestrator:
             for d in self.store.decisions(job.id)
         )
 
-    @staticmethod
-    def _needs_keyframes(job: Job) -> bool:
-        return any(s.keyframe_path is None for s in job.scenes)
+    def _needs_keyframes(self, job: Job) -> bool:
+        n = self.variants_per_scene
+        return any(self._scene_needs_keyframes(s, n) for s in job.scenes)
 
     @staticmethod
     def _needs_videos(job: Job) -> bool:
         return any(s.video_path is None for s in job.scenes)
+
+    @staticmethod
+    def _needs_stills_finish(job: Job) -> bool:
+        return any(s.status is not SceneStatus.COMPLETE for s in job.scenes)

@@ -34,6 +34,7 @@ class SceneEdit(BaseModel):
     animation_negative: str | None = None
     mode: Literal["t2i", "edit"] | None = None
     references: list[str] | None = None
+    chosen_variant: int | None = None   # pick which variant is the scene's keyframe
 
 
 class SceneEdits(BaseModel):

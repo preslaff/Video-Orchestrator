@@ -167,6 +167,13 @@ class JobManager:
                           "keyframe_negative", "animation_negative", "mode", "references"):
                 if edit.get(field) is not None:
                     setattr(scene, field, edit[field])
+            chosen = edit.get("chosen_variant")
+            if chosen is not None:
+                if not 0 <= int(chosen) < len(scene.variants):
+                    raise ValueError(f"scene {scene.index}: no variant {chosen}")
+                v = scene.variants[int(chosen)]
+                scene.keyframe_path, scene.keyframe_verdict = v.path, v.verdict
+                scene.swapped_path = v.swapped_path
         return self.store.save_job(job)
 
     # -- internals --

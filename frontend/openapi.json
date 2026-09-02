@@ -1034,6 +1034,17 @@
               }
             ],
             "title": "References"
+          },
+          "chosen_variant": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chosen Variant"
           }
         },
         "type": "object",

@@ -110,6 +110,8 @@ async def update_scenes(
         raise ApiError(404, "not_found", "no such job")
     except RuntimeError as e:
         raise ApiError(409, "conflict", str(e))
+    except ValueError as e:
+        raise ApiError(400, "bad_request", str(e))
     return job_to_public(job, store)
 
 

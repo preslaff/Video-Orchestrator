@@ -250,3 +250,130 @@ def test_resume_from_reloaded_job(wired):
     o2.approve(reloaded2, GATE_KEYFRAMES)
     assert reloaded2.status is JobStatus.DONE
     assert all(s.video_path for s in reloaded2.scenes)
+
+
+# --- profile-driven plan: snapshot, legacy resume, stills + variants ---------------
+
+
+def test_profile_snapshot_persisted_and_restored(wired):
+    from vorch import profiles
+
+    store, master, _ = wired
+    prof = profiles.builtin_profiles()["social_9x16"]
+    o = Orchestrator(store, profile=prof, seed=7)
+    job = o.create_job("vertical idea", master_face=str(master))
+    saved = store.load_job(job.id)
+    assert saved.profile_id == "social_9x16" and saved.kind == "video"
+    assert saved.profile["keyframe"]["width"] == 576
+    resumed = Orchestrator.from_job(store, saved)
+    assert resumed.params.aspect == "9:16" and resumed.params.wan_size == (480, 832)
+    assert resumed.params.profile_name == "social_9x16"
+    assert resumed.gates(saved) == ["storyboard", "keyframes"]
+
+
+def test_legacy_job_without_snapshot_resumes(wired):
+    store, master, _ = wired
+    job = Orchestrator(store, evaluate=False, face_swap=False, max_attempts=3).create_job("old")
+    assert store.load_job(job.id).profile is None
+    o = Orchestrator.from_job(store, store.load_job(job.id))
+    assert o.evaluate is False and o.face_swap is False and o.max_attempts == 3
+    assert o.params.aspect == "16:9" and o.profile is not None  # default profile + job knobs
+
+
+def test_stills_job_single_gate_no_videos(wired):
+    from vorch import profiles
+
+    store, master, calls = wired
+    prof = profiles.apply_overrides(profiles.builtin_profiles()["stills_16x9"], {"stills": {"variants": 2}})
+    o = Orchestrator(store, profile=prof)
+    job = o.create_job("posters", master_face=str(master))
+    assert job.kind == "stills" and o.gates(job) == ["storyboard"]
+
+    o.run(job)
+    assert job.status is JobStatus.NEEDS_APPROVAL and Orchestrator.pending_gate(job, store) == "storyboard"
+    assert calls["keyframe"] == 0
+
+    o.approve(job, GATE_STORYBOARD)
+    assert job.status is JobStatus.DONE
+    assert calls["keyframe"] == 4 and calls["animate"] == 0          # 2 scenes x 2 variants, no Wan
+    assert calls["swap"] == 4                                        # master imposed on every variant
+    for s in job.scenes:
+        assert len(s.variants) == 2 and s.keyframe_path in {v.path for v in s.variants}
+        assert all(v.swapped_path for v in s.variants) and s.swapped_path
+        assert s.status is SceneStatus.COMPLETE
+    assert Orchestrator.pending_gate(job, store) is None
+    phases = {d.phase for d in store.decisions(job.id)}
+    assert "stills" in phases and "video" not in phases
+
+
+def test_stills_variants_best_chosen_and_resume_mid_scene(wired, monkeypatch):
+    from vorch import profiles
+
+    store, master, calls = wired
+    scores = iter([3, 9, 6, 5])
+    seen_seeds = []
+
+    def scored_eval(prompt, task, *, seed, max_attempts, on_attempt=None, **kw):
+        calls["keyframe"] += 1
+        seen_seeds.append(seed)
+        v = _verdict(score=next(scores))
+        path = f"/kf/{calls['keyframe']}.png"
+        if on_attempt:
+            on_attempt(1, path, v)
+        return path, v
+
+    monkeypatch.setattr(pipeline, "generate_keyframe_evaluated", scored_eval)
+    prof = profiles.apply_overrides(
+        profiles.builtin_profiles()["stills_16x9"],
+        {"stills": {"variants": 2}, "face_swap": {"enabled": False}},
+    )
+    o = Orchestrator(store, profile=prof, seed=100)
+    job = o.create_job("choose", autonomy="full")
+    o.run(job)
+    assert job.status is JobStatus.DONE
+    assert job.scenes[0].keyframe_path == "/kf/2.png"   # score 9 beats 3
+    assert job.scenes[1].keyframe_path == "/kf/3.png"   # 6 beats 5
+    assert [v.seed for v in job.scenes[0].variants] == [100, 200]         # derive_seed per variant
+    assert seen_seeds == [100, 200, 10_100, 10_200]
+
+    # Resume mid-scene: drop the second variant of scene 1 and re-run -> only that one regenerates.
+    job.scenes[1].variants = job.scenes[1].variants[:1]
+    job.scenes[1].keyframe_path = None
+    store.save_job(job)
+    scores = iter([8])
+    before = calls["keyframe"]
+    Orchestrator.from_job(store, store.load_job(job.id)).run(store.load_job(job.id))
+    assert calls["keyframe"] == before + 1
+    reloaded = store.load_job(job.id)
+    assert len(reloaded.scenes[1].variants) == 2 and reloaded.status is JobStatus.DONE
+
+
+def test_choose_variant_rules():
+    from vorch.orchestrator import choose_variant
+    from vorch.state import Variant
+
+    a, b, c = Variant("a", verdict=_verdict_retry()), Variant("b", verdict=_verdict(5)), Variant("c")
+    assert choose_variant([a, b, c]) is b                # accepted beats retry / unscored
+    assert choose_variant([a, c]) is a                   # scored beats unscored
+    assert choose_variant([c, Variant("d")]).path == "d" # no verdicts: last
+    import pytest as _pt
+    with _pt.raises(ValueError):
+        choose_variant([])
+
+
+def test_update_scenes_chosen_variant(wired):
+    from vorch.queue import JobManager
+    from vorch.state import Scene, Variant, new_job
+
+    store, _, _ = wired
+    job = new_job(idea="v", kind="stills")
+    job.status = JobStatus.DONE
+    job.scenes = [Scene(index=0, keyframe_path="/a.png", variants=[
+        Variant("/a.png", swapped_path="/as.png"), Variant("/b.png", verdict=_verdict(7), swapped_path="/bs.png")])]
+    store.save_job(job)
+    mgr = JobManager(store)
+    updated = mgr.update_scenes(job.id, [{"index": 0, "chosen_variant": 1}])
+    assert updated.scenes[0].keyframe_path == "/b.png" and updated.scenes[0].swapped_path == "/bs.png"
+    assert updated.scenes[0].keyframe_verdict.score == 7
+    with pytest.raises(ValueError):
+        mgr.update_scenes(job.id, [{"index": 0, "chosen_variant": 5}])
