@@ -179,6 +179,27 @@ dashboard, or `--no-face-swap` on `run-scene`/`run-sequence`) to animate the key
 without imposing a master face — useful for landscapes, objects, or generic characters. `master_face`
 is then not required.
 
+### Web UI (Next.js)
+
+The control panel is a separate **Next.js** app in `frontend/` (App Router, TypeScript,
+Tailwind, TanStack Query) that proxies `/api` and `/media` to FastAPI, so the browser stays
+same-origin. Node 22 (`frontend/.nvmrc`) is required for the UI only — `vorch serve` never
+needs it.
+
+```bash
+# terminal 1 — API + media
+.venv/bin/python -m vorch serve                 # http://127.0.0.1:8000/api, /docs
+
+# terminal 2 — UI (first time: npm ci)
+cd frontend && npm run dev                      # http://localhost:3000
+```
+
+`make frontend` builds it (`npm ci && next build`), `make start` serves the build, and
+`make api-types` regenerates `frontend/openapi.json` + `src/api/schema.d.ts` after any API
+change (a pytest snapshot test fails until you do). Frontend tests: `cd frontend && npm test`.
+If proxied SSE ever buffers, set `NEXT_PUBLIC_API_ORIGIN=http://127.0.0.1:8000` to have the
+browser talk to FastAPI directly (CORS is enabled for the Next origin).
+
 ### Web dashboard
 
 A NiceGUI dashboard (job form, live keyframe/video gallery, approval-gate buttons, decision log +

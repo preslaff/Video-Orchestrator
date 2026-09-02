@@ -1,0 +1,15 @@
+export const keys = {
+  jobs: (filters: object = {}) => ['jobs', filters] as const,
+  job: (id: string) => ['job', id] as const,
+  decisions: (id: string) => ['decisions', id] as const,
+  provenance: (id: string) => ['provenance', id] as const,
+  exportStatus: (id: string) => ['export', id] as const,
+  env: (profileId?: string, deep?: boolean) => ['env', profileId ?? null, !!deep] as const,
+  config: ['config'] as const,
+  workflows: ['workflows'] as const,
+  workflow: (name: string) => ['workflow', name] as const,
+  profiles: ['profiles'] as const,
+  profile: (id: string) => ['profile', id] as const,
+  projects: ['projects'] as const,
+  project: (id: string) => ['project', id] as const,
+}

@@ -1,0 +1,19 @@
+import type { components } from './schema'
+
+type S = components['schemas']
+
+export type JobPublic = S['JobPublic']
+export type ScenePublic = S['ScenePublic']
+export type VariantOut = S['VariantOut']
+export type VerdictOut = S['VerdictOut']
+export type JobSummary = S['JobSummaryOut']
+export type JobSpec = S['JobSpec']
+export type DecisionOut = S['DecisionOut']
+export type ProvenanceOut = S['ProvenanceOut']
+export type OutputProfile = S['OutputProfile']
+export type ProjectOut = S['ProjectOut']
+export type ProjectSummary = S['ProjectSummaryOut']
+export type AssetOut = S['AssetOut']
+export type SceneEdit = S['SceneEdit']
+export type Gate = 'storyboard' | 'keyframes'
+export type JobStatus = 'pending' | 'running' | 'needs_approval' | 'done' | 'failed' | 'cancelled'

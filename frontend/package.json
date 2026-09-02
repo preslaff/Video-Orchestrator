@@ -1,0 +1,49 @@
+{
+  "name": "vorch-ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Video Orchestrator control panel (Next.js) — talks to the FastAPI backend via /api rewrites",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config ./vitest.config.mts",
+    "test:watch": "vitest --config ./vitest.config.mts",
+    "gen:api": "openapi-typescript openapi.json -o src/api/schema.d.ts",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.102.8",
+    "lucide-react": "1.39.0",
+    "next": "16.3.4",
+    "openapi-fetch": "0.17.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.1.1",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.4",
+    "jsdom": "30.0.1",
+    "openapi-typescript": "7.13.0",
+    "postcss": "8.5.26",
+    "prettier": "3.9.6",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite-tsconfig-paths": "6.1.1",
+    "vitest": "4.1.11"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}
