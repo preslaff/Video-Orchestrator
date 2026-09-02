@@ -146,9 +146,18 @@ class JobManager:
             idea, style=style, master_face=sub.master_face, autonomy=autonomy, mode=mode,
             reference_images=sub.reference_images, project_id=sub.project_id,
         )
-        self._active.add(job.id)
+        self._start(job)
         self._spawn(self._execute(job, lambda o, j: o.run(j)))
         return job
+
+    def _start(self, job: Job) -> None:
+        """Mark a segment as queued: status RUNNING is persisted *before* the worker
+        starts so a client that refetches right after the request already sees
+        the job as active (and keeps/reopens its event stream)."""
+        job.status = JobStatus.RUNNING
+        self.store.save_job(job)
+        self._active.add(job.id)
+        self.broker.publish(job.id, {"type": "status", "status": job.status.value})
 
     def export_now(self, job_id: str, *, force: bool = False) -> export_mod.ExportRecord:
         """Materialise the handoff folder for a finished job (synchronous file I/O)."""
@@ -179,7 +188,7 @@ class JobManager:
         if job_id in self._active:
             log.info("job %s already running; ignoring duplicate approve", job_id)
             return job
-        self._active.add(job_id)
+        self._start(job)
         self._spawn(self._execute(job, lambda o, j: o.approve(j, gate)))
         return job
 
@@ -196,7 +205,7 @@ class JobManager:
             raise RuntimeError("job is running")
         if not any(s.index == index for s in job.scenes):
             raise KeyError(f"scene {index}")
-        self._active.add(job.id)
+        self._start(job)
         self._spawn(self._execute(job, lambda o, j: o.regenerate(j, index, what=what, edits=edits)))
         return job
 

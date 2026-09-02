@@ -19,9 +19,10 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   const provenance = useProvenance(id)
   const exp = useExportStatus(id)
   const runExport = useRunExport(id)
-  const terminal = job.data ? ['done', 'failed', 'cancelled'].includes(job.data.status) : false
+  // Always subscribe while the page is open: a finished job costs one synthetic
+  // `end`, and a later approve/regenerate reconnects (onStarted) or resumes (active).
   const live = useJobEvents(id, {
-    enabled: !!job.data && !(terminal && !!job.data.export),
+    enabled: !!job.data,
     active: job.data?.status === 'running' || job.data?.status === 'pending',
   })
 
@@ -43,7 +44,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
       <ProgressPanel job={j} events={live.events} connected={live.connected} />
 
       {(j.status === 'needs_approval' || j.status === 'done' || j.status === 'failed') && j.scenes.length > 0 && (
-        <GatePanel key={`${j.id}-${j.status}-${j.updated_at}`} job={j} decisions={decisions.data} />
+        <GatePanel key={`${j.id}-${j.status}-${j.updated_at}`} job={j} decisions={decisions.data} onStarted={live.reconnect} />
       )}
 
       <div className="grid gap-4 lg:grid-cols-3">

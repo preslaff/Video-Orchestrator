@@ -361,3 +361,35 @@ def test_export_now_requires_done_unless_forced(tmp_path, make_store, monkeypatc
     assert store.load_job(job.id).export["path"] == "p"
     with pytest.raises(KeyError):
         mgr.export_now("nope")
+
+
+def test_segment_is_marked_running_before_the_worker_starts(tmp_path, make_store):
+    """The request returns (and persists) RUNNING immediately, so a client refetch
+    right after approve/regenerate sees an active job and keeps its SSE stream."""
+    from vorch.state import Scene, new_job
+
+    class SlowOrch(FakeOrch):
+        def approve(self, job, gate):
+            import time
+            time.sleep(0.2)
+            super().approve(job, gate)
+
+    async def go():
+        store = make_store()
+        job = new_job(idea="x")
+        job.status = JobStatus.NEEDS_APPROVAL
+        job.scenes = [Scene(index=0)]
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: SlowOrch(s, j), auto_export=False)
+        q = mgr.events(job.id)
+        returned = await mgr.approve(job.id, "storyboard")
+        ret_status = returned.status  # read now: the worker mutates the same object later
+        persisted = store.load_job(job.id).status
+        first = await asyncio.wait_for(q.get(), 1)
+        await asyncio.gather(*list(mgr._tasks))
+        return ret_status, persisted, first["type"], first.get("status"), store.load_job(job.id).status
+
+    ret, persisted, ev_type, ev_status, final = asyncio.run(go())
+    assert ret is JobStatus.RUNNING and persisted is JobStatus.RUNNING
+    assert (ev_type, ev_status) == ("status", "running")
+    assert final is JobStatus.DONE

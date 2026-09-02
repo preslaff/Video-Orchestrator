@@ -27,7 +27,7 @@ function draftsFrom(job: JobPublic): Record<number, Draft> {
  * keyframe" / "Re-animate" — the variant picker chooses which candidate is the
  * scene's keyframe, and Approve continues the run.
  */
-export function GatePanel({ job, decisions = [] }: { job: JobPublic; decisions?: DecisionOut[] }) {
+export function GatePanel({ job, decisions = [], onStarted }: { job: JobPublic; decisions?: DecisionOut[]; onStarted?: () => void }) {
   const [drafts, setDrafts] = useState(() => draftsFrom(job))
   const update = useUpdateScenes(job.id)
   const approve = useApprove(job.id)
@@ -56,7 +56,7 @@ export function GatePanel({ job, decisions = [] }: { job: JobPublic; decisions?:
         references: what === 'keyframe' ? d.references.split('\n').map((x) => x.trim()).filter(Boolean) : null,
         apply_suggestion: false, // suggestions are applied in the editable prompt above
       },
-    })
+    }, { onSuccess: () => onStarted?.() })
   }
 
   const set = (i: number, patch: Partial<Draft>) => setDrafts((d) => ({ ...d, [i]: { ...d[i], ...patch } }))
@@ -111,7 +111,7 @@ export function GatePanel({ job, decisions = [] }: { job: JobPublic; decisions?:
         <div className="flex gap-2">
           <Button onClick={save} disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save changes'}</Button>
           {job.pending_gate && (
-            <Button variant="primary" disabled={approve.isPending} onClick={() => approve.mutate(job.pending_gate!)}>
+            <Button variant="primary" disabled={approve.isPending} onClick={() => approve.mutate(job.pending_gate!, { onSuccess: () => onStarted?.() })}>
               {approve.isPending ? 'Approving…' : `Approve ${job.pending_gate}`}
             </Button>
           )}
