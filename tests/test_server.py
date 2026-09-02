@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from vorch.queue import JobManager
-from vorch.server import create_app
+from vorch.api import create_app
 from vorch.state import JobStatus, Store
 
 

@@ -22,17 +22,21 @@ autonomous planner. This choice (over an LLM-agent framework) was validated by a
 research pass — see [`DESIGN.md`](DESIGN.md) §11–12.
 
 ```
-┌─ NiceGUI app (on FastAPI) ── single local process ──────────────────────┐   [Phase 2]
-│  UI: job form · live progress (SSE) · keyframe gallery + approval gate    │
-│  Deterministic state machine (the orchestrator core):                     │
-│    STORYBOARD ─gate─ KEYFRAMES ─/free─ VIDEOS ─/free─ SWAPS ─ FINAL        │
-│    job queue = asyncio + PostgreSQL (resumable state + decision log)       │
-└───────────────┬──────────────────────────────────┬───────────────────────┘
-                │ HTTP (called as tools)            │ HTTP
-                ▼                                    ▼
-   Gemma · llama-server :8080             ComfyUI :8188
-   text: storyboard/prompts              /prompt · /history · /free · /interrupt
-   vision: eval → JSON verdict           = deterministic generator
+┌─ Next.js UI :3000 ──────────────┐    rewrites /api, /media
+│  setup (env · workflows · profiles ·│ ─────────────────────────┐
+│  projects) · new-job wizard · job   │                          ▼
+│  page (SSE timeline, gallery, gates)│   ┌─ FastAPI :8000 (vorch serve) ─────────────────────┐
+└─────────────────────────────────────┘   │  /api + SSE · /media (ComfyUI output)               │
+                                          │  JobManager (one GPU lock) → Orchestrator:         │
+                                          │   STORYBOARD ─⏸─ KEYFRAMES ─⏸─ VIDEOS ─ POST ─ EXPORT│
+                                          │  PostgreSQL: jobs (JSONB) · decisions · profiles ·  │
+                                          │  projects        registry: workflows/*.yaml         │
+                                          └────────┬────────────────────────┬──────────────────┘
+                                                   │ HTTP (called as tools)  │ HTTP
+                                                   ▼                         ▼
+                                     Gemma · llama-server :8080     ComfyUI :8188
+                                     storyboard/prompts · vision    /prompt · /history · /free
+                                     eval → JSON verdict            = deterministic generator
 ```
 
 The pipeline is phased (all keyframes → `/free` → all videos → `/free` → all swaps) to fit a
@@ -55,10 +59,18 @@ identity each step. **State** is persisted: `state.py` stores each `Job`/`Scene`
 retried. And the **orchestrator** ties it together: from a one-line idea it generates a
 storyboard (Gemma), then drives storyboard → keyframes (+eval/retry) → videos as a phased,
 resumable state machine with **semi-autonomous approval gates** (`run` / `approve` / `jobs`).
-A **VRAM guard** (`vram.py`) reclaims GPU memory at the Wan boundary, and a **web dashboard**
-(NiceGUI + FastAPI/SSE) drives the whole pipeline from the browser with a live gallery and the
-approval gates. Phase 2 is feature-complete and has been validated end-to-end against live
-Gemma + ComfyUI.
+A **VRAM guard** (`vram.py`) reclaims GPU memory at the Wan boundary. Phase 2 was validated
+end-to-end against live Gemma + ComfyUI.
+
+**Phase 3 — multipurpose raw material + setup phase** ✅ (Sept 2026). The app now produces
+raw material for cinematic *and* marketing use: **output profiles** (16:9 / 9:16 / 1:1 video,
+stills-only jobs with N variants, longer clips, style vocabularies) drive every size, length and
+prompt; keyframes can be **reference-locked edits** (identity / KV edit); registered
+**post-process** workflows run after each clip. The **setup phase** adds a structured
+**environment check**, **projects** with shared assets (master face, references), and a
+per-job **handoff export folder** for Shotcut (`sNN_clip.mp4`, `sNN_keyframe.png`, manifest,
+README). State moved to **PostgreSQL**; the UI is a **Next.js** app on the FastAPI API. Any
+ComfyUI workflow can be plugged in through a YAML sidecar without touching Python.
 
 ### Pluggable workflows
 
@@ -85,7 +97,7 @@ python -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 ```
 
-Phase 1 needs only `requests`; the `[app]` extra (NiceGUI/FastAPI/Instructor) is for Phase 2.
+The core needs `requests`/`pydantic`/`psycopg`; the `[app]` extra adds the FastAPI server (`vorch serve`).
 
 ### Database (PostgreSQL)
 
@@ -199,17 +211,6 @@ cd frontend && npm run dev                      # http://localhost:3000
 change (a pytest snapshot test fails until you do). Frontend tests: `cd frontend && npm test`.
 If proxied SSE ever buffers, set `NEXT_PUBLIC_API_ORIGIN=http://127.0.0.1:8000` to have the
 browser talk to FastAPI directly (CORS is enabled for the Next origin).
-
-### Web dashboard
-
-A NiceGUI dashboard (job form, live keyframe/video gallery, approval-gate buttons, decision log +
-provenance) runs the whole pipeline from the browser — one local process, FastAPI `/api` + SSE
-mounted alongside the UI. Needs the `[app]` extra (`pip install -e ".[app]"`):
-
-```bash
-python -m vorch dashboard          # http://127.0.0.1:8090
-python -m vorch serve              # headless HTTP API + SSE only (no UI)
-```
 
 ### Reproducibility
 

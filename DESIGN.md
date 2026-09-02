@@ -192,7 +192,14 @@ Per `NOTES.md` §9 — narrow and end-to-end first:
 8. ✅ `state.py` — PostgreSQL-persisted `Job`/`Scene` (resumable; moved from SQLite 2026-09, see `db.py` + `migrations/`) + append-only decision log (`Store`, `Decision`, `record_verdict`). Structured logging still pending.
 9. ✅ Multi-scene phased orchestration + semi-auto gates — `storyboard.py` (Gemma narrative) + `orchestrator.py` (`Orchestrator`: storyboard ⏸ → keyframes+eval ⏸ → videos, persisted to `Store`); CLI `run`/`approve`/`jobs`/`job`. Resumable from reloaded state; gates cleared via logged approvals.
 10. ✅ `vram.py` — `gpu_free_mb`/`snapshot`/`log_state` (nvidia-smi, best-effort) + `reclaim()` guard at the Klein/ReActor→Wan boundary; `vram` CLI. Thin under Option B (Gemma on CPU).
-11. ✅ `queue.py` + `server.py` + `app/` — async `JobManager` (Orchestrator in a thread executor, one-GPU lock, event Broker) → FastAPI `/api` + SSE (`vorch serve`) → NiceGUI dashboard (`vorch dashboard`: job form, live keyframe/video gallery, approval-gate buttons, decision log + provenance). One process; media served from ComfyUI's output dir.
+11. ✅ `queue.py` + `api/` — async `JobManager` (Orchestrator in a thread executor, one-GPU lock, event Broker with ids + replay) → FastAPI `/api` + named SSE (`vorch serve`), `/media` from ComfyUI's output dir. *(The NiceGUI dashboard that first hosted this was replaced by the Next.js app in Sept 2026.)*
+
+**Phase 3 — multipurpose raw material + setup phase (Sept 2026):**
+12. ✅ `registry.py` + `workflows/*.yaml` — declarative workflow registry (kinds, params → node/field, contracts, `~/.vorch/workflows` overrides); `vorch registry inspect/add/validate` scaffolder. `docs/workflows.md`.
+13. ✅ `formats.py` + `genparams.py` — aspect presets → Klein/Wan sizes; `GenParams` threaded through steps/pipeline/orchestrator; `derive_seed`; `media.fit_image`; `steps/edit.py` (reference-locked keyframes); `steps/postprocess.py` (post-step chains); `storyboard.PromptContext`; `Verdict.framing_ok` + `evaluate_video`.
+14. ✅ `profiles.py` (+ `profiles_builtin/*.yaml`), `projects.py`, `envcheck.py`, `export.py`, `submission.py` — the setup phase; orchestrator plans by profile kind (video: 2 gates, stills: 1 gate + variants); PostgreSQL migrations 0001/0002.
+15. ✅ `api/` routers: jobs, events, media, setup, workflows, profiles, projects (+assets), export; CLI `setup check`, `profiles`, `project …`, `export`, `db …`.
+16. ✅ `frontend/` — Next.js control panel (jobs list, new-job wizard with env gate, job page with SSE timeline / variants / gate review / export, setup pages).
 
 ## 10. Open / deferred
 
@@ -229,29 +236,29 @@ decision and selected a Python-native stack. The whole app runs as **one local p
   PostgreSQL 16** already on the machine (psycopg 3 sync pool, JSONB job blobs, versioned SQL
   migrations, one throwaway schema per test). Same resumability, real concurrency, queryable blobs.
 
-- **Frontend — NiceGUI** (built on FastAPI → unifies backend+frontend in one process).
-  `run.io_bound` polls ComfyUI without blocking the UI; `run.cpu_bound` runs ffmpeg frame
-  extraction in a separate process; auto-synced UI state suits live galleries + HITL approval
-  gates run from a persistent background job — decoupled from any request. *(Medium confidence:
-  chosen on feature-fit, not a measured head-to-head. Gradio is faster for pure media widgets
-  (`gr.Gallery`/`gr.Video`) and its button + `.then()` + `gr.State` flow can do semi-auto gates,
-  but it ties work to the request/session and is a bolt-on to FastAPI — weaker for a persistent,
-  decoupled job queue and a custom dashboard.)*
+- **Frontend — Next.js** (`frontend/`; App Router, TypeScript, Tailwind, TanStack Query), the
+  same stack as Georgi's other projects. It runs as its own Node server and *rewrites* `/api`
+  and `/media` to FastAPI, so the browser stays same-origin and the API is a pure service with a
+  typed client generated from its OpenAPI. **Supersedes (Sept 2026)** the original NiceGUI
+  choice, which unified backend + frontend in one process; production is now two local
+  processes (`vorch serve` + `next start`) plus PostgreSQL.
 
 - **ComfyUI is itself a deterministic orchestrator.** `/prompt` (FIFO, returns uuid4 `prompt_id`),
   `/history` (poll), `/free` (reclaim VRAM), `/interrupt` (→ the cancel button), `--lowvram`
   (partial loading for 16GB). Accept/retry logic stays in Python, not LLM-planned.
 
-### Recommended architecture (one process, localhost)
+### Recommended architecture (localhost; Next.js UI + FastAPI service + PostgreSQL)
 
 ```
-┌─ NiceGUI app  (built on FastAPI) ── single local process ───────────────┐
-│  UI: job form · live progress (SSE) · keyframe gallery + APPROVAL GATE   │
-│      · retry controls · final clips                                       │
-│  Deterministic state machine (the orchestrator core):                     │
-│    STORYBOARD ─⏸gate─ KEYFRAMES ─/free─ VIDEOS ─/free─ SWAPS ─ FINAL      │
-│    job queue = asyncio + PostgreSQL (resumable state + decision log)      │
-│    run.io_bound → poll ComfyUI · run.cpu_bound → ffmpeg frame extract      │
+┌─ Next.js :3000 ─────────────────┐ rewrites /api,/media
+│ setup · wizard · job page (SSE) │ ──────────┐
+└─────────────────────────────────┘           ▼
+┌─ FastAPI :8000 (vorch serve) ────────────────────────────────────────────┐
+│  /api + named SSE (ids, replay) · /media · env check · export             │
+│  Deterministic state machine (the orchestrator core, profile-driven):     │
+│    STORYBOARD ─⏸gate─ KEYFRAMES(+variants) ─⏸gate─ VIDEOS ─ POST ─ EXPORT │
+│    JobManager: asyncio + one GPU lock; PostgreSQL (jobs JSONB, decisions, │
+│    profiles, projects); registry = workflows/*.yaml (+ user dir)          │
 └───────────────┬───────────────────────────────────┬──────────────────────┘
                 │ HTTP (called as TOOLS)             │ HTTP
                 ▼                                     ▼

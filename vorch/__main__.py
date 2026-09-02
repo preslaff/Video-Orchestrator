@@ -331,7 +331,7 @@ def _cmd_jobs(args) -> int:
 def _cmd_serve(args) -> int:
     import uvicorn
 
-    from .server import create_app
+    from .api import create_app
 
     app = create_app(_open_store())
     print(f"API on http://{args.host}:{args.port}/api  (docs: /docs)")
@@ -348,12 +348,6 @@ def _cmd_openapi(args) -> int:
     return 0
 
 
-def _cmd_dashboard(args) -> int:
-    from .app import run  # lazy: NiceGUI only needed for the dashboard
-
-    print(f"dashboard on http://{args.host}:{args.port}")
-    run(host=args.host, port=args.port)
-    return 0
 
 
 def _cmd_db(args) -> int:
@@ -764,11 +758,6 @@ def build_parser() -> argparse.ArgumentParser:
     imp = dbs.add_parser("import-sqlite", help="copy jobs + decisions from a legacy runs/*.db")
     imp.add_argument("path", help="path to the SQLite file (e.g. runs/vorch.db)")
     dbp.set_defaults(func=_cmd_db)
-
-    db = sub.add_parser("dashboard", help="run the NiceGUI web dashboard")
-    db.add_argument("--host", default="127.0.0.1")
-    db.add_argument("--port", type=int, default=8090)
-    db.set_defaults(func=_cmd_dashboard)
 
     return p
 

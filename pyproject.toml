@@ -13,14 +13,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Backend + NiceGUI dashboard (later Phase-2 increments). Not imported yet.
+# HTTP API + SSE server (`vorch serve`); the UI is the Next.js app in frontend/.
 app = [
     "instructor>=1.0",
     "fastapi>=0.110",
     "sse-starlette>=2.0",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",
-    "nicegui>=2.0",
 ]
 dev = [
     "pytest>=8.0",

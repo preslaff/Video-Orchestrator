@@ -15,22 +15,35 @@ Hardware target: **RTX 5070 Ti, 16GB VRAM**, 64GB RAM, Xubuntu. The 16GB ceiling
 
 The project documentation and the user's working language is **Bulgarian** (user: Георги / Georgi). Keep that in mind when reading/writing notes; code and identifiers are English.
 
-## Current status: specification phase — NO CODE YET
+## Current status: implemented (Phases 1–3), Python package `vorch/` + Next.js `frontend/`
 
-There is **no implementation** in this repo yet — only specs, ComfyUI workflow templates, reference images, and operational skill docs. The planned language is **Python**. Read `NOTES.md` first; it is the authoritative spec and design log.
+The orchestrator is built and validated live: `vorch/` (~9k LOC, `pytest -q` ≈ 260 GPU-free
+tests) and a Next.js control panel. Read `README.md` for how to run it and `DESIGN.md` §9 for
+the build order actually followed. Key facts a new session must not re-derive:
 
-When you start implementing, follow **`NOTES.md` §9 (development phasing)** — a walking skeleton before full architecture:
-1. ComfyUI API client (run one workflow, get the result)
-2. Gemma client (text + vision request)
-3. Simple single-scene pipeline, **no evaluation** yet → confirm it works end-to-end
-4. *Then* the evaluator (vision feedback loop + retry), VRAM manager, state/logging, multi-scene.
+- **Product scope (Sept 2026):** a multipurpose *raw-material* generator for cinematic and
+  marketing use — video 16:9 / 9:16 / 1:1, stills-only jobs with variants, longer clips,
+  reference-locked edits, post-process chains. Final editing happens in Shotcut, out of scope;
+  the app ends with a per-job **export folder** (`vorch/export.py`).
+- **Setup phase:** output **profiles** (`vorch/profiles.py`, built-ins in `profiles_builtin/`),
+  **projects** with assets (`projects.py`), **environment check** (`envcheck.py`, blocks submit on
+  fail), **submission** resolution (`submission.py`). Jobs snapshot their profile (`Job.profile`).
+- **Workflows are pluggable by YAML** (`vorch/registry.py`, `workflows/*.yaml`, user dir
+  `~/.vorch/workflows`; `vorch registry inspect|add|validate`). Node-id surgery lives only there.
+- **State is PostgreSQL** (`vorch/db.py`, `migrations/*.sql`, DSN `postgresql:///vorch`, tests
+  use one throwaway schema each). SQLite is gone.
+- **UI is Next.js** (`frontend/`, proxies `/api` + `/media` to `vorch serve`). NiceGUI is gone.
+- **Formats:** `formats.py` (aspect → sizes), `genparams.py` (flat params threaded through
+  steps/pipeline/orchestrator). Stills jobs have one gate; video jobs two.
 
-Do not build the evaluator or VRAM manager before the base chain runs end-to-end.
+Working rules: keep changes surgical, keep `pytest -q` green, regenerate `frontend/openapi.json`
+(`make api-types`) whenever routes change (a test enforces it), and record decisions in the docs.
 
 ## Documentation map (read these, don't duplicate them)
 
 - **`NOTES.md`** — the spec. Endpoints, start commands, exact node-IDs to replace per workflow (§3), VRAM strategy (§4), pipeline phasing (§5), evaluation criteria (§6), finalized decisions (§7), dev phasing (§9). **Read first; everything assumes it as context.**
-- **`DESIGN.md`** — the orchestrator architecture: module layout, the workflow registry, data model, YAML job spec, control flow with semi-auto gates, and build order. Also §11–12: the research-validated stack — **deterministic Python core (no agent framework); Gemma via llama.cpp grammar + Instructor/Pydantic; FastAPI + SSE + asyncio backend on PostgreSQL (SQLite superseded Sept 2026); NiceGUI frontend; one local process.** Read before implementing; don't re-litigate these.
+- **`DESIGN.md`** — the orchestrator architecture: module layout, the workflow registry, data model, YAML job spec, control flow with semi-auto gates, and build order (§9, incl. Phase 3). Also §11–12: the stack — **deterministic Python core (no agent framework); Gemma via llama.cpp json_schema + Pydantic; FastAPI + SSE + asyncio on PostgreSQL; Next.js frontend (proxying /api); two local processes.** Don't re-litigate these.
+- **`docs/workflows.md`** — how to register a newly installed ComfyUI workflow (YAML sidecar, kinds, contracts, post-process chains).
 - **`SKILL.md`** — router skill + architectural invariants. Points to:
   - `skills/comfyui-api.md` — load template, replace params, POST `/prompt`, poll `/history`, extract outputs
   - `skills/gemma-evaluate.md` — vision evaluation, image + video (frame extraction), JSON verdict parsing
@@ -68,7 +81,7 @@ The five ComfyUI workflow templates in `workflows/` (names in `NOTES.md` §3 and
 
 **Asset/reference filenames are runtime inputs, never hardcoded.** The `.inputs.image` values currently in the workflow JSONs (`Joro.jpg`, `maj.jpeg`, `FaceSwap_*.png`, etc.) and the names in `NOTES.md` are inert leftover defaults — at runtime the orchestrator overwrites them by node ID, exactly like prompts and seeds (invariant #2). The user (or the pipeline) supplies the master face, identity references, and chained intermediate files dynamically; treat `assets/jena-cropped.jpeg` as the current sample master, not fixed config.
 
-All workflow JSONs are **ComfyUI API format** (flat dict keyed by node ID), not UI export (which has a `nodes` array and won't work with `/prompt`). Node IDs in the templates can be compound (e.g. `75:73`, `75:68`) — the node-ID references in `NOTES.md` §3 are the source of truth for what to replace.
+All workflow JSONs are **ComfyUI API format** (flat dict keyed by node ID), not UI export (which has a `nodes` array and won't work with `/prompt`). Node IDs in the templates can be compound (e.g. `75:73`, `75:68`). Each template has a **sidecar YAML** (`workflows/<name>.yaml`) that is the executable source of truth for which `(node, field)` pairs are replaced — `NOTES.md` §3 is the original prose version. Five entries ship: `keyframe`, `animate`, `faceswap`, `identity_edit`, `kv_edit`.
 
 ## Working style (Georgi's preference)
 
