@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from ..queue import JobManager
 from ..state import JobStatus, Store
 from .deps import get_manager, get_store
 from .errors import ApiError
 from .public import job_to_public, provenance_rows
-from .schemas import DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, ProvenanceOut, SceneEdits
+from .schemas import (
+    DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SceneEdits,
+)
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -44,12 +46,18 @@ async def create_job(
     return job_to_public(job, store)
 
 
-@router.get("", response_model=list[JobSummaryOut])
-async def list_jobs(store: Store = Depends(get_store)) -> list[JobSummaryOut]:
-    return [
+@router.get("", response_model=Page[JobSummaryOut])
+async def list_jobs(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status: JobStatus | None = None,
+    store: Store = Depends(get_store),
+) -> Page[JobSummaryOut]:
+    items = [
         JobSummaryOut(id=s.id, status=s.status.value, idea=s.idea, updated_at=s.updated_at)
-        for s in store.list_jobs()
+        for s in store.list_jobs(limit=limit, offset=offset, status=status)
     ]
+    return Page(items=items, total=store.count_jobs(status=status), limit=limit, offset=offset)
 
 
 @router.get("/{job_id}", response_model=JobPublic)

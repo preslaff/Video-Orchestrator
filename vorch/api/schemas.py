@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel
+
+T = TypeVar("T")
 
 
 class JobSpec(BaseModel):
@@ -96,6 +98,13 @@ class JobSummaryOut(BaseModel):
     status: str
     idea: str
     updated_at: str
+
+
+class Page(BaseModel, Generic[T]):
+    items: list[T]
+    total: int
+    limit: int
+    offset: int
 
 
 class DecisionOut(BaseModel):

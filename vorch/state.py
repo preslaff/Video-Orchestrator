@@ -351,11 +351,21 @@ class Store:
             row = conn.execute("SELECT data FROM jobs WHERE id = %s", (job_id,)).fetchone()
         return job_from_dict(row["data"]) if row else None
 
-    def list_jobs(self) -> list[JobSummary]:
+    def list_jobs(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        status: JobStatus | str | None = None,
+    ) -> list[JobSummary]:
+        """Newest first; optional status filter and limit/offset paging."""
+        where, params = self._job_filter(status)
+        q = f"SELECT id, status, idea, updated_at FROM jobs{where} ORDER BY updated_at DESC"
+        if limit is not None:
+            q += " LIMIT %s OFFSET %s"
+            params += [limit, offset]
         with self._pool.connection() as conn:
-            rows = conn.execute(
-                "SELECT id, status, idea, updated_at FROM jobs ORDER BY updated_at DESC"
-            ).fetchall()
+            rows = conn.execute(q, params).fetchall()
         return [
             JobSummary(
                 id=r["id"],
@@ -365,6 +375,18 @@ class Store:
             )
             for r in rows
         ]
+
+    def count_jobs(self, *, status: JobStatus | str | None = None) -> int:
+        where, params = self._job_filter(status)
+        with self._pool.connection() as conn:
+            return conn.execute(f"SELECT count(*) AS n FROM jobs{where}", params).fetchone()["n"]
+
+    @staticmethod
+    def _job_filter(status: JobStatus | str | None) -> tuple[str, list]:
+        if status is None:
+            return "", []
+        value = status.value if isinstance(status, JobStatus) else str(status)
+        return " WHERE status = %s", [value]
 
     def delete_job(self, job_id: str) -> None:
         """Delete a job and (via ON DELETE CASCADE) its decision log."""

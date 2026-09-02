@@ -74,7 +74,7 @@ def test_create_then_list_and_get(client):
     ).json()["id"]
 
     listed = client.get("/api/jobs").json()
-    assert any(j["id"] == jid for j in listed)
+    assert any(j["id"] == jid for j in listed["items"]) and listed["total"] >= 1
 
     got = client.get(f"/api/jobs/{jid}").json()
     assert got["id"] == jid and "scenes" in got
@@ -355,3 +355,32 @@ def test_global_events_stream_carries_job_id(store):
     ev, subs_left = asyncio.run(go())
     assert ev.event == "status" and _json.loads(ev.data)["job_id"] == "job-1"
     assert subs_left == 0  # unsubscribed on close
+
+
+# --- commit 5: pagination + filters -------------------------------------------
+
+
+def test_list_jobs_pagination_and_total(client):
+    from vorch.state import new_job
+
+    for i in range(5):
+        client.store.save_job(new_job(idea=f"j{i}"))
+    page = client.get("/api/jobs?limit=2&offset=0").json()
+    assert page["total"] == 5 and page["limit"] == 2 and page["offset"] == 0
+    assert len(page["items"]) == 2 and page["items"][0]["idea"] == "j4"  # newest first
+    page2 = client.get("/api/jobs?limit=2&offset=4").json()
+    assert [j["idea"] for j in page2["items"]] == ["j0"]
+    assert client.get("/api/jobs?limit=0").status_code == 422
+    assert client.get("/api/jobs?limit=500").status_code == 422
+
+
+def test_list_jobs_status_filter(client):
+    from vorch.state import new_job
+
+    a = new_job(idea="paused")
+    a.status = JobStatus.NEEDS_APPROVAL
+    client.store.save_job(a)
+    client.store.save_job(new_job(idea="fresh"))
+    page = client.get("/api/jobs?status=needs_approval").json()
+    assert page["total"] == 1 and page["items"][0]["idea"] == "paused"
+    assert client.get("/api/jobs?status=bogus").status_code == 422

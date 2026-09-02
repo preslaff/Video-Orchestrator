@@ -233,3 +233,15 @@ def test_timestamps_roundtrip_iso(store):
     assert datetime.fromisoformat(summary.updated_at).utcoffset().total_seconds() == 0
     d = store.log_decision(Decision(job_id=job.id, scene_index=None, phase="p", attempt=1, action="a"))
     assert store.decisions(job.id)[0].created_at == d.created_at
+
+
+def test_list_jobs_paging_and_status_filter(store):
+    for i in range(4):
+        j = new_job(idea=f"n{i}")
+        if i % 2:
+            j.status = JobStatus.DONE
+        store.save_job(j)
+    assert [s.idea for s in store.list_jobs()] == ["n3", "n2", "n1", "n0"]
+    assert [s.idea for s in store.list_jobs(limit=2, offset=1)] == ["n2", "n1"]
+    assert [s.idea for s in store.list_jobs(status=JobStatus.DONE)] == ["n3", "n1"]
+    assert store.count_jobs() == 4 and store.count_jobs(status="done") == 2
