@@ -60,6 +60,13 @@ A **VRAM guard** (`vram.py`) reclaims GPU memory at the Wan boundary, and a **we
 approval gates. Phase 2 is feature-complete and has been validated end-to-end against live
 Gemma + ComfyUI.
 
+### Pluggable workflows
+
+Each ComfyUI template is paired with a registry YAML (`workflows/*.yaml`) that names the
+node fields the orchestrator may replace. New workflows drop into `~/.vorch/workflows/`
+without Python changes: `python -m vorch registry inspect <api.json>` → `registry add` →
+`registry validate --online`. See [`docs/workflows.md`](docs/workflows.md).
+
 ## Repository layout
 
 | Path | What |

@@ -321,6 +321,68 @@ def _cmd_db(args) -> int:
     return 2
 
 
+def _cmd_registry(args) -> int:
+    import yaml
+
+    from . import registry, registry_tools
+
+    reg = registry.load_registry(force=True)
+    if args.registry_command == "list":
+        for spec in reg.list(args.kind):
+            where = "builtin" if spec.builtin else f"user ({spec.source})"
+            print(f"{spec.name:<16} {spec.kind:<12} {spec.template.name:<44} "
+                  f"in={','.join(spec.inputs) or '-':<28} out={spec.output_type or '?'}  [{where}]")
+        for name, err in reg.errors.items():
+            print(f"{name:<16} INVALID      {err.splitlines()[0]}")
+        return 0
+    if args.registry_command == "validate":
+        info = comfy.object_info() if args.online else None
+        specs = [reg.get(args.name)] if args.name else reg.list()
+        bad = 0
+        for spec in specs:
+            problems = reg.validate(spec, object_info=info)
+            status = "ok" if not problems else "PROBLEMS"
+            print(f"{spec.name:<16} {status}")
+            for pr in problems:
+                print(f"    - {pr}")
+            bad += bool(problems)
+        for name, err in reg.errors.items():
+            print(f"{name:<16} INVALID\n    - {err}")
+            bad += 1
+        return 1 if bad else 0
+    wf = registry.load_template_file(Path(args.file))
+    if "nodes" in wf:
+        print("error: this is a UI export; use 'Export (API)' in ComfyUI", file=sys.stderr)
+        return 1
+    if args.registry_command == "inspect":
+        info = comfy.object_info() if args.online else None
+        print(f"guessed kind: {registry_tools.guess_kind(wf)}")
+        print(registry_tools.format_inspect(registry_tools.inspect_template(wf, info)))
+        return 0
+    if args.registry_command == "add":
+        src = Path(args.file)
+        out_dir = Path(args.out) if args.out else config.USER_WORKFLOW_DIR
+        name = args.name or src.stem
+        out_dir.mkdir(parents=True, exist_ok=True)
+        yaml_path = out_dir / f"{name}.yaml"
+        tpl_path = out_dir / src.name
+        if (yaml_path.exists() or (tpl_path.exists() and tpl_path.resolve() != src.resolve())) and not args.force:
+            print(f"error: {yaml_path} or {tpl_path} exists (use --force)", file=sys.stderr)
+            return 1
+        if tpl_path.resolve() != src.resolve():
+            tpl_path.write_bytes(src.read_bytes())
+        doc, notes = registry_tools.guess_spec(wf, name=name, kind=args.kind, template=src.name)
+        text = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+        if notes:
+            text += "\n# Unmapped numeric literals (promote to params if you want to control them):\n"
+            text += "".join(f"#   {n}\n" for n in notes)
+        yaml_path.write_text(text, encoding="utf-8")
+        print(text)
+        print(f"wrote {yaml_path}\nnext: edit the names/description, then `vorch registry validate {name} --online`")
+        return 0
+    return 2
+
+
 def _cmd_vram(args) -> int:
     from . import vram
 
@@ -353,6 +415,12 @@ def _cmd_job(args) -> int:
     finally:
         store.close()
     return 0
+
+
+def registry_kinds() -> tuple[str, ...]:
+    from .registry import KINDS
+
+    return KINDS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -436,6 +504,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     oa = sub.add_parser("openapi", help="print the API's OpenAPI schema (JSON) for the typed client")
     oa.set_defaults(func=_cmd_openapi)
+
+    rg = sub.add_parser("registry", help="workflow registry: list | validate | inspect | add")
+    rgs = rg.add_subparsers(dest="registry_command", required=True)
+    rl = rgs.add_parser("list", help="registered workflows (built-in + user)")
+    rl.add_argument("--kind", default=None)
+    rv = rgs.add_parser("validate", help="check YAML vs template; --online also checks ComfyUI")
+    rv.add_argument("name", nargs="?", default=None)
+    rv.add_argument("--online", action="store_true")
+    ri = rgs.add_parser("inspect", help="list a template's nodes + literal inputs with role guesses")
+    ri.add_argument("file")
+    ri.add_argument("--online", action="store_true", help="show installed options per loader")
+    ra = rgs.add_parser("add", help="scaffold a registry YAML for a new template into the user dir")
+    ra.add_argument("file")
+    ra.add_argument("--name", default=None)
+    ra.add_argument("--kind", default=None, choices=list(registry_kinds()))
+    ra.add_argument("--out", default=None, help="directory (default: VORCH_USER_WORKFLOW_DIR)")
+    ra.add_argument("--force", action="store_true")
+    rg.set_defaults(func=_cmd_registry)
 
     dbp = sub.add_parser("db", help="database: init | status | import-sqlite <file>")
     dbs = dbp.add_subparsers(dest="db_command", required=True)

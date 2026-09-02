@@ -80,6 +80,20 @@ def upload_image(filepath: str | Path) -> str:
     return resp.json()["name"]
 
 
+_object_info_cache: dict | None = None
+
+
+def object_info(*, refresh: bool = False, timeout: int = 30) -> dict:
+    """``GET /object_info``: every node class with its input specs (combo options =
+    installed model files). Cached per process; it is a multi-MB document."""
+    global _object_info_cache
+    if _object_info_cache is None or refresh:
+        resp = requests.get(f"{config.COMFY_URL}/object_info", timeout=timeout)
+        resp.raise_for_status()
+        _object_info_cache = resp.json()
+    return _object_info_cache
+
+
 def free(unload_models: bool = True, free_memory: bool = True) -> None:
     """Reclaim VRAM between heavy workflows (e.g. Klein -> Wan). Best effort."""
     try:
