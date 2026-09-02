@@ -74,6 +74,39 @@ describe('useJobEvents', () => {
     expect(FakeEventSource.instances[1].url).toBe('/api/jobs/j2/events?after=7')
   })
 
+  it('resumes across run segments while active, stays closed while paused at a gate', () => {
+    const { result, rerender } = renderHook(({ active }: { active: boolean }) => useJobEvents('j4', { active }), {
+      wrapper,
+      initialProps: { active: true },
+    })
+    const first = FakeEventSource.instances[0]
+    act(() => first.onopen?.())
+    act(() => first.emit('status', { id: 1, job_id: 'j4', status: 'running' }))
+    act(() => first.emit('gate', { id: 2, job_id: 'j4', gate: 'storyboard', status: 'needs_approval' }))
+    act(() => first.emit('end', { id: 3, job_id: 'j4' }))
+    expect(first.closed).toBe(true)
+    expect(result.current.ended).toBe(true)
+
+    // The job is paused at the gate: no stream while it is not active.
+    rerender({ active: false })
+    expect(FakeEventSource.instances).toHaveLength(1)
+
+    // Approved -> running again: reopen from the last seen id and keep receiving.
+    rerender({ active: true })
+    expect(FakeEventSource.instances).toHaveLength(2)
+    const second = FakeEventSource.instances[1]
+    expect(second.url).toBe('/api/jobs/j4/events?after=3')
+    act(() => second.onopen?.())
+    expect(result.current.ended).toBe(false)
+    act(() => second.emit('keyframe', { id: 4, job_id: 'j4', index: 0, path: '/k.png' }))
+    expect(result.current.events.map((e) => e.type)).toEqual(['status', 'gate', 'end', 'keyframe'])
+
+    // DONE: end again, job no longer active -> stays closed.
+    act(() => second.emit('end', { id: 5, job_id: 'j4' }))
+    rerender({ active: false })
+    expect(FakeEventSource.instances).toHaveLength(2)
+  })
+
   it('does nothing when disabled or without a job id', () => {
     renderHook(() => useJobEvents(undefined), { wrapper })
     renderHook(() => useJobEvents('j3', { enabled: false }), { wrapper })

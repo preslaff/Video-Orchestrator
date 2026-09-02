@@ -19,7 +19,10 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   const exp = useExportStatus(id)
   const runExport = useRunExport(id)
   const terminal = job.data ? ['done', 'failed', 'cancelled'].includes(job.data.status) : false
-  const live = useJobEvents(id, { enabled: !!job.data && !(terminal && !!job.data.export) })
+  const live = useJobEvents(id, {
+    enabled: !!job.data && !(terminal && !!job.data.export),
+    active: job.data?.status === 'running' || job.data?.status === 'pending',
+  })
 
   if (job.isLoading) return <Empty>Loading…</Empty>
   if (job.error || !job.data) return <ErrorBox message={errorMessage(job.error, 'Job not found')} />
