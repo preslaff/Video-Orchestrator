@@ -51,7 +51,7 @@ def test_run_step_writes_sidecar(monkeypatch, tmp_path):
     out = tmp_path / "Wan22_00010_.mp4"
     out.write_bytes(b"vid")
 
-    monkeypatch.setattr(steps.workflows, "apply_params", lambda step, **p: {"wf": True})
+    monkeypatch.setattr(steps.registry.Registry, "apply", lambda self, step, wf=None, **p: {"wf": True})
     monkeypatch.setattr(comfy, "run", lambda wf, timeout=None: [{"filename": out.name}])
     monkeypatch.setattr(comfy, "output_path", lambda d: out)
 
@@ -60,3 +60,21 @@ def test_run_step_writes_sidecar(monkeypatch, tmp_path):
     manifest = json.loads(provenance.manifest_path(out).read_text(encoding="utf-8"))
     assert manifest["params"]["seed"] == 99 and manifest["params"]["positive"] == "slow pan"
     assert manifest["step"] == "animate"
+    assert manifest["workflow"] == "animate" and manifest["kind"] == "animate"
+    assert manifest["template"] == "wan22_i2v_gguf.json"
+
+
+def test_manifest_records_provenance_context(tmp_path):
+    from vorch import provenance as prov
+
+    media = tmp_path / "k.png"
+    media.write_bytes(b"i")
+    tok = prov.set_context(job_id="j1", profile="social_9x16", scene=2)
+    try:
+        prov.write_manifest(media, "keyframe", {"seed": 1})
+    finally:
+        prov.reset_context(tok)
+    data = json.loads(prov.manifest_path(media).read_text())
+    assert data["context"] == {"job_id": "j1", "profile": "social_9x16", "scene": 2}
+    prov.write_manifest(media, "keyframe", {"seed": 1})
+    assert "context" not in json.loads(prov.manifest_path(media).read_text())

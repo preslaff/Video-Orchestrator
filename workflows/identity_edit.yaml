@@ -1,0 +1,24 @@
+# Built-in: Klein reference-locked edit (2 references). Locks composition —
+# use for "same composition, light edit" variants, not for new scenes
+# (SKILL.md invariant 6). Template defaults are distilled (4 steps, cfg 1).
+name: identity_edit
+kind: edit
+template: klein_identity_edit.json
+description: Klein identity edit with two reference images (composition-locked)
+tags: [klein, edit, identity, image]
+inputs: {reference: image, reference_2: image}
+outputs: {type: image, nodes: ["22"]}
+params:
+  reference:       {node: "4",  field: image,        type: str, required: true}
+  reference_2:     {node: "5",  field: image,        type: str, required: true}
+  positive:        {node: "10", field: text,         type: str, required: true}
+  negative:        {node: "13", field: text,         type: str}
+  seed:            {node: "18", field: noise_seed,   type: int, required: true}
+  width:           {targets: [{node: "17", field: width},  {node: "19", field: width}],  type: int, constraint: multiple_of_16, min: 256, max: 2048}
+  height:          {targets: [{node: "17", field: height}, {node: "19", field: height}], type: int, constraint: multiple_of_16, min: 256, max: 2048}
+  steps:           {node: "17", field: steps,        type: int, min: 1}
+  cfg:             {node: "15", field: cfg,          type: float}
+  unet:            {node: "1",  field: unet_name,    type: enum, enum_from: {class_type: UNETLoader, input: unet_name}}
+  sampler:         {node: "16", field: sampler_name, type: enum, enum_from: {class_type: KSamplerSelect, input: sampler_name}}
+  batch_size:      {node: "19", field: batch_size,   type: int, min: 1, max: 4}
+  filename_prefix: {node: "22", field: filename_prefix, type: str}

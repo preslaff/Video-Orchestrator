@@ -25,6 +25,10 @@ COMFY_OUTPUT = COMFY_ROOT / "output"
 WORKFLOW_DIR = Path(
     os.environ.get("VORCH_WORKFLOW_DIR", Path(__file__).resolve().parent.parent / "workflows")
 )
+# User-installed workflows (JSON + YAML pairs) override built-ins by name.
+USER_WORKFLOW_DIR = Path(
+    os.environ.get("VORCH_USER_WORKFLOW_DIR", "~/.vorch/workflows")
+).expanduser()
 
 # --- Generation defaults -----------------------------------------------------
 # Keyframe (FLUX.2 Klein). Base model + 24 steps + CFG 5 for oil texture (NOTES §3).

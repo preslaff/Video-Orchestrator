@@ -9,14 +9,32 @@ regenerated later. Best-effort: a failed write logs a warning, never breaks a ru
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import workflows
+from . import registry
 
 log = logging.getLogger("vorch.provenance")
+
+# Run-level context (job id, profile, scene, variant...) stamped into every
+# manifest written while it is set — so steps don't need it threaded through.
+_ctx: contextvars.ContextVar[dict] = contextvars.ContextVar("vorch_provenance_ctx", default={})
+
+
+def set_context(**kv) -> contextvars.Token:
+    """Merge ``kv`` into the provenance context; returns a token for ``reset_context``."""
+    return _ctx.set({**_ctx.get(), **{k: v for k, v in kv.items() if v is not None}})
+
+
+def reset_context(token: contextvars.Token) -> None:
+    _ctx.reset(token)
+
+
+def context() -> dict:
+    return dict(_ctx.get())
 
 
 def manifest_path(media_path: str | Path) -> Path:
@@ -33,17 +51,29 @@ def read_manifest(media_path: str | Path) -> dict | None:
         return None
 
 
-def write_manifest(media_path: str | Path, step: str, params: dict) -> Path | None:
+def write_manifest(
+    media_path: str | Path, step: str, params: dict, extra: dict | None = None
+) -> Path | None:
     """Write the generation manifest beside ``media_path``; return its path or None."""
     media_path = Path(media_path)
-    template = workflows.REGISTRY.get(step, {}).get("template")
+    try:
+        spec = registry.load_registry().get(step)
+        template, kind = spec.template.name, spec.kind
+    except (KeyError, registry.RegistryError):
+        template, kind = None, None
     data = {
         "step": step,
+        "workflow": step,
+        "kind": kind,
         "template": template,
         "output": media_path.name,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "params": params,  # prompts, seed, width/height/steps/cfg/length/fps, …
+        **(extra or {}),
     }
+    ctx = context()
+    if ctx:
+        data["context"] = ctx
     dest = manifest_path(media_path)
     try:
         dest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

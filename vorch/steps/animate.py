@@ -39,6 +39,5 @@ def animate(
         height=height,
         length=length,
         fps=fps,
-        seed_high=seed,
-        seed_low=seed,
+        seed=seed,  # fans out to both cascade samplers (registry targets)
     )[0]

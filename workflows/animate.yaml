@@ -1,0 +1,29 @@
+# Built-in: Wan 2.2 image-to-video, GGUF dual-model cascade
+# (node 9 HighNoise steps 0..split, node 10 LowNoise split..end).
+# `steps` without `split_step` silently keeps the split at 10 — set both.
+name: animate
+kind: animate
+template: wan22_i2v_gguf.json
+description: Wan 2.2 i2v GGUF (HighNoise + LowNoise cascade), 480p class, length must be 4n+1
+tags: [wan, i2v, video]
+timeout: 1800
+inputs: {start_image: image}
+outputs: {type: video, nodes: ["13"]}
+params:
+  start_image:     {node: "5",  field: image,      type: str, required: true}
+  positive:        {node: "6",  field: text,       type: str, required: true}
+  negative:        {node: "7",  field: text,       type: str}
+  width:           {node: "8",  field: width,      type: int, constraint: multiple_of_16, min: 256, max: 1280}
+  height:          {node: "8",  field: height,     type: int, constraint: multiple_of_16, min: 256, max: 1280}
+  length:          {node: "8",  field: length,     type: int, constraint: 4n+1, required: true}
+  batch_size:      {node: "8",  field: batch_size, type: int, min: 1, max: 1}
+  seed:            {targets: [{node: "9", field: noise_seed}, {node: "10", field: noise_seed}], type: int}
+  seed_high:       {node: "9",  field: noise_seed, type: int}   # legacy names (CLI / old manifests)
+  seed_low:        {node: "10", field: noise_seed, type: int}
+  steps:           {targets: [{node: "9", field: steps}, {node: "10", field: steps}], type: int, min: 2}
+  split_step:      {targets: [{node: "9", field: end_at_step}, {node: "10", field: start_at_step}], type: int, min: 1}
+  cfg:             {targets: [{node: "9", field: cfg}, {node: "10", field: cfg}], type: float}
+  fps:             {node: "12", field: fps,        type: int, min: 1, max: 60}
+  unet_high:       {node: "1",  field: unet_name,  type: enum, enum_from: {class_type: UnetLoaderGGUF, input: unet_name}}
+  unet_low:        {node: "2",  field: unet_name,  type: enum, enum_from: {class_type: UnetLoaderGGUF, input: unet_name}}
+  filename_prefix: {node: "13", field: filename_prefix, type: str}

@@ -52,9 +52,10 @@ def _extract_outputs(history_entry: dict) -> list[dict]:
     auto-increment, so always read the real name rather than assuming one.
     """
     files: list[dict] = []
-    for out in history_entry.get("outputs", {}).values():
+    for node_id, out in history_entry.get("outputs", {}).items():
         for key in ("images", "gifs", "videos"):
-            files.extend(out.get(key, []))
+            for d in out.get(key, []):
+                files.append({**d, "node_id": str(node_id)})
     return files
 
 

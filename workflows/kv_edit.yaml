@@ -1,0 +1,22 @@
+# Built-in: Klein KV-cache edit (2 references). OUTPUT SIZE FOLLOWS THE FIRST
+# REFERENCE (GetImageSize after the 1 MP rescale) — there are no width/height
+# params; pre-fit references to the wanted size (media.fit_image) instead.
+name: kv_edit
+kind: edit
+template: image_flux2_klein_9b_kv_image_edit.json
+description: Klein KV-cache edit with two references; output size = first reference's
+tags: [klein, edit, kvcache, image]
+inputs: {reference: image, reference_2: image}
+outputs: {type: image, nodes: ["94"]}
+params:
+  reference:            {node: "76",  field: image,        type: str, required: true}
+  reference_2:          {node: "81",  field: image,        type: str, required: true}
+  positive:             {node: "135", field: text,         type: str, required: true}
+  seed:                 {node: "125", field: noise_seed,   type: int, required: true}
+  steps:                {node: "137", field: steps,        type: int, min: 1}
+  cfg:                  {node: "138", field: cfg,          type: float}
+  unet:                 {node: "126", field: unet_name,    type: enum, enum_from: {class_type: UNETLoader, input: unet_name}}
+  sampler:              {node: "122", field: sampler_name, type: enum, enum_from: {class_type: KSamplerSelect, input: sampler_name}}
+  batch_size:           {node: "129", field: batch_size,   type: int, min: 1, max: 4}
+  reference_megapixels: {targets: [{node: "130", field: megapixels}, {node: "131", field: megapixels}], type: float, min: 0.1, max: 4}
+  filename_prefix:      {node: "94",  field: filename_prefix, type: str}

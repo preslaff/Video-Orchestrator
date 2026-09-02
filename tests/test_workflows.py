@@ -8,19 +8,15 @@ import json
 
 import pytest
 
-from vorch import config, workflows
+from vorch import registry, workflows
 
 
 def test_registry_node_ids_exist_in_templates():
-    """Every (node_id, field) in the registry must exist in its template."""
-    for step, spec in workflows.REGISTRY.items():
-        wf = workflows.load_template(step)
-        assert spec["output_node"] in wf, f"{step}: missing output node"
-        for name, (node_id, field) in spec["params"].items():
-            assert node_id in wf, f"{step}.{name}: node {node_id} absent"
-            assert field in wf[node_id]["inputs"], (
-                f"{step}.{name}: field {field!r} absent on node {node_id}"
-            )
+    """Every (node_id, field) target in every built-in YAML must be a literal in its template."""
+    reg = registry.load_registry()
+    assert {"keyframe", "animate", "faceswap", "identity_edit", "kv_edit"} <= set(reg.names())
+    for spec in reg.list():
+        assert reg.validate(spec) == [], spec.name
 
 
 def test_apply_params_sets_fields_without_mutating_template():
@@ -58,8 +54,16 @@ def test_wan_length_rejects_non_4n_plus_1(length):
 
 def test_templates_are_api_format():
     """API-format templates are flat node dicts, not UI exports (no 'nodes' key)."""
-    for step in workflows.REGISTRY:
-        path = config.WORKFLOW_DIR / workflows.REGISTRY[step]["template"]
-        data = json.load(open(path))
-        assert "nodes" not in data, f"{step}: looks like a UI export, not API format"
+    for spec in registry.load_registry().list():
+        data = json.load(open(spec.template))
+        assert "nodes" not in data, f"{spec.name}: looks like a UI export, not API format"
         assert all("class_type" in node for node in data.values())
+
+
+def test_legacy_workflows_shim():
+    """Old callers (and manifests) keep working through the REGISTRY view."""
+    legacy = workflows.REGISTRY
+    assert legacy["keyframe"]["template"] == "image_flux2_klein_text_to_image.json"
+    assert legacy["keyframe"]["params"]["seed"] == ("75:73", "noise_seed")
+    assert legacy["animate"]["output_node"] == "13"
+    assert workflows.output_node("faceswap") == "4"

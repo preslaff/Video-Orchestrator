@@ -1,0 +1,19 @@
+# Built-in: ReActor face swap (image-based; both images staged in ComfyUI input/).
+name: faceswap
+kind: faceswap
+template: ReActor_Face_Swap.json
+description: ReActor inswapper_128 face swap with optional face restore
+tags: [reactor, identity, image]
+inputs: {input_image: image, source_image: image}
+outputs: {type: image, nodes: ["4"]}
+params:
+  input_image:        {node: "1", field: image, type: str, required: true}
+  source_image:       {node: "2", field: image, type: str, required: true}
+  restore_model:      {node: "3", field: face_restore_model, type: enum, enum_from: {class_type: ReActorFaceSwap, input: face_restore_model}}
+  swap_model:         {node: "3", field: swap_model, type: enum, enum_from: {class_type: ReActorFaceSwap, input: swap_model}}
+  restore_visibility: {node: "3", field: face_restore_visibility, type: float, min: 0, max: 1}
+  codeformer_weight:  {node: "3", field: codeformer_weight, type: float, min: 0, max: 1}
+  input_faces_index:  {node: "3", field: input_faces_index, type: str}
+  source_faces_index: {node: "3", field: source_faces_index, type: str}
+  filename_prefix:    {node: "4", field: filename_prefix, type: str}
+requires: {nodes: [ReActorFaceSwap]}
