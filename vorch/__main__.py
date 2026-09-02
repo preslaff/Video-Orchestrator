@@ -391,6 +391,112 @@ def _cmd_db(args) -> int:
     return 2
 
 
+def _cmd_setup(args) -> int:
+    from . import envcheck, profiles
+
+    store = _open_store()
+    try:
+        profile = profiles.resolve(store, args.profile) if args.profile else None
+        report = envcheck.run_checks(store=store, profile=profile, deep=args.deep, force=True)
+    finally:
+        store.close()
+    marks = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL"}
+    for c in report.checks:
+        print(f"[{marks[c.status]}] {c.name:<24} {c.detail}")
+    print(f"-> {report.status} ({report.duration_ms} ms)" + ("" if report.ok else "  — fix the FAIL rows or submit with force"))
+    return 0 if report.ok else 1
+
+
+def _cmd_profiles(args) -> int:
+    from . import profiles
+
+    store = _open_store()
+    try:
+        for p in profiles.list_all(store):
+            size = f"{p.keyframe.width}x{p.keyframe.height}"
+            if p.video:
+                size += f" / {p.video.width}x{p.video.height}@{p.video.length}f {p.video.fps}fps"
+            else:
+                size += f" / stills x{p.stills.variants}"
+            print(f"{p.id:<20} {p.kind:<7} {p.aspect:<5} {size:<40} {p.name}" + ("" if p.builtin else "  [user]"))
+    finally:
+        store.close()
+    return 0
+
+
+def _cmd_projects(args) -> int:
+    from . import projects
+
+    store = _open_store()
+    try:
+        rows = projects.list_all(store)
+        if not rows:
+            print("no projects (create one: vorch project add <name>)")
+        for p in rows:
+            print(f"{p.slug:<24} {p.name:<30} profile={p.default_profile_id:<16} "
+                  f"assets={len(p.assets):<3} jobs={store.count_jobs(project_id=p.id)}")
+    finally:
+        store.close()
+    return 0
+
+
+def _cmd_project(args) -> int:
+    from . import profiles, projects
+
+    store = _open_store()
+    try:
+        if args.project_command == "add":
+            profiles.resolve(store, args.profile)  # KeyError -> ValueError below
+            p = projects.new_project(args.name, default_profile_id=args.profile, export_root=args.export_root or "")
+            projects.save(store, p)
+            print(f"created project {p.slug} ({p.id})")
+            return 0
+        p = projects.load_by_slug(store, args.slug) or projects.load(store, args.slug)
+        if p is None:
+            raise ValueError(f"unknown project {args.slug!r}")
+        if args.project_command == "add-asset":
+            a = projects.add_asset(p, args.path, kind=args.kind, name=Path(args.path).name, label=args.label or "")
+            projects.save(store, p)
+            print(f"added {a.kind} asset {a.id}: {a.path}")
+            return 0
+        if args.project_command == "show":
+            print(f"{p.name} [{p.slug}]  profile={p.default_profile_id}  export={projects.export_root(p)}")
+            for a in p.assets:
+                print(f"  {a.kind:<12} {a.id}  {a.name}  {a.label}")
+            for s in store.list_jobs(project_id=p.id):
+                print(f"  job {s.id[:8]}  [{s.status.value}]  {s.idea!r}")
+            return 0
+    except KeyError as e:
+        raise ValueError(str(e).strip("'")) from e
+    finally:
+        store.close()
+    return 2
+
+
+def _cmd_export(args) -> int:
+    from . import export, projects
+
+    store = _open_store()
+    try:
+        job = store.load_job(args.job_id)
+        if job is None:
+            raise ValueError(f"no job with id {args.job_id}")
+        if job.status is not JobStatus.DONE and not args.force:
+            raise ValueError(f"job is {job.status.value}, not done (use --force)")
+        project = projects.load(store, job.project_id) if job.project_id else None
+        rec = export.export_job(store, job, project)
+        job.export = rec.to_dict()
+        store.save_job(job)
+        print(f"{rec.path}")
+        for f in rec.files:
+            print(f"  {f}")
+        for m in rec.missing:
+            print(f"  MISSING {m}")
+        return 0 if rec.ok else 1
+    finally:
+        store.close()
+
+
 def _cmd_registry(args) -> int:
     import yaml
 
@@ -599,6 +705,39 @@ def build_parser() -> argparse.ArgumentParser:
 
     oa = sub.add_parser("openapi", help="print the API's OpenAPI schema (JSON) for the typed client")
     oa.set_defaults(func=_cmd_openapi)
+
+    st = sub.add_parser("setup", help="environment check: database, ComfyUI, Gemma, tools, GPU, workflows")
+    sts = st.add_subparsers(dest="setup_command", required=True)
+    stc = sts.add_parser("check", help="run every check (exit 1 on any FAIL)")
+    stc.add_argument("--deep", action="store_true", help="also probe Gemma vision (--mmproj)")
+    stc.add_argument("--profile", default=None, help="check this profile's workflows strictly")
+    st.set_defaults(func=_cmd_setup)
+
+    pf = sub.add_parser("profiles", help="list output profiles (built-in + user)")
+    pf.set_defaults(func=_cmd_profiles)
+
+    pj = sub.add_parser("projects", help="list projects")
+    pj.set_defaults(func=_cmd_projects)
+
+    pr = sub.add_parser("project", help="project: add <name> | add-asset <slug> <path> --kind | show <slug>")
+    prs = pr.add_subparsers(dest="project_command", required=True)
+    pa = prs.add_parser("add")
+    pa.add_argument("name")
+    pa.add_argument("--profile", default="cinematic_16x9", help="default profile id")
+    pa.add_argument("--export-root", default=None)
+    pas = prs.add_parser("add-asset")
+    pas.add_argument("slug")
+    pas.add_argument("path")
+    pas.add_argument("--kind", default="master_face", choices=["master_face", "reference", "product", "logo", "other"])
+    pas.add_argument("--label", default=None)
+    psh = prs.add_parser("show")
+    psh.add_argument("slug")
+    pr.set_defaults(func=_cmd_project)
+
+    ex = sub.add_parser("export", help="write the Shotcut handoff folder for a finished job")
+    ex.add_argument("job_id")
+    ex.add_argument("--force", action="store_true", help="export even if the job is not done")
+    ex.set_defaults(func=_cmd_export)
 
     rg = sub.add_parser("registry", help="workflow registry: list | validate | inspect | add")
     rgs = rg.add_subparsers(dest="registry_command", required=True)

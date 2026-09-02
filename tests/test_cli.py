@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import sqlite3
 
+import pytest
+
 from vorch import __main__ as cli
 from vorch.state import Store, new_job, job_to_dict
 
@@ -89,3 +91,63 @@ class _NoClose:
 
     def close(self) -> None:
         pass
+
+
+# --- setup-phase commands ------------------------------------------------------------
+
+
+@pytest.fixture
+def cli_store(store, monkeypatch, tmp_path):
+    from vorch import config
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    monkeypatch.setattr(config, "EXPORT_ROOT", tmp_path / "export")
+    monkeypatch.setattr(cli, "_open_store", lambda: _NoClose(store))
+    return store
+
+
+def test_setup_check_prints_report(cli_store, monkeypatch, capsys):
+    from vorch import envcheck
+    from vorch.envcheck import CheckResult, EnvReport
+
+    monkeypatch.setattr(envcheck, "run_checks", lambda **kw: EnvReport(
+        [CheckResult("database", "ok", "v2"), CheckResult("gemma", "fail", "down")], "now", 3))
+    assert cli.main(["setup", "check"]) == 1
+    out = capsys.readouterr().out
+    assert "[ok  ] database" in out and "[FAIL] gemma" in out and "-> fail" in out
+    monkeypatch.setattr(envcheck, "run_checks", lambda **kw: EnvReport([CheckResult("database", "ok", "")], "now", 1))
+    assert cli.main(["setup", "check", "--deep", "--profile", "social_9x16"]) == 0
+
+
+def test_profiles_projects_and_export_commands(cli_store, tmp_path, capsys):
+    from vorch.state import JobStatus, Scene, new_job
+
+    assert cli.main(["profiles"]) == 0
+    out = capsys.readouterr().out
+    assert "cinematic_16x9" in out and "stills_16x9" in out and "stills x4" in out
+
+    assert cli.main(["projects"]) == 0 and "no projects" in capsys.readouterr().out
+    assert cli.main(["project", "add", "Autumn Launch", "--profile", "social_9x16"]) == 0
+    assert "created project autumn-launch" in capsys.readouterr().out
+    assert cli.main(["project", "add", "X", "--profile", "nope"]) == 1  # unknown profile -> error
+    face = tmp_path / "face.jpg"
+    face.write_bytes(b"f")
+    assert cli.main(["project", "add-asset", "autumn-launch", str(face), "--kind", "master_face"]) == 0
+    assert "added master_face asset" in capsys.readouterr().out
+    assert cli.main(["project", "show", "autumn-launch"]) == 0
+    out = capsys.readouterr().out
+    assert "master_face" in out and "profile=social_9x16" in out
+    assert cli.main(["projects"]) == 0 and "assets=1" in capsys.readouterr().out
+
+    job = new_job(idea="Export me")
+    kf = tmp_path / "k.png"
+    kf.write_bytes(b"k")
+    job.scenes = [Scene(index=0, keyframe_path=str(kf))]
+    cli_store.save_job(job)
+    assert cli.main(["export", job.id]) == 1  # not done
+    assert cli.main(["export", job.id, "--force"]) == 0
+    out = capsys.readouterr().out
+    assert "s01_keyframe.png" in out and cli_store.load_job(job.id).export["ok"]
+    job.status = JobStatus.DONE
+    cli_store.save_job(job)
+    assert cli.main(["export", job.id]) == 0
