@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from .. import __version__, config
 from ..queue import JobManager
 from ..state import Store
-from . import events, jobs
+from . import events, export, jobs, profiles, projects, setup, workflows
 from .cors import install_cors
 from .errors import ApiError, install_error_handlers
 from .media import mount_media
@@ -33,6 +33,11 @@ def register_routes(app: FastAPI, manager: JobManager, store: Store) -> None:
     app.state.manager = manager
     app.include_router(jobs.router)
     app.include_router(events.router)
+    app.include_router(export.router)
+    app.include_router(setup.router)
+    app.include_router(workflows.router)
+    app.include_router(profiles.router)
+    app.include_router(projects.router)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict:

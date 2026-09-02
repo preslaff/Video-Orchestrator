@@ -19,6 +19,7 @@ app = [
     "fastapi>=0.110",
     "sse-starlette>=2.0",
     "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
     "nicegui>=2.0",
 ]
 dev = [
