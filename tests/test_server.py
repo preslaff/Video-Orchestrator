@@ -384,3 +384,40 @@ def test_list_jobs_status_filter(client):
     page = client.get("/api/jobs?status=needs_approval").json()
     assert page["total"] == 1 and page["items"][0]["idea"] == "paused"
     assert client.get("/api/jobs?status=bogus").status_code == 422
+
+
+# --- commit 6: CORS, root hint, OpenAPI snapshot ------------------------------
+
+
+def test_cors_preflight_from_next_origin(client):
+    r = client.options(
+        "/api/jobs",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == "http://localhost:3000"
+    # An unknown origin gets no CORS grant.
+    r = client.get("/api/jobs", headers={"Origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in r.headers
+
+
+def test_root_hint(client):
+    body = client.get("/").json()
+    assert body["api"] == "/api" and body["ui"].startswith("http")
+
+
+def test_openapi_snapshot_matches_frontend():
+    import json
+    from pathlib import Path
+
+    from vorch.api import openapi_schema
+
+    snap = Path(__file__).resolve().parent.parent / "frontend" / "openapi.json"
+    assert snap.exists(), "frontend/openapi.json missing — run `make api-types`"
+    assert openapi_schema() == json.loads(snap.read_text()), (
+        "API schema changed — run `make api-types` and commit frontend/openapi.json"
+    )

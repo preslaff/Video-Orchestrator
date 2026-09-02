@@ -13,15 +13,16 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from .. import config
+from .. import __version__, config
 from ..queue import JobManager
 from ..state import Store
 from . import events, jobs
+from .cors import install_cors
 from .errors import ApiError, install_error_handlers
 from .media import mount_media
 from .schemas import JobSpec, SceneEdit, SceneEdits
 
-__all__ = ["ApiError", "JobSpec", "SceneEdit", "SceneEdits", "create_app", "register_routes"]
+__all__ = ["ApiError", "JobSpec", "SceneEdit", "SceneEdits", "create_app", "openapi_schema", "register_routes"]
 
 log = logging.getLogger("vorch.api")
 
@@ -32,6 +33,17 @@ def register_routes(app: FastAPI, manager: JobManager, store: Store) -> None:
     app.state.manager = manager
     app.include_router(jobs.router)
     app.include_router(events.router)
+
+    @app.get("/", include_in_schema=False)
+    async def root() -> dict:
+        return {"service": "vorch", "ui": config.UI_URL, "api": "/api", "docs": "/docs"}
+
+
+def openapi_schema() -> dict:
+    """The API's OpenAPI document without touching the database (for `vorch openapi`)."""
+    app = FastAPI(title="Video Orchestrator")
+    register_routes(app, None, None)  # type: ignore[arg-type]  # handlers never run
+    return app.openapi()
 
 
 def create_app(
@@ -48,6 +60,7 @@ def create_app(
         store = Store.open()
     manager = manager or JobManager(store)
     app = FastAPI(title="Video Orchestrator")
+    install_cors(app)
     install_error_handlers(app)
     register_routes(app, manager, store)
     media_dir = media_dir or config.COMFY_OUTPUT

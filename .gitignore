@@ -16,3 +16,8 @@ mcp.log
 # Image assets (real faces) — kept local, not published
 assets/
 reference/
+
+# Frontend (Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/out/

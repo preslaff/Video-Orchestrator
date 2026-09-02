@@ -14,6 +14,7 @@ automatically.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -263,8 +264,17 @@ def _cmd_serve(args) -> int:
     from .server import create_app
 
     app = create_app(_open_store())
-    print(f"serving on http://{args.host}:{args.port}  (API under /api)")
+    print(f"API on http://{args.host}:{args.port}/api  (docs: /docs)")
+    print(f"UI: {config.UI_URL}  (run `npm run dev` in frontend/)")
     uvicorn.run(app, host=args.host, port=args.port)
+    return 0
+
+
+def _cmd_openapi(args) -> int:
+    from .api import openapi_schema
+
+    json.dump(openapi_schema(), sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
     return 0
 
 
@@ -423,6 +433,9 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8000)
     sv.set_defaults(func=_cmd_serve)
+
+    oa = sub.add_parser("openapi", help="print the API's OpenAPI schema (JSON) for the typed client")
+    oa.set_defaults(func=_cmd_openapi)
 
     dbp = sub.add_parser("db", help="database: init | status | import-sqlite <file>")
     dbs = dbp.add_subparsers(dest="db_command", required=True)

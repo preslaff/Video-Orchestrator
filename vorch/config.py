@@ -66,6 +66,16 @@ VRAM_SETTLE_SEC = float(os.environ.get("VORCH_VRAM_SETTLE_SEC", "3"))
 # (`vorch db init` creates it). Tests use VORCH_TEST_DATABASE_URL (tests/conftest.py).
 DATABASE_URL = os.environ.get("VORCH_DATABASE_URL", "postgresql:///vorch")
 
+# Web UI (Next.js) and the origins FastAPI trusts for direct browser calls.
+UI_URL = os.environ.get("VORCH_UI_URL", "http://localhost:3000")
+CORS_ORIGINS = tuple(
+    o.strip()
+    for o in os.environ.get(
+        "VORCH_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+    ).split(",")
+    if o.strip()
+)
+
 # Legacy SQLite file from before the PostgreSQL move — only `vorch db import-sqlite`
 # reads it now.
 STATE_DB = Path(os.environ.get("VORCH_STATE_DB", "runs/vorch.db")).expanduser()
