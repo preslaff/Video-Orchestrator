@@ -1,5 +1,5 @@
-import { Empty } from '@/components/ui'
+import { redirect } from 'next/navigation'
 
-export default function SetupPage() {
-  return <Empty>Setup pages (environment, workflows, profiles, projects) land in a later increment.</Empty>
+export default function SetupIndex() {
+  redirect('/setup/env')
 }

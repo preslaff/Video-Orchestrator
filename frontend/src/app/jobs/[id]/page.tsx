@@ -3,9 +3,9 @@
 import { use } from 'react'
 import Link from 'next/link'
 import { errorMessage } from '@/api/client'
-import { useDecisions, useExportStatus, useJob, useProvenance } from '@/hooks/useJobs'
+import { useDecisions, useExportStatus, useJob, useProvenance, useRunExport } from '@/hooks/useJobs'
 import { useJobEvents } from '@/hooks/useJobEvents'
-import { Card, Empty, ErrorBox, StatusBadge, fmtTime } from '@/components/ui'
+import { Button, Card, Empty, ErrorBox, StatusBadge, fmtTime } from '@/components/ui'
 import { Timeline } from '@/components/Timeline'
 import { DecisionLog } from '@/components/DecisionLog'
 import { SceneCard, ScenePrompts } from '@/components/SceneGrid'
@@ -17,6 +17,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   const decisions = useDecisions(id)
   const provenance = useProvenance(id)
   const exp = useExportStatus(id)
+  const runExport = useRunExport(id)
   const terminal = job.data ? ['done', 'failed', 'cancelled'].includes(job.data.status) : false
   const live = useJobEvents(id, { enabled: !!job.data && !(terminal && !!job.data.export) })
 
@@ -43,7 +44,12 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         <Card title="Timeline" className="lg:col-span-1">
           <Timeline events={live.events} decisions={decisions.data} connected={live.connected} ended={live.ended} />
         </Card>
-        <Card title="Export" className="lg:col-span-2">
+        <Card title="Export (handoff folder for Shotcut)" className="lg:col-span-2" actions={
+          <Button disabled={runExport.isPending || j.status === 'running'} onClick={() => runExport.mutate(j.status !== 'done')} title={j.status !== 'done' ? 'job not done: exports what exists so far' : undefined}>
+            {runExport.isPending ? 'Exporting…' : exp.data?.exported ? 'Re-export' : 'Export now'}
+          </Button>
+        }>
+          <ErrorBox message={runExport.error ? errorMessage(runExport.error) : null} />
           {exp.data?.exported ? (
             <div className="space-y-1 text-sm">
               <p><span className="font-medium">folder:</span> <code className="rounded bg-neutral-100 px-1">{String(exp.data.path)}</code>{exp.data.stale ? <span className="ml-2 text-amber-700">(stale — job changed since)</span> : null}</p>
