@@ -26,7 +26,7 @@ research pass — see [`DESIGN.md`](DESIGN.md) §11–12.
 │  UI: job form · live progress (SSE) · keyframe gallery + approval gate    │
 │  Deterministic state machine (the orchestrator core):                     │
 │    STORYBOARD ─gate─ KEYFRAMES ─/free─ VIDEOS ─/free─ SWAPS ─ FINAL        │
-│    job queue = asyncio + SQLite (resumable state + decision log)           │
+│    job queue = asyncio + PostgreSQL (resumable state + decision log)       │
 └───────────────┬──────────────────────────────────┬───────────────────────┘
                 │ HTTP (called as tools)            │ HTTP
                 ▼                                    ▼
@@ -50,8 +50,8 @@ chain end-to-end (keyframe → face swap → animate).
 validated `Verdict` and the pipeline retries with the fix suggestion (`run-scene --evaluate`,
 or the standalone `evaluate` command). **Sequential continuity** is built too: `run-sequence`
 chains scenes so the last frame of one clip seeds the next (`continuous: true`), re-locking
-identity each step. **State** is persisted: `state.py` stores each `Job`/`Scene` in SQLite
-(resumable) with an append-only **decision log** recording why every frame was accepted or
+identity each step. **State** is persisted: `state.py` stores each `Job`/`Scene` in PostgreSQL
+(JSONB, resumable) with an append-only **decision log** recording why every frame was accepted or
 retried. And the **orchestrator** ties it together: from a one-line idea it generates a
 storyboard (Gemma), then drives storyboard → keyframes (+eval/retry) → videos as a phased,
 resumable state machine with **semi-autonomous approval gates** (`run` / `approve` / `jobs`).
@@ -79,6 +79,23 @@ python -m venv .venv
 ```
 
 Phase 1 needs only `requests`; the `[app]` extra (NiceGUI/FastAPI/Instructor) is for Phase 2.
+
+### Database (PostgreSQL)
+
+Job state and the decision log live in a local **PostgreSQL** database (psycopg 3, JSONB,
+plain-SQL migrations in `vorch/migrations/`). The default DSN `postgresql:///vorch` uses the
+local socket with peer auth, i.e. your OS user needs a PostgreSQL role with `CREATEDB`
+(`sudo -u postgres createuser -s $USER` once). Then:
+
+```bash
+python -m vorch db init                      # create the database + apply migrations
+python -m vorch db status                    # DSN, schema version, job count
+python -m vorch db import-sqlite runs/vorch.db   # one-off: bring over pre-PostgreSQL runs
+```
+
+Override with `VORCH_DATABASE_URL=postgresql://user:pass@host/db`. Tests use
+`VORCH_TEST_DATABASE_URL` (default `postgresql:///vorch_test`) and isolate every test in its
+own throwaway schema; they stop with a clear message if PostgreSQL is not running.
 
 ## Usage
 
@@ -146,9 +163,9 @@ python -m vorch approve <job_id> storyboard   # release the storyboard gate
 python -m vorch approve <job_id> keyframes    # release the pre-Wan gate
 ```
 
-`autonomy: full` runs straight through. State + the decision log persist to SQLite
-(`VORCH_STATE_DB`, default `runs/vorch.db`), so a job is **resumable** and every accept/retry is
-auditable.
+`autonomy: full` runs straight through. State + the decision log persist to PostgreSQL
+(`VORCH_DATABASE_URL`, default `postgresql:///vorch`), so a job is **resumable** and every
+accept/retry is auditable.
 
 **Face swap is optional.** Set `face_swap: false` in the job spec (or the *Face swap* switch in the
 dashboard, or `--no-face-swap` on `run-scene`/`run-sequence`) to animate the keyframe directly

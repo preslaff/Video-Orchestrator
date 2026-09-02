@@ -30,7 +30,7 @@ Do not build the evaluator or VRAM manager before the base chain runs end-to-end
 ## Documentation map (read these, don't duplicate them)
 
 - **`NOTES.md`** — the spec. Endpoints, start commands, exact node-IDs to replace per workflow (§3), VRAM strategy (§4), pipeline phasing (§5), evaluation criteria (§6), finalized decisions (§7), dev phasing (§9). **Read first; everything assumes it as context.**
-- **`DESIGN.md`** — the orchestrator architecture: module layout, the workflow registry, data model, YAML job spec, control flow with semi-auto gates, and build order. Also §11–12: the research-validated stack — **deterministic Python core (no agent framework); Gemma via llama.cpp grammar + Instructor/Pydantic; FastAPI + SSE + asyncio/SQLite backend; NiceGUI frontend; one local process.** Read before implementing; don't re-litigate these.
+- **`DESIGN.md`** — the orchestrator architecture: module layout, the workflow registry, data model, YAML job spec, control flow with semi-auto gates, and build order. Also §11–12: the research-validated stack — **deterministic Python core (no agent framework); Gemma via llama.cpp grammar + Instructor/Pydantic; FastAPI + SSE + asyncio backend on PostgreSQL (SQLite superseded Sept 2026); NiceGUI frontend; one local process.** Read before implementing; don't re-litigate these.
 - **`SKILL.md`** — router skill + architectural invariants. Points to:
   - `skills/comfyui-api.md` — load template, replace params, POST `/prompt`, poll `/history`, extract outputs
   - `skills/gemma-evaluate.md` — vision evaluation, image + video (frame extraction), JSON verdict parsing

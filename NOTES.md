@@ -163,7 +163,7 @@ Gemma връща СТРУКТУРИРАН JSON (не проза). Промпт �
 - [x] Тригер: **YAML job файл + CLI** (`python -m vorch run job.yaml`). Активите са динамични, подават се през job spec-а.
 - [x] Отхвърлени: Hermes (text-only, без vision), OpenClaw като executor (LLM planner — крехко, VRAM цена; евентуално само външен trigger слой по-късно).
 - [x] Structured output: llama.cpp grammar / `response_format` json_schema ПРИ ИЗТОЧНИКА + **Instructor/Pydantic** валидация отвън (grammar може да "fail open" — issue #19051). Tool calling иска `--jinja`.
-- [x] Backend: **FastAPI + SSE** (live progress) + **asyncio + SQLite** опашка/state (без Celery/Redis — over-engineering за single-user).
+- [x] Backend: **FastAPI + SSE** (live progress) + **asyncio** опашка (без Celery/Redis — over-engineering за single-user). State: първоначално SQLite → **2026-09: PostgreSQL 16** (локален, peer auth, JSONB, SQL миграции в `vorch/migrations/`; `vorch db init`).
 - [x] Frontend: **NiceGUI** (върху FastAPI → един процес backend+frontend; io_bound/cpu_bound; HITL gates). Gradio е по-бърз за медийно UI, но по-слаб за устойчива опашка — отхвърлен за executor UI.
 - [x] Цялата валидирана архитектура: виж DESIGN.md раздели 11-12 (deep-research, 25 източника).
 

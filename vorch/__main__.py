@@ -25,6 +25,7 @@ from .evaluator import EvaluationError, evaluate_image
 from .media import MediaError
 from .orchestrator import GATE_KEYFRAMES, GATE_STORYBOARD, Orchestrator
 from .pipeline import Scene, run_scene, run_sequence
+from .db import DatabaseUnavailable
 from .state import JobStatus, Store
 from .steps.animate import animate
 from .steps.faceswap import faceswap
@@ -276,6 +277,41 @@ def _cmd_dashboard(args) -> int:
     return 0
 
 
+def _cmd_db(args) -> int:
+    from . import db
+
+    if args.db_command == "init":
+        created = db.ensure_database(config.DATABASE_URL)
+        store = Store(config.DATABASE_URL)
+        try:
+            print(f"database {db.dbname_of(config.DATABASE_URL)} "
+                  f"{'created' if created else 'exists'}; schema version {store.version}")
+        finally:
+            store.close()
+        return 0
+    if args.db_command == "status":
+        store = _open_store()
+        try:
+            print(f"dsn: {config.DATABASE_URL}")
+            print(f"schema version: {store.schema_version()} (latest {db.latest_version()})")
+            print(f"jobs: {len(store.list_jobs())}")
+        finally:
+            store.close()
+        return 0
+    if args.db_command == "import-sqlite":
+        from .sqlite_import import import_sqlite
+
+        store = _open_store()
+        try:
+            r = import_sqlite(args.path, store)
+        finally:
+            store.close()
+        print(f"imported {r.jobs} jobs, {r.decisions} decisions "
+              f"({r.skipped_jobs} jobs already present, skipped)")
+        return 0
+    return 2
+
+
 def _cmd_vram(args) -> int:
     from . import vram
 
@@ -389,6 +425,14 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--port", type=int, default=8000)
     sv.set_defaults(func=_cmd_serve)
 
+    dbp = sub.add_parser("db", help="database: init | status | import-sqlite <file>")
+    dbs = dbp.add_subparsers(dest="db_command", required=True)
+    dbs.add_parser("init", help="create the database if missing and apply migrations")
+    dbs.add_parser("status", help="show DSN, schema version and job count")
+    imp = dbs.add_parser("import-sqlite", help="copy jobs + decisions from a legacy runs/*.db")
+    imp.add_argument("path", help="path to the SQLite file (e.g. runs/vorch.db)")
+    dbp.set_defaults(func=_cmd_db)
+
     db = sub.add_parser("dashboard", help="run the NiceGUI web dashboard")
     db.add_argument("--host", default="127.0.0.1")
     db.add_argument("--port", type=int, default=8090)
@@ -404,7 +448,7 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except (
         comfy.ComfyError, EvaluationError, MediaError, GemmaError, StoryboardError,
-        FileNotFoundError, ValueError,
+        FileNotFoundError, ValueError, DatabaseUnavailable,
     ) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

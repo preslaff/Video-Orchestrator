@@ -51,10 +51,10 @@ vorch/
 ├── storyboard.py    # Gemma text → scene briefs + keyframe/animation prompts                [Phase 2]
 ├── pipeline.py      # per-scene chains: run_scene / run_sequence (continuity)
 ├── orchestrator.py  # job-level phase machine + semi-auto gates over state.Store            [Phase 2]
-├── state.py         # Job/Scene model, SQLite-persisted (resumable + decision log)          [Phase 2]
+├── state.py         # Job/Scene model, PostgreSQL-persisted (JSONB; resumable + decision log) [Phase 2]
 ├── media.py         # last_frame() — ffprobe+ffmpeg frame extraction for continuity         [Phase 2]
 ├── vram.py          # gpu_free_mb(), free_comfyui(), guards (thin under Option B)            [Phase 2]
-├── queue.py         # asyncio job queue over SQLite (sequence long jobs, cancel, resume)     [Phase 2]
+├── queue.py         # asyncio job queue over PostgreSQL (sequence long jobs, cancel, resume) [Phase 2]
 ├── server.py        # FastAPI routes + SSE progress stream (lives inside the NiceGUI app)    [Phase 2]
 ├── app/             # NiceGUI dashboard: job form, live gallery, HITL approval gates, retries [Phase 2]
 └── __main__.py      # CLI entry (python -m vorch ...)
@@ -189,7 +189,7 @@ Per `NOTES.md` §9 — narrow and end-to-end first:
 **Phase 2 — intelligence & scale:**
 6. ✅ `evaluator.py` + retry loop (vision feedback) — `Verdict` (Pydantic), `evaluate_image`, `generate_keyframe_evaluated`; wired into `run_scene(evaluate=True)` and the `evaluate` CLI command.
 7. ✅ Sequential continuity — `media.last_frame` + `run_sequence`/`Scene`; the `run-sequence` CLI (YAML scene list). See §13.
-8. ✅ `state.py` — SQLite-persisted `Job`/`Scene` (resumable) + append-only decision log (`Store`, `Decision`, `record_verdict`). Structured logging still pending.
+8. ✅ `state.py` — PostgreSQL-persisted `Job`/`Scene` (resumable; moved from SQLite 2026-09, see `db.py` + `migrations/`) + append-only decision log (`Store`, `Decision`, `record_verdict`). Structured logging still pending.
 9. ✅ Multi-scene phased orchestration + semi-auto gates — `storyboard.py` (Gemma narrative) + `orchestrator.py` (`Orchestrator`: storyboard ⏸ → keyframes+eval ⏸ → videos, persisted to `Store`); CLI `run`/`approve`/`jobs`/`job`. Resumable from reloaded state; gates cleared via logged approvals.
 10. ✅ `vram.py` — `gpu_free_mb`/`snapshot`/`log_state` (nvidia-smi, best-effort) + `reclaim()` guard at the Klein/ReActor→Wan boundary; `vram` CLI. Thin under Option B (Gemma on CPU).
 11. ✅ `queue.py` + `server.py` + `app/` — async `JobManager` (Orchestrator in a thread executor, one-GPU lock, event Broker) → FastAPI `/api` + SSE (`vorch serve`) → NiceGUI dashboard (`vorch dashboard`: job form, live keyframe/video gallery, approval-gate buttons, decision log + provenance). One process; media served from ComfyUI's output dir.
@@ -222,10 +222,12 @@ decision and selected a Python-native stack. The whole app runs as **one local p
   at JSON-over-vision was *refuted* in verification — structured verdicts from Gemma-vision are
   reliable in practice.)
 
-- **Backend — FastAPI + SSE + asyncio + SQLite.** **SSE** (not WebSocket) for live progress —
+- **Backend — FastAPI + SSE + asyncio + PostgreSQL.** **SSE** (not WebSocket) for live progress —
   one-directional server→client, native in FastAPI (`EventSourceResponse`), handles cancellation.
-  **asyncio + SQLite** for the job queue/state — a broker (Celery/Redis/Dramatiq) is
-  over-engineering for single-user local; SQLite gives resumable state + the decision log.
+  **asyncio** for the job queue — a broker (Celery/Redis/Dramatiq) is over-engineering for
+  single-user local. State + decision log: originally SQLite; **superseded 2026-09 by the local
+  PostgreSQL 16** already on the machine (psycopg 3 sync pool, JSONB job blobs, versioned SQL
+  migrations, one throwaway schema per test). Same resumability, real concurrency, queryable blobs.
 
 - **Frontend — NiceGUI** (built on FastAPI → unifies backend+frontend in one process).
   `run.io_bound` polls ComfyUI without blocking the UI; `run.cpu_bound` runs ffmpeg frame
@@ -248,7 +250,7 @@ decision and selected a Python-native stack. The whole app runs as **one local p
 │      · retry controls · final clips                                       │
 │  Deterministic state machine (the orchestrator core):                     │
 │    STORYBOARD ─⏸gate─ KEYFRAMES ─/free─ VIDEOS ─/free─ SWAPS ─ FINAL      │
-│    job queue = asyncio + SQLite (resumable state + decision log)          │
+│    job queue = asyncio + PostgreSQL (resumable state + decision log)      │
 │    run.io_bound → poll ComfyUI · run.cpu_bound → ffmpeg frame extract      │
 └───────────────┬───────────────────────────────────┬──────────────────────┘
                 │ HTTP (called as TOOLS)             │ HTTP
