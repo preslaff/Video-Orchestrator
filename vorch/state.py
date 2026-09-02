@@ -440,8 +440,12 @@ class Store:
 
     def load_job(self, job_id: str) -> Job | None:
         with self._pool.connection() as conn:
-            row = conn.execute("SELECT data FROM jobs WHERE id = %s", (job_id,)).fetchone()
-        return job_from_dict(row["data"]) if row else None
+            row = conn.execute("SELECT data, project_id FROM jobs WHERE id = %s", (job_id,)).fetchone()
+        if not row:
+            return None
+        job = job_from_dict(row["data"])
+        job.project_id = row["project_id"]  # the column is authoritative (nulled on project delete)
+        return job
 
     def list_jobs(
         self,
@@ -567,6 +571,48 @@ class Store:
             )
             for r in rows
         ]
+
+    # -- projects (dict rows; vorch.projects owns the model) --
+
+    def save_project(self, d: dict) -> dict:
+        from .projects import SlugTaken  # local: avoid import cycle
+
+        with self._pool.connection() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO projects (id, slug, name, created_at, updated_at, data)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        slug = EXCLUDED.slug, name = EXCLUDED.name,
+                        updated_at = EXCLUDED.updated_at, data = EXCLUDED.data
+                    """,
+                    (d["id"], d["slug"], d["name"], _to_ts(d["created_at"]), _to_ts(d["updated_at"]), Jsonb(d)),
+                )
+            except psycopg.errors.UniqueViolation as e:
+                raise SlugTaken(f"project slug {d['slug']!r} is already used") from e
+        return d
+
+    def load_project(self, project_id: str) -> dict | None:
+        with self._pool.connection() as conn:
+            row = conn.execute("SELECT data FROM projects WHERE id = %s", (project_id,)).fetchone()
+        return row["data"] if row else None
+
+    def load_project_by_slug(self, slug: str) -> dict | None:
+        with self._pool.connection() as conn:
+            row = conn.execute("SELECT data FROM projects WHERE slug = %s", (slug,)).fetchone()
+        return row["data"] if row else None
+
+    def list_projects(self) -> list[dict]:
+        with self._pool.connection() as conn:
+            rows = conn.execute("SELECT data FROM projects ORDER BY updated_at DESC").fetchall()
+        return [r["data"] for r in rows]
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete the project row; jobs keep their rows with project_id set to NULL."""
+        with self._pool.connection() as conn:
+            cur = conn.execute("DELETE FROM projects WHERE id = %s", (project_id,))
+            return cur.rowcount > 0
 
     # -- profiles (dict rows; vorch.profiles owns the model) --
 

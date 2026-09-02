@@ -83,6 +83,10 @@ VRAM_SETTLE_SEC = float(os.environ.get("VORCH_VRAM_SETTLE_SEC", "3"))
 # (`vorch db init` creates it). Tests use VORCH_TEST_DATABASE_URL (tests/conftest.py).
 DATABASE_URL = os.environ.get("VORCH_DATABASE_URL", "postgresql:///vorch")
 
+# Setup phase: where projects keep their assets and where finished jobs are exported.
+PROJECTS_ROOT = Path(os.environ.get("VORCH_PROJECTS_ROOT", "~/vorch/projects")).expanduser()
+EXPORT_ROOT = Path(os.environ.get("VORCH_EXPORT_ROOT", "~/vorch/export")).expanduser()
+
 # Web UI (Next.js) and the origins FastAPI trusts for direct browser calls.
 UI_URL = os.environ.get("VORCH_UI_URL", "http://localhost:3000")
 CORS_ORIGINS = tuple(
