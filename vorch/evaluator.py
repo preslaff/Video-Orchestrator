@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 
 from .clients import gemma
 
@@ -44,18 +44,33 @@ class Verdict(BaseModel):
     style_match: bool = Field(description="Does the style match (e.g. oil painting)?")
     artifacts: bool = Field(description="Are there deformations/morphing/extra fingers? true = BAD.")
     composition_ok: bool = Field(description="Is the framing/balance good?")
+    framing_ok: bool | None = Field(
+        default=None,
+        description="Does the image respect the requested delivery format/framing? null if not asked.",
+    )
     score: int = Field(ge=0, le=10, description="Overall quality 0-10.")
     verdict: Literal["accept", "retry"]
     fix_suggestion: str = Field(default="", description="If retry: what to change in the prompt.")
 
+    # Per-profile review threshold (set by evaluate_image; not part of the schema).
+    _review_threshold: int = PrivateAttr(default=REVIEW_SCORE_THRESHOLD)
+
+    @property
+    def review_threshold(self) -> int:
+        return self._review_threshold
+
     @property
     def objective_accept(self) -> bool:
-        """The reliable signal: right action, right identity, framed, no artifacts."""
+        """The reliable signal: right action, right identity, framed, no artifacts.
+
+        ``framing_ok`` counts only when it was asked for (False fails; None is ignored).
+        """
         return (
             self.action_correct
             and self.identity_match
             and self.composition_ok
             and not self.artifacts
+            and self.framing_ok is not False
         )
 
     @property
@@ -66,7 +81,7 @@ class Verdict(BaseModel):
     @property
     def needs_review(self) -> bool:
         """Accepted on objective grounds but the advisory score is low — flag it."""
-        return self.objective_accept and self.score < REVIEW_SCORE_THRESHOLD
+        return self.objective_accept and self.score < self._review_threshold
 
     @property
     def disagreement(self) -> bool:
@@ -84,13 +99,22 @@ SYSTEM = (
 )
 
 
-def _user_prompt(task_description: str) -> str:
-    return (
+def _user_prompt(task_description: str, *, orientation: str | None = None, framing_hint: str = "") -> str:
+    text = (
         f'Goal of the frame: "{task_description}"\n\n'
         "Evaluate it and return the JSON verdict. Set verdict to \"accept\" only if the "
         "action is correct, the right character is shown, and there are no artifacts; "
         "otherwise \"retry\" with a concrete fix_suggestion for the prompt."
     )
+    if orientation:
+        text += (
+            f"\n\nDelivery format: {orientation} frame. Expected framing: {framing_hint or orientation}. "
+            "Set framing_ok to true only if the subject placement and headroom suit that format "
+            "(nothing essential cut off or crammed at the edges); otherwise false."
+        )
+    else:
+        text += "\n\nframing_ok: leave null (no format requirement)."
+    return text
 
 
 def _response_format() -> dict:
@@ -111,20 +135,74 @@ def _parse_verdict(raw: str) -> Verdict:
 
 
 def evaluate_image(
-    image_path: str | Path, task_description: str, *, attempts: int = 2
+    image_path: str | Path,
+    task_description: str,
+    *,
+    attempts: int = 2,
+    orientation: str | None = None,
+    framing_hint: str = "",
+    review_threshold: int = REVIEW_SCORE_THRESHOLD,
 ) -> Verdict:
-    """Evaluate one keyframe; return a validated Verdict (retries on bad JSON)."""
+    """Evaluate one keyframe; return a validated Verdict (retries on bad JSON).
+
+    ``orientation`` (landscape/portrait/square) + ``framing_hint`` make Gemma
+    judge ``framing_ok`` for the delivery format; ``review_threshold`` is the
+    profile's advisory score floor for ``needs_review``.
+    """
+    return _evaluate(
+        [image_path], _user_prompt(task_description, orientation=orientation, framing_hint=framing_hint),
+        attempts=attempts, review_threshold=review_threshold, label=Path(image_path).name,
+    )
+
+
+def evaluate_video(
+    video_path: str | Path,
+    task_description: str,
+    *,
+    frames: int = 5,
+    attempts: int = 2,
+    orientation: str | None = None,
+    framing_hint: str = "",
+    review_threshold: int = REVIEW_SCORE_THRESHOLD,
+) -> Verdict:
+    """Evaluate a clip from ``frames`` evenly sampled stills (experimental).
+
+    Objective checks (action happened, identity kept, no morphing between the
+    frames) are the reliable part; temporal smoothness is not judged reliably
+    from stills — treat the score as advisory (skills/gemma-evaluate.md).
+    """
+    from .media import sample_frames
+
+    stills = sample_frames(video_path, frames)
+    prompt = _user_prompt(task_description, orientation=orientation, framing_hint=framing_hint)
+    prompt += (
+        f"\n\nThese {len(stills)} images are frames sampled in order from one short clip. "
+        "Judge the clip: action_correct = the described motion visibly happens across the "
+        "frames; artifacts = morphing, warping or identity drift between frames."
+    )
+    return _evaluate(stills, prompt, attempts=attempts, review_threshold=review_threshold,
+                     label=Path(video_path).name)
+
+
+def evaluate_media(path: str | Path, task_description: str, **kw) -> Verdict:
+    """Dispatch on the file type: video clips go to ``evaluate_video``, stills to ``evaluate_image``."""
+    from .registry import VIDEO_EXT
+
+    if Path(path).suffix.lower() in VIDEO_EXT:
+        return evaluate_video(path, task_description, **kw)
+    return evaluate_image(path, task_description, **kw)
+
+
+def _evaluate(
+    images: list, prompt: str, *, attempts: int, review_threshold: int, label: str
+) -> Verdict:
     last_err: Exception | None = None
     for attempt in range(1, attempts + 1):
-        raw = gemma.complete_vision(
-            SYSTEM,
-            _user_prompt(task_description),
-            [image_path],
-            response_format=_response_format(),
-        )
+        raw = gemma.complete_vision(SYSTEM, prompt, images, response_format=_response_format())
         try:
             verdict = _parse_verdict(raw)
-            name = Path(image_path).name
+            verdict._review_threshold = review_threshold
+            name = label
             log.info(
                 "eval %s: %s (score=%s)%s",
                 name,
@@ -140,7 +218,7 @@ def evaluate_image(
             if verdict.needs_review:
                 log.warning(
                     "eval %s: accepted but score=%d (<%d) — flagged for review",
-                    name, verdict.score, REVIEW_SCORE_THRESHOLD,
+                    name, verdict.score, review_threshold,
                 )
             return verdict
         except (ValidationError, json.JSONDecodeError, ValueError) as e:

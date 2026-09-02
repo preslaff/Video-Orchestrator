@@ -1215,6 +1215,17 @@
             "type": "boolean",
             "title": "Composition Ok"
           },
+          "framing_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Framing Ok"
+          },
           "fix_suggestion": {
             "type": "string",
             "title": "Fix Suggestion",

@@ -55,6 +55,7 @@ class VerdictOut(BaseModel):
     style_match: bool
     artifacts: bool
     composition_ok: bool
+    framing_ok: bool | None = None
     fix_suggestion: str = ""
 
 

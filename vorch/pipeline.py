@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, vram
+from . import config, formats, vram
 from .clients import comfy
 from .evaluator import Verdict, evaluate_image
 from .genparams import DEFAULT, GenParams
@@ -157,7 +157,11 @@ def generate_keyframe_evaluated(
             attempt_prompt, seed=attempt_seed, params=params, negative=negative,
             filename_prefix=filename_prefix, mode=mode, references=references,
         )
-        verdict = evaluate_image(kf_path, task)
+        verdict = evaluate_image(
+            kf_path, task, orientation=params.orientation,
+            framing_hint=formats.framing_hint(params.aspect),
+            review_threshold=params.review_threshold,
+        )
         if on_attempt is not None:
             on_attempt(attempt, kf_path, verdict)
         if verdict.decision == "accept":

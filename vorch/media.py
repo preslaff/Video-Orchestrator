@@ -91,3 +91,32 @@ def fit_image(src: str | Path, width: int, height: int, dest: str | Path | None 
     if not dest.is_file():
         raise MediaError(f"ffmpeg produced no image for {src}")
     return dest
+
+
+def sample_frames(video_path: str | Path, n: int = 5, dest_dir: str | Path | None = None) -> list[Path]:
+    """``n`` evenly spaced frames (first .. last) as PNGs, for vision evaluation."""
+    video_path = Path(video_path).expanduser()
+    if not video_path.is_file():
+        raise FileNotFoundError(f"video not found: {video_path}")
+    n = max(1, n)
+    dest_dir = Path(dest_dir) if dest_dir is not None else video_path.parent
+    total = _count_frames(video_path)
+    if not total:
+        raise MediaError(f"cannot count frames of {video_path}")
+    if n == 1:
+        indices = [total - 1]
+    else:
+        indices = sorted({round(i * (total - 1) / (n - 1)) for i in range(n)})
+    out: list[Path] = []
+    for idx in indices:
+        dest = dest_dir / f"{video_path.stem}_f{idx:04d}.png"
+        cmd = ["ffmpeg", "-y", "-i", str(video_path), "-vf", f"select=eq(n\\,{idx})",
+               "-frames:v", "1", str(dest)]
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            raise MediaError(f"ffmpeg failed to extract frame {idx} of {video_path}: {e}") from e
+        if not dest.is_file():
+            raise MediaError(f"ffmpeg produced no frame {idx} for {video_path}")
+        out.append(dest)
+    return out

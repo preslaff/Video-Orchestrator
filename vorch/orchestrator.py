@@ -24,7 +24,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from . import config, evaluator, pipeline, provenance, storyboard
+from . import config, pipeline, provenance, storyboard
 from .clients import comfy
 from .genparams import DEFAULT, GenParams
 from .state import Decision, Job, JobStatus, Scene, SceneStatus, Store, new_job
@@ -264,7 +264,7 @@ class Orchestrator:
                 Decision(
                     job_id=job.id, scene_index=scene_index, phase="keyframe", attempt=attempt,
                     action="review", score=verdict.score,
-                    reason=f"accepted but score={verdict.score} (< {evaluator.REVIEW_SCORE_THRESHOLD})",
+                    reason=f"accepted but score={verdict.score} (< {verdict.review_threshold})",
                 )
             )
 
