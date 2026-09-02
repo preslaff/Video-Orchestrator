@@ -41,6 +41,7 @@ export function Button({
   disabled,
   type = 'button',
   title,
+  ...rest
 }: {
   children: ReactNode
   onClick?: () => void
@@ -48,7 +49,7 @@ export function Button({
   disabled?: boolean
   type?: 'button' | 'submit'
   title?: string
-}) {
+} & Record<`data-${string}`, string>) {
   const styles = {
     default: 'border border-neutral-300 bg-white hover:bg-neutral-50',
     primary: 'bg-neutral-900 text-white hover:bg-neutral-700',
@@ -56,7 +57,7 @@ export function Button({
     ghost: 'text-neutral-600 hover:bg-neutral-100',
   }[variant]
   return (
-    <button type={type} onClick={onClick} disabled={disabled} title={title}
+    <button type={type} onClick={onClick} disabled={disabled} title={title} {...rest}
       className={`rounded px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${styles}`}>
       {children}
     </button>
