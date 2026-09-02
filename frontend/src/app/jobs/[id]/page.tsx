@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { errorMessage } from '@/api/client'
 import { useDecisions, useExportStatus, useJob, useProvenance, useRunExport } from '@/hooks/useJobs'
 import { useJobEvents } from '@/hooks/useJobEvents'
-import { Button, Card, Empty, ErrorBox, StatusBadge, fmtTime } from '@/components/ui'
+import { Button, Card, Collapsible, Empty, ErrorBox, StatusBadge, fmtTime } from '@/components/ui'
 import { Timeline } from '@/components/Timeline'
 import { DecisionLog } from '@/components/DecisionLog'
 import { SceneCard, ScenePrompts } from '@/components/SceneGrid'
@@ -79,26 +79,30 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         </div>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Decision log"><DecisionLog decisions={decisions.data} /></Card>
-        <Card title="Provenance">
+      <div className="space-y-3">
+        <Collapsible title="Decision log" count={decisions.data?.length ?? 0} hint="why each frame was accepted, retried or flagged · click to expand">
+          <DecisionLog decisions={decisions.data} />
+        </Collapsible>
+        <Collapsible title="Provenance" count={provenance.data?.length ?? 0} hint="seed + prompt per generated file · click to expand">
           {!provenance.data?.length ? <Empty>No artifacts yet.</Empty> : (
-            <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase text-neutral-500"><tr><th className="py-1 pr-3">scene</th><th className="py-1 pr-3">kind</th><th className="py-1 pr-3">seed</th><th className="py-1 pr-3">file</th><th className="py-1">prompt</th></tr></thead>
-              <tbody>
-                {provenance.data.map((r, i) => (
-                  <tr key={i} className="border-t border-neutral-100 align-top">
-                    <td className="py-1 pr-3">{r.scene_index + 1}</td>
-                    <td className="py-1 pr-3">{r.kind}</td>
-                    <td className="py-1 pr-3 font-mono text-xs">{r.seed ?? (r.has_manifest ? '' : 'no manifest')}</td>
-                    <td className="py-1 pr-3">{r.url ? <a href={r.url} target="_blank" rel="noreferrer" className="hover:underline">{r.filename}</a> : r.filename}</td>
-                    <td className="py-1 text-xs text-neutral-600">{r.prompt}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="text-xs uppercase text-neutral-500"><tr><th className="py-1 pr-3">scene</th><th className="py-1 pr-3">kind</th><th className="py-1 pr-3">seed</th><th className="py-1 pr-3">file</th><th className="py-1">prompt</th></tr></thead>
+                <tbody>
+                  {provenance.data.map((r, i) => (
+                    <tr key={i} className="border-t border-neutral-100 align-top">
+                      <td className="py-1 pr-3">{r.scene_index + 1}</td>
+                      <td className="py-1 pr-3">{r.kind}</td>
+                      <td className="py-1 pr-3 font-mono text-xs">{r.seed ?? (r.has_manifest ? '' : 'no manifest')}</td>
+                      <td className="py-1 pr-3">{r.url ? <a href={r.url} target="_blank" rel="noreferrer" className="hover:underline">{r.filename}</a> : r.filename}</td>
+                      <td className="py-1 text-xs text-neutral-600">{r.prompt}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
-        </Card>
+        </Collapsible>
       </div>
       <p className="text-xs text-neutral-400">created {fmtTime(j.created_at)} · updated {fmtTime(j.updated_at)}</p>
     </div>

@@ -79,3 +79,33 @@ export function fmtTime(iso: string | null | undefined): string {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
 }
+
+
+/** Native <details> section, closed by default; the summary carries a hint + count. */
+export function Collapsible({
+  title,
+  hint,
+  count,
+  defaultOpen = false,
+  children,
+}: {
+  title: ReactNode
+  hint?: ReactNode
+  count?: number
+  defaultOpen?: boolean
+  children: ReactNode
+}) {
+  return (
+    <details open={defaultOpen} className="group rounded-lg border border-neutral-200 bg-white shadow-sm">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 select-none">
+        <span className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-neutral-600">
+          <span className="inline-block transition-transform group-open:rotate-90">▸</span>
+          {title}
+          {typeof count === 'number' && <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs font-normal normal-case text-neutral-600">{count}</span>}
+        </span>
+        <span className="text-xs text-neutral-400 group-open:hidden">{hint ?? 'click to expand'}</span>
+      </summary>
+      <div className="border-t border-neutral-100 px-4 py-3">{children}</div>
+    </details>
+  )
+}
