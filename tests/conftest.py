@@ -76,7 +76,7 @@ def store(make_store) -> Store:
 def _isolated_user_workflows(tmp_path, monkeypatch):
     """Never read the developer's ~/vorch/workflows in tests: a user entry there
     would change which workflows are registered. Each test gets an empty dir."""
-    user_dir = tmp_path / "user_workflows"
+    user_dir = tmp_path / "_isolated_user_workflows"
     user_dir.mkdir()
     monkeypatch.setattr(config, "USER_WORKFLOW_DIR", user_dir)
     registry.reset_cache()
