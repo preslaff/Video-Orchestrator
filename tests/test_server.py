@@ -7,6 +7,8 @@ streaming/queue behaviour itself is covered by test_queue.py.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -265,3 +267,91 @@ def test_media_range_request_206(client):
 
 def test_media_missing_is_404(client):
     assert client.get("/media/does-not-exist.png").status_code == 404
+
+
+# --- commit 4: SSE named events, ids, replay ---------------------------------
+
+
+def _sse_events(text: str) -> list[dict]:
+    """Parse an SSE body into [{event, id, data}] (ignores comments/pings)."""
+    out, cur = [], {}
+    for line in text.splitlines():
+        if not line.strip():
+            if cur:
+                out.append(cur)
+                cur = {}
+            continue
+        if line.startswith(":"):
+            continue
+        key, _, val = line.partition(":")
+        cur[key] = val.strip()
+    if cur:
+        out.append(cur)
+    return out
+
+
+def test_sse_named_events_and_ids(client):
+    jid = client.post("/api/jobs", json={"idea": "x", "face_swap": False}).json()["id"]
+    # FakeOrch already ran; the ring buffer has status + end, replayed from after=0.
+    with client.stream("GET", f"/api/jobs/{jid}/events") as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        body = "".join(r.iter_text())
+    evs = _sse_events(body)
+    assert [e["event"] for e in evs][-1] == "end"
+    assert [int(e["id"]) for e in evs] == list(range(1, len(evs) + 1))
+    assert all("job_id" in e["data"] for e in evs)
+
+
+def test_sse_replays_after_last_event_id(client):
+    from vorch.state import new_job
+
+    job = new_job(idea="r")
+    client.store.save_job(job)
+    broker = client.app.state.manager.broker
+    broker.publish(job.id, {"type": "status", "status": "running"})
+    broker.publish(job.id, {"type": "keyframe", "index": 0})
+    broker.publish(job.id, {"type": "end"})
+    with client.stream("GET", f"/api/jobs/{job.id}/events", headers={"Last-Event-ID": "1"}) as r:
+        body = "".join(r.iter_text())
+    assert [(e["event"], e["id"]) for e in _sse_events(body)] == [("keyframe", "2"), ("end", "3")]
+    with client.stream("GET", f"/api/jobs/{job.id}/events?after=2") as r:
+        body = "".join(r.iter_text())
+    assert [e["event"] for e in _sse_events(body)] == ["end"]
+
+
+def test_sse_terminal_job_without_history_ends(client):
+    job = _paused_job_with_scene(client.store)
+    job.status = JobStatus.DONE
+    client.store.save_job(job)
+    with client.stream("GET", f"/api/jobs/{job.id}/events") as r:
+        body = "".join(r.iter_text())
+    evs = _sse_events(body)
+    assert len(evs) == 1 and evs[0]["event"] == "end"
+
+
+def test_sse_missing_job_404_and_bad_after_400(client):
+    assert client.get("/api/jobs/nope/events").status_code == 404
+    job = _paused_job_with_scene(client.store)
+    assert client.get(f"/api/jobs/{job.id}/events?after=x").status_code == 400
+
+
+def test_global_events_stream_carries_job_id(store):
+    """/api/events is endless, so drive the route's generator directly instead of
+    through TestClient (which cannot close an open stream)."""
+    import json as _json
+
+    from vorch.api.events import all_events
+
+    async def go():
+        manager = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+        resp = await all_events(manager=manager)
+        it = resp.body_iterator.__aiter__()
+        manager.broker.publish("job-1", {"type": "status", "status": "running"})
+        ev = await asyncio.wait_for(it.__anext__(), 2)
+        await it.aclose()
+        return ev, len(manager.broker._all)
+
+    ev, subs_left = asyncio.run(go())
+    assert ev.event == "status" and _json.loads(ev.data)["job_id"] == "job-1"
+    assert subs_left == 0  # unsubscribed on close

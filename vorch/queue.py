@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from collections.abc import Callable
 
 from .orchestrator import Orchestrator
@@ -22,14 +23,29 @@ log = logging.getLogger("vorch.queue")
 
 
 class Broker:
-    """In-memory per-job pub/sub over asyncio.Queues (one queue per subscriber)."""
+    """In-memory pub/sub over asyncio.Queues (one queue per subscriber).
 
-    def __init__(self) -> None:
+    Every published event gets a per-job monotonic ``id`` and is kept in a
+    small per-job ring buffer, so a subscriber that (re)connects can ask for
+    everything ``after`` an id it has already seen (SSE ``Last-Event-ID``).
+    Global subscribers (``subscribe_all``) see every job's events.
+    """
+
+    def __init__(self, history: int = 200) -> None:
         self._subs: dict[str, set[asyncio.Queue]] = {}
+        self._all: set[asyncio.Queue] = set()
+        self._seq: dict[str, int] = {}
+        self._history: dict[str, deque[dict]] = {}
+        self._n = history
 
-    def subscribe(self, job_id: str) -> asyncio.Queue:
+    def subscribe(self, job_id: str, *, after: int | None = None) -> asyncio.Queue:
+        """Subscribe to one job; ``after=N`` first replays buffered events with id > N."""
         q: asyncio.Queue = asyncio.Queue()
         self._subs.setdefault(job_id, set()).add(q)
+        if after is not None:
+            for ev in self._history.get(job_id, ()):
+                if ev["id"] > after:
+                    q.put_nowait(ev)
         return q
 
     def unsubscribe(self, job_id: str, q: asyncio.Queue) -> None:
@@ -39,10 +55,27 @@ class Broker:
             if not subs:
                 self._subs.pop(job_id, None)
 
+    def subscribe_all(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue()
+        self._all.add(q)
+        return q
+
+    def unsubscribe_all(self, q: asyncio.Queue) -> None:
+        self._all.discard(q)
+
+    def last_id(self, job_id: str) -> int:
+        return self._seq.get(job_id, 0)
+
     def publish(self, job_id: str, event: dict) -> None:
-        """Fan an event out to every current subscriber (called on the loop thread)."""
+        """Stamp, buffer and fan an event out (called on the loop thread)."""
+        seq = self._seq.get(job_id, 0) + 1
+        self._seq[job_id] = seq
+        ev = {**event, "job_id": job_id, "id": seq}
+        self._history.setdefault(job_id, deque(maxlen=self._n)).append(ev)
         for q in list(self._subs.get(job_id, ())):
-            q.put_nowait(event)
+            q.put_nowait(ev)
+        for q in list(self._all):
+            q.put_nowait(ev)
 
 
 class JobManager:
@@ -104,9 +137,9 @@ class JobManager:
         self._spawn(self._execute(job, lambda o, j: o.approve(j, gate)))
         return job
 
-    def events(self, job_id: str) -> asyncio.Queue:
+    def events(self, job_id: str, *, after: int | None = None) -> asyncio.Queue:
         """Subscribe to a job's event stream (drain until a {'type': 'end'} event)."""
-        return self.broker.subscribe(job_id)
+        return self.broker.subscribe(job_id, after=after)
 
     def is_active(self, job_id: str) -> bool:
         """True while a run segment (run/approve) for this job is in flight."""

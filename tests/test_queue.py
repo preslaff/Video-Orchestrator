@@ -60,7 +60,8 @@ def test_broker_fans_out_and_unsubscribes():
         return got, q.empty()
 
     got, empty_after = asyncio.run(go())
-    assert got == {"a": 1} and empty_after is True
+    assert got["a"] == 1 and got["id"] == 1 and got["job_id"] == "j1"
+    assert empty_after is True
 
 
 def test_execute_streams_events_and_completes(tmp_path, make_store):
@@ -226,3 +227,54 @@ def test_approve_loads_and_runs(tmp_path, make_store):
     events, final = asyncio.run(go())
     assert any(e["type"] == "approved" and e["gate"] == "storyboard" for e in events)
     assert final is JobStatus.DONE
+
+
+# --- broker ids / replay / global --------------------------------------------
+
+
+def test_broker_ids_monotonic_per_job():
+    b = Broker()
+    b.publish("a", {"type": "x"})
+    b.publish("b", {"type": "x"})
+    b.publish("a", {"type": "y"})
+    assert (b.last_id("a"), b.last_id("b"), b.last_id("zzz")) == (2, 1, 0)
+
+
+def test_broker_replays_after_id():
+    async def go():
+        b = Broker()
+        for i in range(4):
+            b.publish("j", {"type": "status", "n": i})
+        q = b.subscribe("j", after=2)
+        replayed = [q.get_nowait()["id"] for _ in range(q.qsize())]
+        fresh = b.subscribe("j")  # no replay by default
+        return replayed, fresh.qsize()
+
+    replayed, fresh_size = asyncio.run(go())
+    assert replayed == [3, 4] and fresh_size == 0
+
+
+def test_broker_ring_buffer_bounded():
+    async def go():
+        b = Broker(history=3)
+        for i in range(10):
+            b.publish("j", {"type": "status", "n": i})
+        q = b.subscribe("j", after=0)
+        return [q.get_nowait()["id"] for _ in range(q.qsize())]
+
+    assert asyncio.run(go()) == [8, 9, 10]
+
+
+def test_broker_global_subscriber_sees_all_jobs():
+    async def go():
+        b = Broker()
+        g = b.subscribe_all()
+        b.publish("a", {"type": "x"})
+        b.publish("b", {"type": "y"})
+        got = [g.get_nowait()["job_id"] for _ in range(g.qsize())]
+        b.unsubscribe_all(g)
+        b.publish("a", {"type": "z"})
+        return got, g.qsize()
+
+    got, after = asyncio.run(go())
+    assert got == ["a", "b"] and after == 0
