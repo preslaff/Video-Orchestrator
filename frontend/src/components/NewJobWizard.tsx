@@ -105,9 +105,20 @@ export function NewJobWizard() {
             </select>
           </label>
           {project.data && (
-            <p className="mt-2 text-sm text-neutral-600">
-              default profile <b>{project.data.default_profile_id}</b> · master face {masterAsset ? <b>{masterAsset.name}</b> : <span className="text-amber-700">none</span>} · export → <code className="text-xs">{project.data.export_root_effective}</code>
-            </p>
+            <div className="mt-3 flex items-start gap-4">
+              {masterAsset ? (
+                // eslint-disable-next-line @next/next/no-img-element -- served by FastAPI
+                <img src={masterAsset.url} alt={masterAsset.label || masterAsset.name} className="h-24 w-24 rounded object-cover ring-1 ring-neutral-200" />
+              ) : (
+                <div className="flex h-24 w-24 items-center justify-center rounded bg-neutral-100 text-center text-xs text-neutral-400">no master face</div>
+              )}
+              <div className="text-sm text-neutral-600">
+                <p>default profile <b>{project.data.default_profile_id}</b></p>
+                <p>master face {masterAsset ? <b>{masterAsset.label || masterAsset.name}</b> : <span className="text-amber-700">none — add one under Setup → Projects, or paste a path in step 3</span>}</p>
+                <p>{refAssets.length} reference/product asset(s) for edit mode</p>
+                <p>export → <code className="text-xs">{project.data.export_root_effective}</code></p>
+              </div>
+            </div>
           )}
         </Card>
       )}
@@ -155,13 +166,33 @@ export function NewJobWizard() {
             {mode === 'edit' && (
               <div className="text-sm md:col-span-2">
                 <span className="font-medium">References (project assets)</span>
-                {refAssets.length === 0 ? <p className="text-amber-700">The selected project has no reference/product assets.</p> : (
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {refAssets.map((a) => (
-                      <label key={a.id} className="flex items-center gap-1 rounded border border-neutral-300 px-2 py-1">
-                        <input type="checkbox" checked={refIds.includes(a.id)} onChange={(e) => setRefIds(e.target.checked ? [...refIds, a.id] : refIds.filter((x) => x !== a.id))} /> {a.name} <span className="text-xs text-neutral-500">{a.kind}</span>
-                      </label>
-                    ))}
+                <span className="ml-2 text-xs text-neutral-500">{refIds.length} selected · order = click order; the first is the primary reference</span>
+                {!projectId && <p className="text-amber-700">Pick a project in step 1 to use its reference/product assets.</p>}
+                {projectId && refAssets.length === 0 && <p className="text-amber-700">The selected project has no reference/product assets — add some under Setup → Projects.</p>}
+                {refAssets.length > 0 && (
+                  <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                    {refAssets.map((a) => {
+                      const pos = refIds.indexOf(a.id)
+                      const selected = pos >= 0
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          data-testid={`ref-${a.id}`}
+                          aria-pressed={selected}
+                          onClick={() => setRefIds(selected ? refIds.filter((x) => x !== a.id) : [...refIds, a.id])}
+                          className={`group relative overflow-hidden rounded border text-left ${selected ? 'border-neutral-900 ring-2 ring-neutral-900' : 'border-neutral-200 hover:border-neutral-400'}`}
+                          title={a.label || a.name}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
+                          <img src={a.url} alt={a.label || a.name} className="aspect-square w-full bg-neutral-100 object-cover" />
+                          {selected && <span className="absolute left-1 top-1 rounded-full bg-neutral-900 px-1.5 text-xs font-semibold text-white">{pos + 1}</span>}
+                          <span className="block truncate px-1 py-0.5 text-xs text-neutral-700">
+                            <span className="rounded bg-neutral-100 px-1">{a.kind}</span> {a.label || a.name}
+                          </span>
+                        </button>
+                      )
+                    })}
                   </div>
                 )}
               </div>
