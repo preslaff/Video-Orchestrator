@@ -149,7 +149,8 @@ class JobManager:
         """Apply prompt/description edits to a paused job's scenes and persist them.
 
         Each edit is ``{"index": int, "description"?, "keyframe_prompt"?,
-        "animation_prompt"?}``. Only allowed while the job is **not** running
+        "animation_prompt"?, "keyframe_negative"?, "animation_negative"?,
+        "mode"?, "references"?}``. Only allowed while the job is **not** running
         (a run segment in flight would race the orchestrator's own writes).
         """
         if job_id in self._active:
@@ -162,7 +163,8 @@ class JobManager:
             scene = by_index.get(edit.get("index"))
             if scene is None:
                 continue
-            for field in ("description", "keyframe_prompt", "animation_prompt"):
+            for field in ("description", "keyframe_prompt", "animation_prompt",
+                          "keyframe_negative", "animation_negative", "mode", "references"):
                 if edit.get(field) is not None:
                     setattr(scene, field, edit[field])
         return self.store.save_job(job)

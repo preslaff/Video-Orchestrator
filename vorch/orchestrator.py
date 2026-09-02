@@ -89,6 +89,8 @@ class Orchestrator:
         style: str = "",
         master_face: str | Path = "",
         autonomy: str = "semi",
+        mode: str = "t2i",
+        reference_images: list[str] | None = None,
     ) -> Job:
         """Create and persist a fresh Job.
 
@@ -106,6 +108,15 @@ class Orchestrator:
             master_str = str(master)
         elif master_face:
             master_str = str(Path(master_face).expanduser())
+        refs = [str(Path(r).expanduser()) for r in (reference_images or [])]
+        if mode == "edit":
+            if not refs:
+                raise ValueError("mode='edit' needs at least one reference image")
+            for r in refs:
+                if not Path(r).is_file():
+                    raise FileNotFoundError(f"reference image not found: {r}")
+        elif mode != "t2i":
+            raise ValueError(f"unknown mode {mode!r} (t2i | edit)")
         job = new_job(
             idea=idea,
             style=style,
@@ -116,6 +127,8 @@ class Orchestrator:
             max_attempts=self.max_attempts,
             evaluate=self.evaluate,
             face_swap=self.face_swap,
+            mode=mode,
+            reference_images=refs,
         )
         return self.store.save_job(job)
 
@@ -177,6 +190,8 @@ class Orchestrator:
                     mood=brief.mood,
                     keyframe_prompt=kp.positive,
                     animation_prompt=ap.positive,
+                    mode=job.mode,
+                    references=list(job.reference_images) if job.mode == "edit" else [],
                 )
             )
         job.scenes = scenes
@@ -190,12 +205,17 @@ class Orchestrator:
         self._event(job, "storyboard", scenes=len(scenes))
 
     def _phase_keyframes(self, job: Job) -> None:
+        ref_cache: dict = {}  # reference path -> staged name (upload once per run)
         for scene in job.scenes:
             if scene.keyframe_path and scene.status is not SceneStatus.PENDING:
                 continue  # resume: already done
             log.info("job %s: keyframe scene %d", job.id, scene.index)
             provenance.set_context(scene=scene.index)
             seed = config.derive_seed(self.seed, scene=scene.index)
+            refs = (
+                pipeline.stage_references(scene.references, self.params, cache=ref_cache)
+                if scene.mode == "edit" else ()
+            )
             if self.evaluate:
                 def log_attempt(attempt, _path, verdict, _idx=scene.index):
                     # Every attempt -> decision log (DESIGN §8), not just the last.
@@ -208,12 +228,14 @@ class Orchestrator:
                     scene.keyframe_prompt, scene.keyframe_prompt,
                     seed=seed, max_attempts=self.max_attempts, on_attempt=log_attempt,
                     params=self.params, negative=scene.keyframe_negative or None,
+                    mode=scene.mode, references=refs,
                 )
                 scene.keyframe_verdict = verdict
             else:
-                path = pipeline.keyframe(
-                    scene.keyframe_prompt, seed=seed, negative=scene.keyframe_negative or None,
-                    **self.params.keyframe_kwargs(),
+                path, _ = pipeline._fresh_keyframe(
+                    scene.keyframe_prompt, seed=seed, evaluate=False, max_attempts=1,
+                    params=self.params, negative=scene.keyframe_negative or None,
+                    mode=scene.mode, references=refs,
                 )
                 self.store.log_decision(
                     Decision(job_id=job.id, scene_index=scene.index, phase="keyframe",

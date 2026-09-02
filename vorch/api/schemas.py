@@ -30,6 +30,10 @@ class SceneEdit(BaseModel):
     description: str | None = None
     keyframe_prompt: str | None = None
     animation_prompt: str | None = None
+    keyframe_negative: str | None = None
+    animation_negative: str | None = None
+    mode: Literal["t2i", "edit"] | None = None
+    references: list[str] | None = None
 
 
 class SceneEdits(BaseModel):
@@ -64,6 +68,10 @@ class ScenePublic(BaseModel):
     status: str
     keyframe_prompt: str = ""
     animation_prompt: str = ""
+    keyframe_negative: str = ""
+    animation_negative: str = ""
+    mode: str = "t2i"
+    references: list[str] = []
     keyframe_path: str | None = None
     keyframe_url: str | None = None
     keyframe_verdict: VerdictOut | None = None
@@ -86,6 +94,8 @@ class JobPublic(BaseModel):
     max_attempts: int
     evaluate: bool
     face_swap: bool
+    mode: str = "t2i"
+    reference_images: list[str] = []
     status: str
     created_at: str
     updated_at: str

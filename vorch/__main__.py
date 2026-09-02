@@ -83,6 +83,21 @@ def _cmd_animate(args) -> int:
     return 0
 
 
+def _cmd_edit(args) -> int:
+    from .pipeline import stage_references
+    from .steps.edit import edit
+
+    params = GenParams.for_aspect(args.aspect) if args.aspect else DEFAULT
+    names = stage_references(args.ref, params, fit=not args.no_fit)
+    kw = params.edit_kwargs()
+    kw["workflow"] = args.workflow
+    if args.negative is not None:
+        kw["negative"] = args.negative
+    path = edit(args.prompt, names, seed=args.seed, **kw)
+    print(path)
+    return 0
+
+
 def _cmd_faceswap(args) -> int:
     input_name = comfy.upload_image(args.input_image)
     source_name = comfy.upload_image(args.source_image)
@@ -480,6 +495,16 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("--aspect", default=None, help="16:9 | 9:16 | 1:1 | ... (overrides --width/--height)")
     an.add_argument("--workflow", default="animate", help="registry workflow name (kind animate)")
     an.set_defaults(func=_cmd_animate)
+
+    ed = sub.add_parser("edit", help="reference-locked keyframe (identity_edit / kv_edit)")
+    ed.add_argument("prompt")
+    ed.add_argument("--ref", action="append", required=True, help="reference image (repeatable)")
+    ed.add_argument("--workflow", default="identity_edit", help="registry workflow name (kind edit)")
+    ed.add_argument("--aspect", default=None, help="fit references + output to 16:9 | 9:16 | 1:1 ...")
+    ed.add_argument("--no-fit", action="store_true", help="stage references as-is")
+    ed.add_argument("--negative", default=None)
+    ed.add_argument("--seed", type=int, default=config.SEED_RANDOM)
+    ed.set_defaults(func=_cmd_edit)
 
     fs = sub.add_parser("faceswap", help="swap a source face onto an image")
     fs.add_argument("input_image", help="local path to the scene/frame")

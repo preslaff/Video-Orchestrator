@@ -23,7 +23,9 @@ from .clients import comfy
 from .evaluator import Verdict, evaluate_image
 from .genparams import DEFAULT, GenParams
 from .media import last_frame
+from .media import fit_image
 from .steps.animate import animate
+from .steps.edit import edit
 from .steps.faceswap import faceswap
 from .steps.keyframe import keyframe
 
@@ -43,6 +45,8 @@ class Scene:
     continuous: bool = False
     keyframe_negative: str | None = None   # overrides params.keyframe_negative
     animation_negative: str | None = None  # overrides params.animate_negative
+    mode: str = "t2i"                      # t2i | edit (reference-locked keyframe)
+    references: tuple[str, ...] = ()       # local image paths for mode="edit"
 
 
 @dataclass
@@ -53,6 +57,32 @@ class SceneResult:
     swapped: Path | None = None  # ReActor output (None when continuous + relock disabled)
     continued_from_previous: bool = False
     keyframe_verdict: Verdict | None = None
+
+
+def stage_references(
+    paths: Sequence[str | Path], params: GenParams = DEFAULT, *, fit: bool = True,
+    cache: dict | None = None,
+) -> list[str]:
+    """Fit each reference to the keyframe size (cover + crop) and stage it in ComfyUI input/.
+
+    Returns the staged names in order. ``cache`` (path -> name) lets a job upload
+    each reference once across scenes.
+    """
+    names: list[str] = []
+    for raw in paths:
+        key = str(raw)
+        if cache is not None and key in cache:
+            names.append(cache[key])
+            continue
+        src = Path(raw).expanduser()
+        if not src.is_file():
+            raise FileNotFoundError(f"reference image not found: {src}")
+        staged = fit_image(src, *params.keyframe_size) if fit else src
+        name = comfy.upload_image(staged)
+        if cache is not None:
+            cache[key] = name
+        names.append(name)
+    return names
 
 
 def swap_master_onto(
@@ -105,6 +135,8 @@ def generate_keyframe_evaluated(
     params: GenParams = DEFAULT,
     negative: str | None = None,
     filename_prefix: str | None = None,
+    mode: str = "t2i",
+    references: Sequence[str] = (),
 ) -> tuple[Path, Verdict]:
     """Generate a keyframe, evaluate it, and retry with the fix up to N times.
 
@@ -117,14 +149,14 @@ def generate_keyframe_evaluated(
     attempt_prompt = prompt
     kf_path: Path
     verdict: Verdict
-    kw = params.keyframe_kwargs()
-    if negative is not None:
-        kw["negative"] = negative
     for attempt in range(1, max_attempts + 1):
         # seed 0 = random (each retry differs); a fixed seed is bumped per attempt.
         attempt_seed = config.derive_seed(seed, attempt=attempt)
-        log.info("keyframe: attempt %d/%d (seed=%s)", attempt, max_attempts, attempt_seed)
-        kf_path = keyframe(attempt_prompt, seed=attempt_seed, filename_prefix=filename_prefix, **kw)
+        log.info("keyframe: attempt %d/%d (seed=%s, mode=%s)", attempt, max_attempts, attempt_seed, mode)
+        kf_path = _make_keyframe(
+            attempt_prompt, seed=attempt_seed, params=params, negative=negative,
+            filename_prefix=filename_prefix, mode=mode, references=references,
+        )
         verdict = evaluate_image(kf_path, task)
         if on_attempt is not None:
             on_attempt(attempt, kf_path, verdict)
@@ -136,6 +168,32 @@ def generate_keyframe_evaluated(
     return kf_path, verdict
 
 
+def _make_keyframe(
+    prompt: str,
+    *,
+    seed: int,
+    params: GenParams,
+    negative: str | None,
+    filename_prefix: str | None,
+    mode: str,
+    references: Sequence[str],
+) -> Path:
+    """One keyframe: text-to-image, or a reference-locked edit when ``mode == "edit"``."""
+    if mode == "edit":
+        if not references:
+            raise ValueError("mode='edit' needs staged reference images")
+        kw = params.edit_kwargs()
+        if negative is not None:
+            kw["negative"] = negative
+        return edit(prompt, list(references), seed=seed, filename_prefix=filename_prefix, **kw)
+    if mode != "t2i":
+        raise ValueError(f"unknown keyframe mode {mode!r} (t2i | edit)")
+    kw = params.keyframe_kwargs()
+    if negative is not None:
+        kw["negative"] = negative
+    return keyframe(prompt, seed=seed, filename_prefix=filename_prefix, **kw)
+
+
 def _fresh_keyframe(
     prompt: str,
     *,
@@ -145,18 +203,20 @@ def _fresh_keyframe(
     params: GenParams = DEFAULT,
     negative: str | None = None,
     filename_prefix: str | None = None,
+    mode: str = "t2i",
+    references: Sequence[str] = (),
 ) -> tuple[Path, Verdict | None]:
-    """Build a fresh Klein keyframe, optionally with the evaluate/retry loop."""
+    """Build a fresh keyframe (t2i or edit), optionally with the evaluate/retry loop."""
     if evaluate:
         return generate_keyframe_evaluated(
             prompt, prompt, seed=seed, max_attempts=max_attempts, params=params,
-            negative=negative, filename_prefix=filename_prefix,
+            negative=negative, filename_prefix=filename_prefix, mode=mode, references=references,
         )
-    kw = params.keyframe_kwargs()
-    if negative is not None:
-        kw["negative"] = negative
-    log.info("keyframe: generating %sx%s (seed=%s)", kw["width"], kw["height"], seed)
-    kf_path = keyframe(prompt, seed=seed, filename_prefix=filename_prefix, **kw)
+    log.info("keyframe: generating %sx%s (seed=%s, mode=%s)", *params.keyframe_size, seed, mode)
+    kf_path = _make_keyframe(
+        prompt, seed=seed, params=params, negative=negative, filename_prefix=filename_prefix,
+        mode=mode, references=references,
+    )
     log.info("keyframe: %s", kf_path)
     return kf_path, None
 
@@ -241,6 +301,7 @@ def run_sequence(
             raise FileNotFoundError(f"master face not found: {master_face}")
         master_name = comfy.upload_image(master_face)
     relock = relock_identity and face_swap
+    ref_cache: dict = {}
 
     results: list[SceneResult] = []
     prev_video: Path | None = None
@@ -261,9 +322,10 @@ def run_sequence(
                 start_image = frame
         else:
             log.info("scene %d/%d: fresh keyframe", i + 1, len(scenes))
+            refs = stage_references(scene.references, params, cache=ref_cache) if scene.mode == "edit" else ()
             kf_path, verdict = _fresh_keyframe(
                 scene.keyframe_prompt, seed=seed, evaluate=evaluate, max_attempts=max_attempts,
-                params=params, negative=scene.keyframe_negative,
+                params=params, negative=scene.keyframe_negative, mode=scene.mode, references=refs,
             )
             if face_swap:
                 swapped = swap_master_onto(kf_path, master_name, label=f"scene {i + 1} faceswap", params=params)

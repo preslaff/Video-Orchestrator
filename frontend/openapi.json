@@ -572,6 +572,19 @@
             "type": "boolean",
             "title": "Face Swap"
           },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "t2i"
+          },
+          "reference_images": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reference Images",
+            "default": []
+          },
           "status": {
             "type": "string",
             "title": "Status"
@@ -876,6 +889,57 @@
               }
             ],
             "title": "Animation Prompt"
+          },
+          "keyframe_negative": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keyframe Negative"
+          },
+          "animation_negative": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Animation Negative"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "t2i",
+                  "edit"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "references": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "References"
           }
         },
         "type": "object",
@@ -945,6 +1009,29 @@
             "type": "string",
             "title": "Animation Prompt",
             "default": ""
+          },
+          "keyframe_negative": {
+            "type": "string",
+            "title": "Keyframe Negative",
+            "default": ""
+          },
+          "animation_negative": {
+            "type": "string",
+            "title": "Animation Negative",
+            "default": ""
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "t2i"
+          },
+          "references": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "References",
+            "default": []
           },
           "keyframe_path": {
             "anyOf": [

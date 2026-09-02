@@ -78,6 +78,8 @@ class Scene:
     continuous: bool = False
     keyframe_prompt: str = ""
     keyframe_negative: str = ""       # per-scene negative (profile negative when empty)
+    mode: str = "t2i"                 # t2i | edit (reference-locked keyframe)
+    references: list[str] = field(default_factory=list)  # local paths for mode="edit"
     keyframe_path: str | None = None
     keyframe_verdict: Verdict | None = None
     animation_prompt: str = ""
@@ -103,6 +105,8 @@ class Job:
     max_attempts: int = 2
     evaluate: bool = True
     face_swap: bool = True
+    mode: str = "t2i"                        # default keyframe mode for new scenes
+    reference_images: list[str] = field(default_factory=list)
     status: JobStatus = JobStatus.PENDING
     scenes: list[Scene] = field(default_factory=list)
     created_at: str = ""
@@ -135,6 +139,8 @@ def new_job(
     max_attempts: int = 2,
     evaluate: bool = True,
     face_swap: bool = True,
+    mode: str = "t2i",
+    reference_images: list[str] | None = None,
     scenes: list[Scene] | None = None,
 ) -> Job:
     """Create a fresh Job with a generated id and creation timestamp."""
@@ -150,6 +156,8 @@ def new_job(
         max_attempts=max_attempts,
         evaluate=evaluate,
         face_swap=face_swap,
+        mode=mode,
+        reference_images=list(reference_images or []),
         scenes=scenes or [],
         created_at=ts,
         updated_at=ts,
@@ -177,6 +185,8 @@ def _scene_to_dict(s: Scene) -> dict:
         "continuous": s.continuous,
         "keyframe_prompt": s.keyframe_prompt,
         "keyframe_negative": s.keyframe_negative,
+        "mode": s.mode,
+        "references": list(s.references),
         "keyframe_path": s.keyframe_path,
         "keyframe_verdict": _verdict_to_dict(s.keyframe_verdict),
         "animation_prompt": s.animation_prompt,
@@ -199,6 +209,8 @@ def _scene_from_dict(d: dict) -> Scene:
         continuous=d.get("continuous", False),
         keyframe_prompt=d.get("keyframe_prompt", ""),
         keyframe_negative=d.get("keyframe_negative", ""),
+        mode=d.get("mode", "t2i"),
+        references=list(d.get("references", []) or []),
         keyframe_path=d.get("keyframe_path"),
         keyframe_verdict=_verdict_from_dict(d.get("keyframe_verdict")),
         animation_prompt=d.get("animation_prompt", ""),
@@ -223,6 +235,8 @@ def job_to_dict(job: Job) -> dict:
         "max_attempts": job.max_attempts,
         "evaluate": job.evaluate,
         "face_swap": job.face_swap,
+        "mode": job.mode,
+        "reference_images": list(job.reference_images),
         "status": job.status.value,
         "scenes": [_scene_to_dict(s) for s in job.scenes],
         "created_at": job.created_at,
@@ -242,6 +256,8 @@ def job_from_dict(d: dict) -> Job:
         max_attempts=d.get("max_attempts", 2),
         evaluate=d.get("evaluate", True),
         face_swap=d.get("face_swap", True),
+        mode=d.get("mode", "t2i"),
+        reference_images=list(d.get("reference_images", []) or []),
         status=JobStatus(d.get("status", "pending")),
         scenes=[_scene_from_dict(s) for s in d.get("scenes", [])],
         created_at=d.get("created_at", ""),
