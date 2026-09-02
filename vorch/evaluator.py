@@ -48,7 +48,7 @@ class Verdict(BaseModel):
         default=None,
         description="Does the image respect the requested delivery format/framing? null if not asked.",
     )
-    score: int = Field(ge=0, le=10, description="Overall quality 0-10.")
+    score: int = Field(ge=0, le=10, description="Overall quality 1-10 (10 = flawless, 5 = average). Never 0.")
     verdict: Literal["accept", "retry"]
     fix_suggestion: str = Field(default="", description="If retry: what to change in the prompt.")
 
@@ -104,7 +104,9 @@ def _user_prompt(task_description: str, *, orientation: str | None = None, frami
         f'Goal of the frame: "{task_description}"\n\n'
         "Evaluate it and return the JSON verdict. Set verdict to \"accept\" only if the "
         "action is correct, the right character is shown, and there are no artifacts; "
-        "otherwise \"retry\" with a concrete fix_suggestion for the prompt."
+        "otherwise \"retry\" with a concrete fix_suggestion for the prompt.\n"
+        "score: overall quality on a 1-10 scale (10 = flawless, 7 = usable, 5 = average, "
+        "1-3 = poor). Always give a score; never 0."
     )
     if orientation:
         text += (
@@ -117,12 +119,24 @@ def _user_prompt(task_description: str, *, orientation: str | None = None, frami
     return text
 
 
-def _response_format() -> dict:
-    """llama.cpp-compatible json_schema response_format derived from Verdict."""
-    return {
-        "type": "json_schema",
-        "json_schema": {"name": "verdict", "schema": Verdict.model_json_schema()},
-    }
+def _response_format(*, require_framing: bool = False) -> dict:
+    """llama.cpp-compatible json_schema response_format derived from Verdict.
+
+    The grammar lets the model omit optional fields, so when a framing judgement
+    is requested ``framing_ok`` is made a required boolean (no null branch);
+    ``score`` keeps its 0-10 bounds for validation but the prompt asks for 1-10.
+    """
+    schema = Verdict.model_json_schema()
+    if require_framing:
+        schema["properties"]["framing_ok"] = {
+            "type": "boolean",
+            "description": "Does the image respect the requested delivery format/framing?",
+        }
+        required = list(schema.get("required", []))
+        if "framing_ok" not in required:
+            required.append("framing_ok")
+        schema["required"] = required
+    return {"type": "json_schema", "json_schema": {"name": "verdict", "schema": schema}}
 
 
 def _parse_verdict(raw: str) -> Verdict:
@@ -152,6 +166,7 @@ def evaluate_image(
     return _evaluate(
         [image_path], _user_prompt(task_description, orientation=orientation, framing_hint=framing_hint),
         attempts=attempts, review_threshold=review_threshold, label=Path(image_path).name,
+        require_framing=orientation is not None,
     )
 
 
@@ -181,7 +196,7 @@ def evaluate_video(
         "frames; artifacts = morphing, warping or identity drift between frames."
     )
     return _evaluate(stills, prompt, attempts=attempts, review_threshold=review_threshold,
-                     label=Path(video_path).name)
+                     label=Path(video_path).name, require_framing=orientation is not None)
 
 
 def evaluate_media(path: str | Path, task_description: str, **kw) -> Verdict:
@@ -194,11 +209,13 @@ def evaluate_media(path: str | Path, task_description: str, **kw) -> Verdict:
 
 
 def _evaluate(
-    images: list, prompt: str, *, attempts: int, review_threshold: int, label: str
+    images: list, prompt: str, *, attempts: int, review_threshold: int, label: str,
+    require_framing: bool = False,
 ) -> Verdict:
     last_err: Exception | None = None
+    rf = _response_format(require_framing=require_framing)
     for attempt in range(1, attempts + 1):
-        raw = gemma.complete_vision(SYSTEM, prompt, images, response_format=_response_format())
+        raw = gemma.complete_vision(SYSTEM, prompt, images, response_format=rf)
         try:
             verdict = _parse_verdict(raw)
             verdict._review_threshold = review_threshold

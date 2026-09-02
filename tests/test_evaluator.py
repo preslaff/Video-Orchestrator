@@ -197,3 +197,27 @@ def test_evaluate_video_samples_frames_and_judges_clip(monkeypatch, tmp_path):
     v = evaluator.evaluate_video(tmp_path / "c.mp4", "she waves", frames=3)
     assert v.decision == "accept" and seen["images"] == stills
     assert "3 images are frames" in seen["user"] and "morphing" in seen["user"]
+
+
+def test_response_format_requires_framing_when_asked():
+    rf = evaluator._response_format()
+    assert "framing_ok" not in rf["json_schema"]["schema"].get("required", [])
+    rf = evaluator._response_format(require_framing=True)
+    schema = rf["json_schema"]["schema"]
+    assert schema["properties"]["framing_ok"] == {"type": "boolean", "description": schema["properties"]["framing_ok"]["description"]}
+    assert "framing_ok" in schema["required"] and "score" in schema["required"]
+
+
+def test_user_prompt_explains_the_score_scale(monkeypatch):
+    seen = {}
+
+    def fake(system, user, images, response_format=None, **kw):
+        seen["user"], seen["rf"] = user, response_format
+        return ACCEPT_JSON
+
+    monkeypatch.setattr(evaluator.gemma, "complete_vision", fake)
+    evaluate_image("k.png", "task", orientation="square")
+    assert "1-10 scale" in seen["user"] and "never 0" in seen["user"]
+    assert "framing_ok" in seen["rf"]["json_schema"]["schema"]["required"]
+    evaluate_image("k.png", "task")
+    assert "framing_ok" not in seen["rf"]["json_schema"]["schema"].get("required", [])
