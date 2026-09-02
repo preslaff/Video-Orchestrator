@@ -30,15 +30,21 @@ class FakeOrch:
 
 
 @pytest.fixture
-def client(tmp_path, make_store):
+def client(tmp_path, make_store, monkeypatch):
+    from vorch import config
+
     store = make_store()
     manager = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
-    app = create_app(store=store, manager=manager)
+    media = tmp_path / "media"
+    media.mkdir()
+    monkeypatch.setattr(config, "COMFY_OUTPUT", media)
+    app = create_app(store=store, manager=manager, media_dir=media)
     master = tmp_path / "m.jpg"
     master.write_bytes(b"\xff\xd8\xff")
     with TestClient(app) as c:
         c.master = str(master)  # stash for tests
         c.store = store
+        c.media = media
         yield c
 
 
@@ -223,3 +229,39 @@ def test_provenance_endpoint(client, tmp_path, monkeypatch):
     rows = client.get(f"/api/jobs/{job.id}/provenance").json()
     assert [(r["kind"], r["has_manifest"]) for r in rows] == [("keyframe", True), ("swapped", False)]
     assert rows[0]["seed"] == 42 and rows[0]["prompt"] == "a cat" and rows[0]["url"] == "/media/k.png"
+
+
+# --- commit 3: /media static mount --------------------------------------------
+
+
+def test_media_serves_file_with_mime(client):
+    (client.media / "k.png").write_bytes(b"\x89PNG\r\n")
+    r = client.get("/media/k.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    (client.media / "video").mkdir()
+    (client.media / "video" / "c.mp4").write_bytes(b"\x00" * 16)
+    r = client.get("/media/video/c.mp4")
+    assert r.status_code == 200 and r.headers["content-type"] == "video/mp4"
+
+
+def test_media_traversal_rejected(client, tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("nope")
+    for path in ("/media/../secret.txt", "/media/%2e%2e/secret.txt", "/media/..%2fsecret.txt"):
+        r = client.get(path)
+        assert r.status_code == 404, path
+        assert "nope" not in r.text
+
+
+def test_media_range_request_206(client):
+    (client.media / "c.mp4").write_bytes(bytes(range(64)))
+    r = client.get("/media/c.mp4", headers={"Range": "bytes=8-15"})
+    assert r.status_code == 206
+    assert r.content == bytes(range(8, 16))
+    assert r.headers["content-range"] == "bytes 8-15/64"
+    assert client.get("/media/c.mp4").headers["accept-ranges"] == "bytes"
+
+
+def test_media_missing_is_404(client):
+    assert client.get("/media/does-not-exist.png").status_code == 404
