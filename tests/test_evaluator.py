@@ -125,7 +125,7 @@ def test_keyframe_retry_loop_feeds_fix_then_accepts(monkeypatch):
 
     seen_prompts = []
 
-    def fake_keyframe(prompt, *, seed):
+    def fake_keyframe(prompt, *, seed, **kw):
         seen_prompts.append(prompt)
         return f"kf_{len(seen_prompts)}.png"
 

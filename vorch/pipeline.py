@@ -21,6 +21,7 @@ from pathlib import Path
 from . import config, vram
 from .clients import comfy
 from .evaluator import Verdict, evaluate_image
+from .genparams import DEFAULT, GenParams
 from .media import last_frame
 from .steps.animate import animate
 from .steps.faceswap import faceswap
@@ -40,6 +41,8 @@ class Scene:
     keyframe_prompt: str
     animation_prompt: str
     continuous: bool = False
+    keyframe_negative: str | None = None   # overrides params.keyframe_negative
+    animation_negative: str | None = None  # overrides params.animate_negative
 
 
 @dataclass
@@ -52,26 +55,42 @@ class SceneResult:
     keyframe_verdict: Verdict | None = None
 
 
-def swap_master_onto(frame_path: Path, master_name: str, *, label: str = "faceswap") -> Path:
+def swap_master_onto(
+    frame_path: Path, master_name: str, *, label: str = "faceswap", params: GenParams = DEFAULT,
+    filename_prefix: str | None = None,
+) -> Path:
     """Stage ``frame_path`` and impose the (already-staged) master face onto it."""
     frame_name = comfy.upload_image(frame_path)
     log.info("%s: imposing master face", label)
-    swapped = faceswap(frame_name, master_name)
+    swapped = faceswap(frame_name, master_name, filename_prefix=filename_prefix, **params.faceswap_kwargs())
     log.info("%s: %s", label, swapped)
     return swapped
 
 
-def animate_frame(frame_path: Path, animation_prompt: str, *, seed: int) -> Path:
+def animate_frame(
+    frame_path: Path,
+    animation_prompt: str,
+    *,
+    seed: int,
+    params: GenParams = DEFAULT,
+    negative: str | None = None,
+    filename_prefix: str | None = None,
+) -> Path:
     """Stage ``frame_path``, reclaim VRAM, and animate it into a clip.
 
     Wan (dual-model) is the heaviest step, so reclaim ComfyUI VRAM at this phase
-    boundary and confirm headroom before dispatching (NOTES.md §4).
+    boundary and confirm headroom before dispatching (NOTES.md §4). Size, length
+    and fps come from ``params`` (the job's profile).
     """
     frame_name = comfy.upload_image(frame_path)
     vram.reclaim()  # Klein/ReActor -> Wan boundary: free everything first
     vram.log_state("before Wan")
-    log.info("animate: %s frames @ %sfps", config.WAN_LENGTH, config.WAN_FPS)
-    video_path = animate(frame_name, animation_prompt, seed=seed)
+    kw = params.animate_kwargs()
+    if negative is not None:
+        kw["negative"] = negative
+    log.info("animate: %sx%s, %s frames @ %sfps (%ss)", kw["width"], kw["height"],
+             kw["length"], kw["fps"], params.clip_seconds)
+    video_path = animate(frame_name, animation_prompt, seed=seed, filename_prefix=filename_prefix, **kw)
     log.info("animate: %s", video_path)
     return video_path
 
@@ -83,6 +102,9 @@ def generate_keyframe_evaluated(
     seed: int = config.SEED_RANDOM,
     max_attempts: int = 2,
     on_attempt: Callable[[int, Path, Verdict], None] | None = None,
+    params: GenParams = DEFAULT,
+    negative: str | None = None,
+    filename_prefix: str | None = None,
 ) -> tuple[Path, Verdict]:
     """Generate a keyframe, evaluate it, and retry with the fix up to N times.
 
@@ -95,11 +117,14 @@ def generate_keyframe_evaluated(
     attempt_prompt = prompt
     kf_path: Path
     verdict: Verdict
+    kw = params.keyframe_kwargs()
+    if negative is not None:
+        kw["negative"] = negative
     for attempt in range(1, max_attempts + 1):
         # seed 0 = random (each retry differs); a fixed seed is bumped per attempt.
-        attempt_seed = seed if seed == config.SEED_RANDOM else seed + attempt - 1
+        attempt_seed = config.derive_seed(seed, attempt=attempt)
         log.info("keyframe: attempt %d/%d (seed=%s)", attempt, max_attempts, attempt_seed)
-        kf_path = keyframe(attempt_prompt, seed=attempt_seed)
+        kf_path = keyframe(attempt_prompt, seed=attempt_seed, filename_prefix=filename_prefix, **kw)
         verdict = evaluate_image(kf_path, task)
         if on_attempt is not None:
             on_attempt(attempt, kf_path, verdict)
@@ -117,12 +142,21 @@ def _fresh_keyframe(
     seed: int,
     evaluate: bool,
     max_attempts: int,
+    params: GenParams = DEFAULT,
+    negative: str | None = None,
+    filename_prefix: str | None = None,
 ) -> tuple[Path, Verdict | None]:
     """Build a fresh Klein keyframe, optionally with the evaluate/retry loop."""
     if evaluate:
-        return generate_keyframe_evaluated(prompt, prompt, seed=seed, max_attempts=max_attempts)
-    log.info("keyframe: generating (seed=%s)", seed)
-    kf_path = keyframe(prompt, seed=seed)
+        return generate_keyframe_evaluated(
+            prompt, prompt, seed=seed, max_attempts=max_attempts, params=params,
+            negative=negative, filename_prefix=filename_prefix,
+        )
+    kw = params.keyframe_kwargs()
+    if negative is not None:
+        kw["negative"] = negative
+    log.info("keyframe: generating %sx%s (seed=%s)", kw["width"], kw["height"], seed)
+    kf_path = keyframe(prompt, seed=seed, filename_prefix=filename_prefix, **kw)
     log.info("keyframe: %s", kf_path)
     return kf_path, None
 
@@ -137,6 +171,7 @@ def run_scene(
     task: str | None = None,
     max_attempts: int = 2,
     face_swap: bool = True,
+    params: GenParams = DEFAULT,
 ) -> SceneResult:
     """Run one scene through the full chain and return the artifact paths.
 
@@ -154,15 +189,16 @@ def run_scene(
 
     if evaluate:
         kf_path, verdict = generate_keyframe_evaluated(
-            keyframe_prompt, task or keyframe_prompt, seed=seed, max_attempts=max_attempts
+            keyframe_prompt, task or keyframe_prompt, seed=seed, max_attempts=max_attempts,
+            params=params,
         )
     else:
         kf_path, verdict = _fresh_keyframe(
-            keyframe_prompt, seed=seed, evaluate=False, max_attempts=max_attempts
+            keyframe_prompt, seed=seed, evaluate=False, max_attempts=max_attempts, params=params
         )
 
-    swapped_path = swap_master_onto(kf_path, master_name) if face_swap else None
-    video_path = animate_frame(swapped_path or kf_path, animation_prompt, seed=seed)
+    swapped_path = swap_master_onto(kf_path, master_name, params=params) if face_swap else None
+    video_path = animate_frame(swapped_path or kf_path, animation_prompt, seed=seed, params=params)
 
     return SceneResult(
         video=video_path,
@@ -183,6 +219,7 @@ def run_sequence(
     relock_identity: bool = True,
     max_attempts: int = 2,
     face_swap: bool = True,
+    params: GenParams = DEFAULT,
 ) -> list[SceneResult]:
     """Run a sequence of scenes, chaining continuity where requested.
 
@@ -217,7 +254,7 @@ def run_sequence(
             kf_path = None
             verdict = None
             if relock:
-                swapped = swap_master_onto(frame, master_name, label=f"scene {i + 1} relock")
+                swapped = swap_master_onto(frame, master_name, label=f"scene {i + 1} relock", params=params)
                 start_image = swapped
             else:
                 swapped = None
@@ -225,16 +262,20 @@ def run_sequence(
         else:
             log.info("scene %d/%d: fresh keyframe", i + 1, len(scenes))
             kf_path, verdict = _fresh_keyframe(
-                scene.keyframe_prompt, seed=seed, evaluate=evaluate, max_attempts=max_attempts
+                scene.keyframe_prompt, seed=seed, evaluate=evaluate, max_attempts=max_attempts,
+                params=params, negative=scene.keyframe_negative,
             )
             if face_swap:
-                swapped = swap_master_onto(kf_path, master_name, label=f"scene {i + 1} faceswap")
+                swapped = swap_master_onto(kf_path, master_name, label=f"scene {i + 1} faceswap", params=params)
                 start_image = swapped
             else:
                 swapped = None
                 start_image = kf_path
 
-        video_path = animate_frame(start_image, scene.animation_prompt, seed=seed)
+        video_path = animate_frame(
+            start_image, scene.animation_prompt, seed=seed, params=params,
+            negative=scene.animation_negative,
+        )
         results.append(
             SceneResult(
                 video=video_path,

@@ -50,14 +50,14 @@ def wired(monkeypatch, tmp_path, make_store):
         storyboard, "animation_prompt", lambda b: PromptPair(positive=f"an::{b.description}")
     )
 
-    def fake_kf_eval(prompt, task, *, seed, max_attempts, on_attempt=None):
+    def fake_kf_eval(prompt, task, *, seed, max_attempts, on_attempt=None, **kw):
         calls["keyframe"] += 1
         path, v = f"/kf/{calls['keyframe']}.png", _verdict()
         if on_attempt:
             on_attempt(1, path, v)
         return path, v
 
-    def fake_kf(prompt, *, seed):
+    def fake_kf(prompt, *, seed, **kw):
         calls["keyframe"] += 1
         return f"/kf/{calls['keyframe']}.png"
 
@@ -65,7 +65,7 @@ def wired(monkeypatch, tmp_path, make_store):
         calls["swap"] += 1
         return f"/swap/{calls['swap']}.png"
 
-    def fake_animate(frame, prompt, *, seed):
+    def fake_animate(frame, prompt, *, seed, **kw):
         calls["animate"] += 1
         return f"/video/{calls['animate']}.mp4"
 
@@ -184,7 +184,7 @@ def test_low_score_accept_logs_review_flag(wired, monkeypatch):
     """An objectively-accepted keyframe with a low score gets a 'review' flag."""
     store, master, _ = wired
 
-    def low_score(prompt, task, *, seed, max_attempts, on_attempt=None):
+    def low_score(prompt, task, *, seed, max_attempts, on_attempt=None, **kw):
         path, v = "/kf/x.png", _verdict(score=1)  # objective accept, advisory score low
         if on_attempt:
             on_attempt(1, path, v)
@@ -217,7 +217,7 @@ def test_every_keyframe_attempt_is_logged(wired, monkeypatch):
     """A retry-then-accept keyframe logs both attempts to the decision log."""
     store, master, _ = wired
 
-    def retry_then_accept(prompt, task, *, seed, max_attempts, on_attempt=None):
+    def retry_then_accept(prompt, task, *, seed, max_attempts, on_attempt=None, **kw):
         on_attempt(1, "/kf/a.png", _verdict_retry())
         on_attempt(2, "/kf/b.png", _verdict(score=8))
         return "/kf/b.png", _verdict(score=8)

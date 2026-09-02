@@ -77,9 +77,11 @@ class Scene:
     mood: str = ""
     continuous: bool = False
     keyframe_prompt: str = ""
+    keyframe_negative: str = ""       # per-scene negative (profile negative when empty)
     keyframe_path: str | None = None
     keyframe_verdict: Verdict | None = None
     animation_prompt: str = ""
+    animation_negative: str = ""
     video_path: str | None = None
     video_verdict: Verdict | None = None
     swapped_path: str | None = None
@@ -174,9 +176,11 @@ def _scene_to_dict(s: Scene) -> dict:
         "mood": s.mood,
         "continuous": s.continuous,
         "keyframe_prompt": s.keyframe_prompt,
+        "keyframe_negative": s.keyframe_negative,
         "keyframe_path": s.keyframe_path,
         "keyframe_verdict": _verdict_to_dict(s.keyframe_verdict),
         "animation_prompt": s.animation_prompt,
+        "animation_negative": s.animation_negative,
         "video_path": s.video_path,
         "video_verdict": _verdict_to_dict(s.video_verdict),
         "swapped_path": s.swapped_path,
@@ -194,9 +198,11 @@ def _scene_from_dict(d: dict) -> Scene:
         mood=d.get("mood", ""),
         continuous=d.get("continuous", False),
         keyframe_prompt=d.get("keyframe_prompt", ""),
+        keyframe_negative=d.get("keyframe_negative", ""),
         keyframe_path=d.get("keyframe_path"),
         keyframe_verdict=_verdict_from_dict(d.get("keyframe_verdict")),
         animation_prompt=d.get("animation_prompt", ""),
+        animation_negative=d.get("animation_negative", ""),
         video_path=d.get("video_path"),
         video_verdict=_verdict_from_dict(d.get("video_verdict")),
         swapped_path=d.get("swapped_path"),

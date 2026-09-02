@@ -19,7 +19,7 @@ import logging
 import sys
 from pathlib import Path
 
-from . import config, provenance
+from . import config, formats, provenance
 from .clients import comfy
 from .clients.gemma import GemmaError
 from .evaluator import EvaluationError, evaluate_image
@@ -27,6 +27,7 @@ from .media import MediaError
 from .orchestrator import GATE_KEYFRAMES, GATE_STORYBOARD, Orchestrator
 from .pipeline import Scene, run_scene, run_sequence
 from .db import DatabaseUnavailable
+from .genparams import DEFAULT, GenParams
 from .state import JobStatus, Store
 from .steps.animate import animate
 from .steps.faceswap import faceswap
@@ -36,15 +37,31 @@ from .storyboard import StoryboardError
 GATES = {GATE_STORYBOARD, GATE_KEYFRAMES}
 
 
+def _params_from_args(args) -> GenParams:
+    """GenParams for the scene/sequence commands: --aspect picks sizes, --length/--fps override."""
+    aspect = getattr(args, "aspect", None) or DEFAULT.aspect
+    overrides = {}
+    if getattr(args, "length", None):
+        overrides["length"] = args.length
+    if getattr(args, "fps", None):
+        overrides["fps"] = args.fps
+    return GenParams.for_aspect(aspect, **overrides)
+
+
 def _cmd_keyframe(args) -> int:
+    width, height = args.width, args.height
+    if args.aspect:
+        width, height = formats.keyframe_size(args.aspect)
     path = keyframe(
         args.prompt,
-        width=args.width,
-        height=args.height,
+        workflow=args.workflow,
+        width=width,
+        height=height,
         steps=args.steps,
         cfg=args.cfg,
         seed=args.seed,
         unet=args.unet,
+        negative=args.negative,
     )
     print(path)
     return 0
@@ -52,7 +69,16 @@ def _cmd_keyframe(args) -> int:
 
 def _cmd_animate(args) -> int:
     name = comfy.upload_image(args.image)
-    path = animate(name, args.prompt, length=args.length, fps=args.fps, seed=args.seed)
+    width, height = args.width, args.height
+    if args.aspect:
+        width, height = formats.wan_size(args.aspect)
+    kw = {}
+    if args.negative is not None:
+        kw["negative"] = args.negative
+    path = animate(
+        name, args.prompt, workflow=args.workflow, width=width, height=height,
+        length=args.length, fps=args.fps, seed=args.seed, **kw,
+    )
     print(path)
     return 0
 
@@ -60,7 +86,7 @@ def _cmd_animate(args) -> int:
 def _cmd_faceswap(args) -> int:
     input_name = comfy.upload_image(args.input_image)
     source_name = comfy.upload_image(args.source_image)
-    path = faceswap(input_name, source_name, restore_model=args.restore_model)
+    path = faceswap(input_name, source_name, workflow=args.workflow, restore_model=args.restore_model)
     print(path)
     return 0
 
@@ -86,6 +112,7 @@ def _cmd_run_scene(args) -> int:
         task=args.task,
         max_attempts=args.max_attempts,
         face_swap=not args.no_face_swap,
+        params=_params_from_args(args),
     )
     print(f"keyframe: {result.keyframe}")
     print(f"swapped:  {result.swapped}")
@@ -137,6 +164,7 @@ def _cmd_run_sequence(args) -> int:
         relock_identity=not args.no_relock,
         max_attempts=args.max_attempts,
         face_swap=not args.no_face_swap,
+        params=_params_from_args(args),
     )
     for i, r in enumerate(results):
         tag = "continuous" if r.continued_from_previous else "fresh"
@@ -435,6 +463,9 @@ def build_parser() -> argparse.ArgumentParser:
     kf.add_argument("--cfg", type=float, default=config.KEYFRAME_CFG)
     kf.add_argument("--seed", type=int, default=config.SEED_RANDOM)
     kf.add_argument("--unet", default=None, help="override the diffusion model name")
+    kf.add_argument("--negative", default=None)
+    kf.add_argument("--aspect", default=None, help="16:9 | 9:16 | 1:1 | ... (overrides --width/--height)")
+    kf.add_argument("--workflow", default="keyframe", help="registry workflow name (kind keyframe)")
     kf.set_defaults(func=_cmd_keyframe)
 
     an = sub.add_parser("animate", help="animate a keyframe into a video")
@@ -443,12 +474,18 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("--length", type=int, default=config.WAN_LENGTH, help="frames (4n+1)")
     an.add_argument("--fps", type=int, default=config.WAN_FPS)
     an.add_argument("--seed", type=int, default=config.SEED_RANDOM)
+    an.add_argument("--width", type=int, default=config.WAN_WIDTH)
+    an.add_argument("--height", type=int, default=config.WAN_HEIGHT)
+    an.add_argument("--negative", default=None)
+    an.add_argument("--aspect", default=None, help="16:9 | 9:16 | 1:1 | ... (overrides --width/--height)")
+    an.add_argument("--workflow", default="animate", help="registry workflow name (kind animate)")
     an.set_defaults(func=_cmd_animate)
 
     fs = sub.add_parser("faceswap", help="swap a source face onto an image")
     fs.add_argument("input_image", help="local path to the scene/frame")
     fs.add_argument("source_image", help="local path to the master face")
     fs.add_argument("--restore-model", default=config.REACTOR_RESTORE_MODEL)
+    fs.add_argument("--workflow", default="faceswap", help="registry workflow name (kind faceswap)")
     fs.set_defaults(func=_cmd_faceswap)
 
     ev = sub.add_parser("evaluate", help="score an image against a task (Gemma vision)")
@@ -465,6 +502,9 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--evaluate", action="store_true", help="judge + retry the keyframe")
     rs.add_argument("--task", default=None, help="eval intent (defaults to keyframe prompt)")
     rs.add_argument("--max-attempts", type=int, default=2)
+    rs.add_argument("--aspect", default=None, help="16:9 | 9:16 | 1:1 | ... (default 16:9)")
+    rs.add_argument("--length", type=int, default=None, help="Wan frames (4n+1)")
+    rs.add_argument("--fps", type=int, default=None)
     rs.set_defaults(func=_cmd_run_scene)
 
     rq = sub.add_parser("run-sequence", help="chain scenes with last-frame continuity")
@@ -475,6 +515,9 @@ def build_parser() -> argparse.ArgumentParser:
     rq.add_argument("--evaluate", action="store_true", help="judge + retry fresh keyframes")
     rq.add_argument("--no-relock", action="store_true", help="don't re-swap master onto carried frames")
     rq.add_argument("--max-attempts", type=int, default=2)
+    rq.add_argument("--aspect", default=None, help="16:9 | 9:16 | 1:1 | ... (default 16:9)")
+    rq.add_argument("--length", type=int, default=None, help="Wan frames (4n+1)")
+    rq.add_argument("--fps", type=int, default=None)
     rq.set_defaults(func=_cmd_run_sequence)
 
     rn = sub.add_parser("run", help="drive a full job from a YAML spec (storyboard -> clips)")

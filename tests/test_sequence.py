@@ -29,7 +29,7 @@ def recorder(monkeypatch):
     """Monkeypatch the pipeline's step/staging seams and record every call."""
     calls = {"keyframe": [], "faceswap": [], "animate": [], "last_frame": [], "upload": []}
 
-    def fake_keyframe(prompt, *, seed=0):
+    def fake_keyframe(prompt, *, seed=0, **kw):
         calls["keyframe"].append(prompt)
         return f"kf_{len(calls['keyframe'])}.png"
 

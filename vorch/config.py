@@ -61,6 +61,19 @@ def resolve_seed(seed: int) -> int:
     return seed if seed != SEED_RANDOM else random.randint(_SEED_MIN, _SEED_MAX)
 
 
+def derive_seed(base: int, *, scene: int = 0, variant: int = 0, attempt: int = 1) -> int:
+    """Per-scene / per-variant / per-attempt seed from a job's base seed.
+
+    A random base stays random (each generation materializes its own seed, which
+    the manifest records); a fixed base is offset deterministically so every
+    scene, variant and retry differs yet reproduces: scene 0 / variant 0 /
+    attempt 1 is the base itself.
+    """
+    if base == SEED_RANDOM:
+        return SEED_RANDOM
+    return base + scene * 10_000 + variant * 100 + (attempt - 1)
+
+
 # --- VRAM (16GB ceiling; Option B = Gemma on CPU, ComfyUI owns the GPU) -------
 # Reclaim ComfyUI VRAM before a heavy step if free falls below the guard.
 VRAM_GUARD_MB = int(os.environ.get("VORCH_VRAM_GUARD_MB", "10000"))

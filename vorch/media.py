@@ -69,3 +69,25 @@ def last_frame(video_path: str | Path, dest: str | Path | None = None) -> Path:
         raise MediaError(f"ffmpeg produced no frame for {video_path}")
     log.info("last frame: %s -> %s", video_path, dest)
     return dest
+
+
+def fit_image(src: str | Path, width: int, height: int, dest: str | Path | None = None) -> Path:
+    """Cover-fit ``src`` to exactly ``width``x``height`` (scale up/down, centre crop).
+
+    Used for edit references so a reference-driven workflow (KV-edit derives its
+    output size from the first reference) produces the profile's format.
+    ``dest`` defaults to ``<src>_<W>x<H>.png`` beside the source.
+    """
+    src = Path(src).expanduser()
+    if not src.is_file():
+        raise FileNotFoundError(f"image not found: {src}")
+    dest = Path(dest) if dest is not None else src.with_name(f"{src.stem}_{width}x{height}.png")
+    vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+    cmd = ["ffmpeg", "-y", "-i", str(src), "-vf", vf, "-frames:v", "1", str(dest)]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        raise MediaError(f"ffmpeg failed to fit {src} to {width}x{height}: {e}") from e
+    if not dest.is_file():
+        raise MediaError(f"ffmpeg produced no image for {src}")
+    return dest

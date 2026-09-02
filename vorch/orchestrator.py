@@ -24,8 +24,9 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from . import config, evaluator, pipeline, storyboard
+from . import config, evaluator, pipeline, provenance, storyboard
 from .clients import comfy
+from .genparams import DEFAULT, GenParams
 from .state import Decision, Job, JobStatus, Scene, SceneStatus, Store, new_job
 
 log = logging.getLogger("vorch.orchestrator")
@@ -46,6 +47,7 @@ class Orchestrator:
         max_attempts: int = 2,
         evaluate: bool = True,
         face_swap: bool = True,
+        params: GenParams | None = None,
     ):
         self.store = store
         self.n_scenes = n_scenes
@@ -53,6 +55,9 @@ class Orchestrator:
         self.max_attempts = max_attempts
         self.evaluate = evaluate
         self.face_swap = face_swap
+        # Generation settings (sizes, length, fps, negatives, workflow names);
+        # DEFAULT reproduces the pre-profile constants.
+        self.params = params or DEFAULT
         # Progress sink for live UIs (set by queue.py). No-op by default so the
         # CLI path is unaffected. Each event is a small JSON-able dict.
         self.emit: Callable[[dict], None] = lambda event: None
@@ -63,6 +68,8 @@ class Orchestrator:
     @classmethod
     def from_job(cls, store: Store, job: Job) -> "Orchestrator":
         """Rebuild an Orchestrator from a job's persisted run-config (for resume)."""
+        snapshot = getattr(job, "profile", None)
+        params = GenParams.from_profile(snapshot) if snapshot else None
         return cls(
             store,
             n_scenes=job.n_scenes,
@@ -70,6 +77,7 @@ class Orchestrator:
             max_attempts=job.max_attempts,
             evaluate=job.evaluate,
             face_swap=job.face_swap,
+            params=params,
         )
 
     # -- job lifecycle --
@@ -113,6 +121,13 @@ class Orchestrator:
 
     def run(self, job: Job) -> Job:
         """Advance the job as far as autonomy allows; pause at unapproved gates."""
+        token = provenance.set_context(job_id=job.id, profile=self.params.profile_name or None)
+        try:
+            return self._run(job)
+        finally:
+            provenance.reset_context(token)
+
+    def _run(self, job: Job) -> Job:
         job.status = JobStatus.RUNNING
         self.store.save_job(job)
         self._event(job, "status", status=job.status.value)
@@ -179,6 +194,8 @@ class Orchestrator:
             if scene.keyframe_path and scene.status is not SceneStatus.PENDING:
                 continue  # resume: already done
             log.info("job %s: keyframe scene %d", job.id, scene.index)
+            provenance.set_context(scene=scene.index)
+            seed = config.derive_seed(self.seed, scene=scene.index)
             if self.evaluate:
                 def log_attempt(attempt, _path, verdict, _idx=scene.index):
                     # Every attempt -> decision log (DESIGN §8), not just the last.
@@ -189,11 +206,15 @@ class Orchestrator:
 
                 path, verdict = pipeline.generate_keyframe_evaluated(
                     scene.keyframe_prompt, scene.keyframe_prompt,
-                    seed=self.seed, max_attempts=self.max_attempts, on_attempt=log_attempt,
+                    seed=seed, max_attempts=self.max_attempts, on_attempt=log_attempt,
+                    params=self.params, negative=scene.keyframe_negative or None,
                 )
                 scene.keyframe_verdict = verdict
             else:
-                path = pipeline.keyframe(scene.keyframe_prompt, seed=self.seed)
+                path = pipeline.keyframe(
+                    scene.keyframe_prompt, seed=seed, negative=scene.keyframe_negative or None,
+                    **self.params.keyframe_kwargs(),
+                )
                 self.store.log_decision(
                     Decision(job_id=job.id, scene_index=scene.index, phase="keyframe",
                              attempt=1, action="generated")
@@ -231,9 +252,10 @@ class Orchestrator:
             if not scene.keyframe_path:
                 log.warning("job %s: scene %d has no keyframe; skipping", job.id, scene.index)
                 continue
+            provenance.set_context(scene=scene.index)
             if do_swap:
                 log.info("job %s: video scene %d (swap -> animate)", job.id, scene.index)
-                swapped = pipeline.swap_master_onto(scene.keyframe_path, master_name)
+                swapped = pipeline.swap_master_onto(scene.keyframe_path, master_name, params=self.params)
                 scene.swapped_path = str(swapped)
                 scene.status = SceneStatus.SWAP
                 self.store.save_job(job)
@@ -242,7 +264,10 @@ class Orchestrator:
                 log.info("job %s: video scene %d (animate keyframe, no swap)", job.id, scene.index)
                 frame = scene.keyframe_path
 
-            video = pipeline.animate_frame(frame, scene.animation_prompt, seed=self.seed)
+            video = pipeline.animate_frame(
+                frame, scene.animation_prompt, seed=config.derive_seed(self.seed, scene=scene.index),
+                params=self.params, negative=scene.animation_negative or None,
+            )
             scene.video_path = str(video)
             scene.status = SceneStatus.COMPLETE
             self.store.log_decision(
