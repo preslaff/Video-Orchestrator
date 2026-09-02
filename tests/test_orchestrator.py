@@ -42,12 +42,12 @@ def wired(monkeypatch, tmp_path, make_store):
         SceneBrief(scene=1, description="d1", character="c", setting="s", mood="m"),
         SceneBrief(scene=2, description="d2", character="c", setting="s", mood="m"),
     ]
-    monkeypatch.setattr(storyboard, "generate_storyboard", lambda idea, *, n_scenes=None: briefs)
+    monkeypatch.setattr(storyboard, "generate_storyboard", lambda idea, *, n_scenes=None, **kw: briefs)
     monkeypatch.setattr(
-        storyboard, "keyframe_prompt", lambda b, *, style="": PromptPair(positive=f"kf::{b.description}")
+        storyboard, "keyframe_prompt", lambda b, *, style="", **kw: PromptPair(positive=f"kf::{b.description}")
     )
     monkeypatch.setattr(
-        storyboard, "animation_prompt", lambda b: PromptPair(positive=f"an::{b.description}")
+        storyboard, "animation_prompt", lambda b, **kw: PromptPair(positive=f"an::{b.description}")
     )
 
     def fake_kf_eval(prompt, task, *, seed, max_attempts, on_attempt=None, **kw):

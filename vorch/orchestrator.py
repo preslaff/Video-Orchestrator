@@ -176,11 +176,12 @@ class Orchestrator:
 
     def _phase_storyboard(self, job: Job) -> None:
         log.info("job %s: storyboard (idea=%r)", job.id, job.idea)
-        briefs = storyboard.generate_storyboard(job.idea, n_scenes=self.n_scenes)
+        context = storyboard.PromptContext.from_params(self.params)
+        briefs = storyboard.generate_storyboard(job.idea, n_scenes=self.n_scenes, context=context)
         scenes: list[Scene] = []
         for i, brief in enumerate(briefs):
-            kp = storyboard.keyframe_prompt(brief, style=job.style)
-            ap = storyboard.animation_prompt(brief)
+            kp = storyboard.keyframe_prompt(brief, style=job.style, context=context)
+            ap = storyboard.animation_prompt(brief, context=context)
             scenes.append(
                 Scene(
                     index=i,
@@ -189,7 +190,9 @@ class Orchestrator:
                     setting=brief.setting,
                     mood=brief.mood,
                     keyframe_prompt=kp.positive,
+                    keyframe_negative=kp.negative,
                     animation_prompt=ap.positive,
+                    animation_negative=ap.negative,
                     mode=job.mode,
                     references=list(job.reference_images) if job.mode == "edit" else [],
                 )

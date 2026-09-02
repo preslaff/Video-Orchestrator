@@ -78,3 +78,66 @@ def test_prompt_pair_validation_error(monkeypatch):
     monkeypatch.setattr(storyboard.gemma, "complete_text", lambda *a, **k: '{"negative": "x"}')
     with pytest.raises(StoryboardError):
         keyframe_prompt(SceneBrief(scene=1, description="d"))
+
+
+# --- prompt context (format / purpose / negatives) ----------------------------
+
+
+def _capture(monkeypatch, reply):
+    calls = []
+
+    def fake(system, user, **kw):
+        calls.append((system, user))
+        return reply
+
+    monkeypatch.setattr(storyboard.gemma, "complete_text", fake)
+    return calls
+
+
+def test_context_from_params_and_motion_hint():
+    from vorch.genparams import GenParams
+
+    ctx = storyboard.PromptContext.from_params(
+        GenParams.for_aspect("9:16", length=81, purpose="social_vertical",
+                             style_prefix="phone photo", keyframe_negative="smooth",
+                             animation_suffix="handheld", animate_negative="warped"))
+    assert ctx.orientation == "portrait" and "vertical" in ctx.framing_hint
+    assert ctx.clip_seconds == 5.06 and "доминиращо" in ctx.motion_hint
+    assert storyboard.motion_hint(2.0).startswith("едно малко") and "непрекъснато" in storyboard.motion_hint(8)
+    assert "9:16" in ctx.storyboard_lines() and "5.06s" in ctx.storyboard_lines()
+
+
+def test_storyboard_prompt_carries_purpose_format_and_kind(monkeypatch):
+    calls = _capture(monkeypatch, STORYBOARD_JSON)
+    ctx = storyboard.PromptContext(purpose="ad_broll", kind="stills", aspect="1:1", orientation="square",
+                                   framing_hint="centered square")
+    generate_storyboard("a product", n_scenes=2, context=ctx)
+    user = calls[0][1]
+    assert "рекламен b-roll" in user and "1:1" in user and "снимки" in user and "самостоятелен кадър" in user
+
+
+def test_keyframe_prompt_adds_framing_and_merges_negative(monkeypatch):
+    calls = _capture(monkeypatch, '{"positive": "phone photo of a woman", "negative": "blurry, smooth"}')
+    ctx = storyboard.PromptContext(aspect="9:16", orientation="portrait", framing_hint="headroom for captions",
+                                   style_positive="phone photo, natural light", style_negative="smooth, airbrushed")
+    pair = keyframe_prompt(SceneBrief(scene=1, description="d"), style="warm tones", context=ctx)
+    user = calls[0][1]
+    assert "warm tones, phone photo, natural light" in user and "headroom for captions" in user
+    assert '"negative": "smooth, airbrushed"' in user
+    assert pair.negative == "blurry, smooth, airbrushed"  # union, order kept, no duplicates
+
+
+def test_animation_prompt_uses_clip_length_and_suffix(monkeypatch):
+    calls = _capture(monkeypatch, '{"positive": "slow push-in", "negative": "jitter"}')
+    ctx = storyboard.PromptContext(clip_seconds=7.56, wan_positive="handheld documentary", wan_negative="warped face")
+    pair = animation_prompt(SceneBrief(scene=1, description="d"), context=ctx)
+    user = calls[0][1]
+    assert "7.56s" in user and "непрекъснато" in user and "handheld documentary" in user
+    assert pair.negative == "jitter, warped face"
+
+
+def test_default_context_keeps_legacy_prompts(monkeypatch):
+    calls = _capture(monkeypatch, '{"positive": "p", "negative": "n"}')
+    keyframe_prompt(SceneBrief(scene=1, description="d"))
+    assert "photorealistic, cinematic" in calls[0][1] and "16:9" in calls[0][1]
+    assert storyboard.merge_negatives("a, b", "B , c", "") == "a, b, c"

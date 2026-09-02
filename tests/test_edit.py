@@ -109,9 +109,9 @@ def test_orchestrator_edit_job_copies_refs_to_scenes(make_store, tmp_path, monke
     assert store.load_job(job.id).reference_images == [str(ref)]
 
     monkeypatch.setattr(storyboard, "generate_storyboard",
-                        lambda idea, *, n_scenes=None: [SceneBrief(scene=1, description="d")])
-    monkeypatch.setattr(storyboard, "keyframe_prompt", lambda b, *, style="": PromptPair(positive="kf"))
-    monkeypatch.setattr(storyboard, "animation_prompt", lambda b: PromptPair(positive="an"))
+                        lambda idea, *, n_scenes=None, **kw: [SceneBrief(scene=1, description="d")])
+    monkeypatch.setattr(storyboard, "keyframe_prompt", lambda b, *, style="", **kw: PromptPair(positive="kf"))
+    monkeypatch.setattr(storyboard, "animation_prompt", lambda b, **kw: PromptPair(positive="an"))
     seen = {}
 
     def fake_fresh(prompt, *, seed, evaluate, max_attempts, params, negative, mode, references):
