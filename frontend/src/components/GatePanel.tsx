@@ -22,13 +22,41 @@ function draftsFrom(job: JobPublic): Record<number, Draft> {
 }
 
 /**
- * Review + edit at an approval gate: prompts are editable until their artifact
- * exists (keyframe prompt locks once a keyframe was made), the variant picker
- * chooses which candidate is the scene's keyframe, and Approve continues the run.
+ * Review + edit at an approval gate (and after the run): prompts are always
+ * editable — edits to a scene whose artifact exists apply on "Regenerate
+ * keyframe" / "Re-animate" — the variant picker chooses which candidate is the
+ * scene's keyframe, and Approve continues the run.
  */
 export function GatePanel({ job }: { job: JobPublic }) {
   const [drafts, setDrafts] = useState(() => draftsFrom(job))
-XX
+  const update = useUpdateScenes(job.id)
+  const approve = useApprove(job.id)
+  const regen = useRegenerateScene(job.id)
+  const editable = job.status === 'needs_approval' || job.status === 'done' || job.status === 'failed'
+  if (!editable) return null
+  const video = job.kind === 'video'
+  const busy = update.isPending || approve.isPending || regen.isPending
+
+  const regenerate = (index: number, what: 'keyframe' | 'video') => {
+    const d = drafts[index]
+    const cost = what === 'keyframe'
+      ? `Regenerate the keyframe of scene ${index + 1}? Its face swap and clip are discarded and the keyframes gate reopens for review.`
+      : `Re-animate scene ${index + 1} with Wan (several minutes on this GPU)?`
+    if (!confirm(cost)) return
+    regen.mutate({
+      index,
+      body: {
+        what,
+        description: d.description,
+        keyframe_prompt: d.keyframe_prompt,
+        keyframe_negative: d.keyframe_negative,
+        animation_prompt: video ? d.animation_prompt : null,
+        animation_negative: video ? d.animation_negative : null,
+        mode: what === 'keyframe' ? d.mode : null,
+        references: what === 'keyframe' ? d.references.split('\n').map((x) => x.trim()).filter(Boolean) : null,
+      },
+    })
+  }
 
   const set = (i: number, patch: Partial<Draft>) => setDrafts((d) => ({ ...d, [i]: { ...d[i], ...patch } }))
 
