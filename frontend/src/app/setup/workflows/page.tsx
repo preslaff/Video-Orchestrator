@@ -40,7 +40,7 @@ export default function WorkflowsPage() {
         <ol className="list-inside list-decimal space-y-1 text-sm text-neutral-700">
           <li>In ComfyUI: <b>Export (API)</b> the graph as JSON.</li>
           <li><code className="rounded bg-neutral-100 px-1">python -m vorch registry inspect &lt;file.json&gt; --online</code> — see nodes + role guesses.</li>
-          <li><code className="rounded bg-neutral-100 px-1">python -m vorch registry add &lt;file.json&gt; --kind postprocess</code> — scaffolds the YAML into <code className="rounded bg-neutral-100 px-1">{wf.data?.user_dir ?? '~/.vorch/workflows'}</code>.</li>
+          <li><code className="rounded bg-neutral-100 px-1">python -m vorch registry add &lt;file.json&gt; --kind postprocess</code> — scaffolds the YAML into <code className="rounded bg-neutral-100 px-1">{wf.data?.user_dir ?? '~/vorch/workflows'}</code>.</li>
           <li>Edit names/description, then <code className="rounded bg-neutral-100 px-1">python -m vorch registry validate &lt;name&gt; --online</code>.</li>
           <li>Reference it from a profile (keyframe/video/face-swap workflow or a post-step) — it shows up here after a reload.</li>
         </ol>

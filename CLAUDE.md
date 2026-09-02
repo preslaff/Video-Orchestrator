@@ -29,7 +29,7 @@ the build order actually followed. Key facts a new session must not re-derive:
   **projects** with assets (`projects.py`), **environment check** (`envcheck.py`, blocks submit on
   fail), **submission** resolution (`submission.py`). Jobs snapshot their profile (`Job.profile`).
 - **Workflows are pluggable by YAML** (`vorch/registry.py`, `workflows/*.yaml`, user dir
-  `~/.vorch/workflows`; `vorch registry inspect|add|validate`). Node-id surgery lives only there.
+  `~/vorch/workflows`; `vorch registry inspect|add|validate`). Node-id surgery lives only there.
 - **State is PostgreSQL** (`vorch/db.py`, `migrations/*.sql`, DSN `postgresql:///vorch`, tests
   use one throwaway schema each). SQLite is gone.
 - **UI is Next.js** (`frontend/`, proxies `/api` + `/media` to `vorch serve`). NiceGUI is gone.

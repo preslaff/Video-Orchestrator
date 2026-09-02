@@ -75,7 +75,7 @@ ComfyUI workflow can be plugged in through a YAML sidecar without touching Pytho
 ### Pluggable workflows
 
 Each ComfyUI template is paired with a registry YAML (`workflows/*.yaml`) that names the
-node fields the orchestrator may replace. New workflows drop into `~/.vorch/workflows/`
+node fields the orchestrator may replace. New workflows drop into `~/vorch/workflows/`
 without Python changes: `python -m vorch registry inspect <api.json>` → `registry add` →
 `registry validate --online`. See [`docs/workflows.md`](docs/workflows.md).
 

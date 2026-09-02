@@ -2,7 +2,7 @@
 
 Every generation step is a ComfyUI **API-format** template (`*.json`) plus a sidecar
 **registry YAML** that names the fields the orchestrator may replace. The five built-ins
-live in `workflows/`; your own go in `~/.vorch/workflows/` (`VORCH_USER_WORKFLOW_DIR`).
+live in `workflows/`; your own go in `~/vorch/workflows/` (`VORCH_USER_WORKFLOW_DIR`).
 A user entry with the same `name` overrides a built-in.
 
 ## 1. Export the workflow from ComfyUI

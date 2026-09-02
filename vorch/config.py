@@ -27,7 +27,7 @@ WORKFLOW_DIR = Path(
 )
 # User-installed workflows (JSON + YAML pairs) override built-ins by name.
 USER_WORKFLOW_DIR = Path(
-    os.environ.get("VORCH_USER_WORKFLOW_DIR", "~/.vorch/workflows")
+    os.environ.get("VORCH_USER_WORKFLOW_DIR", "~/vorch/workflows")
 ).expanduser()
 
 # --- Generation defaults -----------------------------------------------------

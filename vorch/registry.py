@@ -14,7 +14,7 @@ id) plus a sidecar ``*.yaml`` that names the fields the orchestrator may touch::
       seed:     {targets: [{node: "9", field: noise_seed}, {node: "10", field: noise_seed}], type: int}
 
 Search order: ``config.WORKFLOW_DIR`` (built-ins shipped with the repo), then
-``config.USER_WORKFLOW_DIR`` (``~/.vorch/workflows``) where a same-named entry
+``config.USER_WORKFLOW_DIR`` (``~/vorch/workflows``) where a same-named entry
 overrides the built-in. Dropping a JSON + YAML pair there is all it takes to
 use a newly installed ComfyUI workflow (``vorch registry inspect/add`` helps
 write the YAML). Templates are never restructured — only listed literal fields

@@ -195,7 +195,7 @@ Per `NOTES.md` §9 — narrow and end-to-end first:
 11. ✅ `queue.py` + `api/` — async `JobManager` (Orchestrator in a thread executor, one-GPU lock, event Broker with ids + replay) → FastAPI `/api` + named SSE (`vorch serve`), `/media` from ComfyUI's output dir. *(The NiceGUI dashboard that first hosted this was replaced by the Next.js app in Sept 2026.)*
 
 **Phase 3 — multipurpose raw material + setup phase (Sept 2026):**
-12. ✅ `registry.py` + `workflows/*.yaml` — declarative workflow registry (kinds, params → node/field, contracts, `~/.vorch/workflows` overrides); `vorch registry inspect/add/validate` scaffolder. `docs/workflows.md`.
+12. ✅ `registry.py` + `workflows/*.yaml` — declarative workflow registry (kinds, params → node/field, contracts, `~/vorch/workflows` overrides); `vorch registry inspect/add/validate` scaffolder. `docs/workflows.md`.
 13. ✅ `formats.py` + `genparams.py` — aspect presets → Klein/Wan sizes; `GenParams` threaded through steps/pipeline/orchestrator; `derive_seed`; `media.fit_image`; `steps/edit.py` (reference-locked keyframes); `steps/postprocess.py` (post-step chains); `storyboard.PromptContext`; `Verdict.framing_ok` + `evaluate_video`.
 14. ✅ `profiles.py` (+ `profiles_builtin/*.yaml`), `projects.py`, `envcheck.py`, `export.py`, `submission.py` — the setup phase; orchestrator plans by profile kind (video: 2 gates, stills: 1 gate + variants); PostgreSQL migrations 0001/0002.
 15. ✅ `api/` routers: jobs, events, media, setup, workflows, profiles, projects (+assets), export; CLI `setup check`, `profiles`, `project …`, `export`, `db …`.
