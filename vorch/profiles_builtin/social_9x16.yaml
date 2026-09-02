@@ -1,0 +1,15 @@
+id: social_9x16
+name: Social vertical 9:16
+purpose: social_vertical
+kind: video
+aspect: "9:16"
+keyframe: {workflow: keyframe, width: 576, height: 1024, steps: 24, cfg: 5.0}
+video: {workflow: animate, width: 480, height: 832, length: 49, fps: 16}
+style:
+  keyframe_prefix: ""
+  keyframe_negative: "smooth, digital render, 3d, airbrushed, text, watermark"
+  animation_suffix: "smooth handheld, social video"
+  animation_negative: "distorted, morphing, jitter, flicker, extra limbs, warped face"
+face_swap: {enabled: true, workflow: faceswap, restore_model: GFPGANv1.4.pth}
+evaluate: {enabled: true, max_attempts: 2, review_threshold: 4}
+builtin: true

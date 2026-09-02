@@ -1,0 +1,16 @@
+id: stills_16x9
+name: Stills 16:9 (4 variants)
+purpose: stills
+kind: stills
+aspect: "16:9"
+keyframe: {workflow: keyframe, width: 1024, height: 576, steps: 24, cfg: 5.0}
+video: null
+stills: {variants: 4}
+style:
+  keyframe_prefix: ""
+  keyframe_negative: "smooth, digital render, 3d, airbrushed"
+  animation_suffix: cinematic
+  animation_negative: ""
+face_swap: {enabled: true, workflow: faceswap, restore_model: GFPGANv1.4.pth}
+evaluate: {enabled: true, max_attempts: 2, review_threshold: 4}
+builtin: true

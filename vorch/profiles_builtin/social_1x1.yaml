@@ -1,0 +1,15 @@
+id: social_1x1
+name: Social square 1:1
+purpose: social_square
+kind: video
+aspect: "1:1"
+keyframe: {workflow: keyframe, width: 768, height: 768, steps: 24, cfg: 5.0}
+video: {workflow: animate, width: 640, height: 640, length: 49, fps: 16}
+style:
+  keyframe_prefix: ""
+  keyframe_negative: "smooth, digital render, 3d, airbrushed, text, watermark"
+  animation_suffix: cinematic
+  animation_negative: "distorted, morphing, jitter, flicker, extra limbs, warped face"
+face_swap: {enabled: true, workflow: faceswap, restore_model: GFPGANv1.4.pth}
+evaluate: {enabled: true, max_attempts: 2, review_threshold: 4}
+builtin: true

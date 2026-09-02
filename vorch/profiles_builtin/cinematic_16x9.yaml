@@ -1,0 +1,15 @@
+id: cinematic_16x9
+name: Cinematic 16:9
+purpose: cinematic
+kind: video
+aspect: "16:9"
+keyframe: {workflow: keyframe, width: 1024, height: 576, steps: 24, cfg: 5.0}
+video: {workflow: animate, width: 832, height: 480, length: 49, fps: 16}
+style:
+  keyframe_prefix: ""
+  keyframe_negative: "smooth, digital render, 3d, airbrushed"
+  animation_suffix: cinematic
+  animation_negative: "distorted, morphing, jitter, flicker, extra limbs, warped face"
+face_swap: {enabled: true, workflow: faceswap, restore_model: GFPGANv1.4.pth}
+evaluate: {enabled: true, max_attempts: 2, review_threshold: 4}
+builtin: true

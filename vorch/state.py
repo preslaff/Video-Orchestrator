@@ -568,6 +568,38 @@ class Store:
             for r in rows
         ]
 
+    # -- profiles (dict rows; vorch.profiles owns the model) --
+
+    def save_profile(self, d: dict) -> dict:
+        with self._pool.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO profiles (id, name, kind, purpose, created_at, updated_at, data)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name, kind = EXCLUDED.kind, purpose = EXCLUDED.purpose,
+                    updated_at = EXCLUDED.updated_at, data = EXCLUDED.data
+                """,
+                (d["id"], d["name"], d["kind"], d["purpose"],
+                 _to_ts(d["created_at"]), _to_ts(d["updated_at"]), Jsonb(d)),
+            )
+        return d
+
+    def load_profile(self, profile_id: str) -> dict | None:
+        with self._pool.connection() as conn:
+            row = conn.execute("SELECT data FROM profiles WHERE id = %s", (profile_id,)).fetchone()
+        return row["data"] if row else None
+
+    def list_profiles(self) -> list[dict]:
+        with self._pool.connection() as conn:
+            rows = conn.execute("SELECT data FROM profiles ORDER BY name").fetchall()
+        return [r["data"] for r in rows]
+
+    def delete_profile(self, profile_id: str) -> bool:
+        with self._pool.connection() as conn:
+            cur = conn.execute("DELETE FROM profiles WHERE id = %s", (profile_id,))
+            return cur.rowcount > 0
+
     # -- lifecycle --
 
     def schema_version(self) -> int:
