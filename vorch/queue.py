@@ -108,6 +108,28 @@ class JobManager:
         """Subscribe to a job's event stream (drain until a {'type': 'end'} event)."""
         return self.broker.subscribe(job_id)
 
+    def update_scenes(self, job_id: str, edits: list[dict]) -> Job:
+        """Apply prompt/description edits to a paused job's scenes and persist them.
+
+        Each edit is ``{"index": int, "description"?, "keyframe_prompt"?,
+        "animation_prompt"?}``. Only allowed while the job is **not** running
+        (a run segment in flight would race the orchestrator's own writes).
+        """
+        if job_id in self._active:
+            raise RuntimeError(f"job {job_id} is running; pause before editing")
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        by_index = {s.index: s for s in job.scenes}
+        for edit in edits:
+            scene = by_index.get(edit.get("index"))
+            if scene is None:
+                continue
+            for field in ("description", "keyframe_prompt", "animation_prompt"):
+                if edit.get(field) is not None:
+                    setattr(scene, field, edit[field])
+        return self.store.save_job(job)
+
     # -- internals --
 
     async def _execute(self, job: Job, fn: Callable[[Orchestrator, Job], None]) -> None:

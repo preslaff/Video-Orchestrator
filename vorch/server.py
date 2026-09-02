@@ -36,6 +36,19 @@ class JobSpec(BaseModel):
     face_swap: bool = True
 
 
+class SceneEdit(BaseModel):
+    """One scene's editable fields (storyboard gate review). Index is required."""
+
+    index: int
+    description: str | None = None
+    keyframe_prompt: str | None = None
+    animation_prompt: str | None = None
+
+
+class SceneEdits(BaseModel):
+    scenes: list[SceneEdit]
+
+
 def register_routes(app: FastAPI, manager: JobManager, store: Store) -> None:
     """Attach the /api routes (and SSE) to an existing FastAPI app."""
 
@@ -81,6 +94,16 @@ def register_routes(app: FastAPI, manager: JobManager, store: Store) -> None:
             }
             for d in store.decisions(job_id)
         ]
+
+    @app.put("/api/jobs/{job_id}/scenes")
+    async def update_scenes(job_id: str, edits: SceneEdits) -> dict:
+        try:
+            job = manager.update_scenes(job_id, [e.model_dump() for e in edits.scenes])
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no such job")
+        except RuntimeError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return job_to_dict(job)
 
     @app.post("/api/jobs/{job_id}/approve/{gate}")
     async def approve(job_id: str, gate: str) -> dict:

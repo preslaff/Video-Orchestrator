@@ -129,25 +129,66 @@ def _job_page(job_id: str) -> None:
             ui.badge(job.status.value).props("outline")
         ui.label(job.idea).classes("text-xl font-bold")
 
-        if job.status is JobStatus.NEEDS_APPROVAL:
+        editing = job.status is JobStatus.NEEDS_APPROVAL
+        edits: dict[int, dict] = {}  # populated in the scene loop below
+
+        if editing:
             gate = _pending_gate(job, store)
+
+            def save() -> None:
+                payload = [
+                    {"index": idx, **{name: ta.value for name, ta in flds.items()}}
+                    for idx, flds in edits.items()
+                ]
+                try:
+                    manager.update_scenes(job_id, payload)
+                except (RuntimeError, KeyError) as e:
+                    ui.notify(str(e), type="negative")
+                    return
+                ui.notify("Saved", type="positive")
+                view.refresh()
 
             async def approve(g=gate) -> None:
                 await manager.approve(job_id, g)
                 view.refresh()
 
-            ui.button(f"Approve gate: {gate}", on_click=approve).props("color=positive")
+            with ui.row().classes("items-center gap-2"):
+                ui.button("Save changes", on_click=save).props("outline")
+                ui.button(f"Approve gate: {gate}", on_click=approve).props("color=positive")
 
         with ui.row().classes("flex-wrap gap-4"):
             for s in job.scenes:
-                with ui.card().classes("w-80"):
+                with ui.card().classes("w-96"):
                     ui.label(f"scene {s.index} · {s.status.value}").classes("font-semibold")
+                    if s.setting or s.mood:
+                        ui.label(f"{s.setting} · {s.mood}").classes("text-xs text-gray-500")
+
                     kf = _outputs_url(s.keyframe_path)
                     if kf:
                         ui.image(kf).classes("w-full")
                     vid = _outputs_url(s.video_path, video=True)
                     if vid:
                         ui.video(vid).classes("w-full")
+
+                    if editing:
+                        flds: dict[str, object] = {}
+                        flds["description"] = ui.textarea("description", value=s.description) \
+                            .classes("w-full").props("autogrow dense")
+                        ta_kf = ui.textarea("keyframe prompt", value=s.keyframe_prompt) \
+                            .classes("w-full").props("autogrow dense")
+                        if s.keyframe_path is None:  # keyframe not made yet -> editable
+                            flds["keyframe_prompt"] = ta_kf
+                        else:
+                            ta_kf.props("readonly")  # already generated; edit has no effect
+                        flds["animation_prompt"] = ui.textarea("animation prompt", value=s.animation_prompt) \
+                            .classes("w-full").props("autogrow dense")
+                        edits[s.index] = flds
+                    else:
+                        if s.description:
+                            ui.label(s.description).classes("text-sm")
+                        ui.label(f"keyframe: {s.keyframe_prompt}").classes("text-xs text-gray-600")
+                        ui.label(f"animation: {s.animation_prompt}").classes("text-xs text-gray-600")
+
                     m = provenance.read_manifest(s.keyframe_path) if s.keyframe_path else None
                     if m:
                         seed = m.get("params", {}).get("seed")

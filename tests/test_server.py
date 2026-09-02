@@ -38,6 +38,7 @@ def client(tmp_path):
     master.write_bytes(b"\xff\xd8\xff")
     with TestClient(app) as c:
         c.master = str(master)  # stash for tests
+        c.store = store
         yield c
     store.close()
 
@@ -86,3 +87,38 @@ def test_decisions_endpoint_returns_list(client):
     ).json()["id"]
     r = client.get(f"/api/jobs/{jid}/decisions")
     assert r.status_code == 200 and isinstance(r.json(), list)
+
+
+def _paused_job_with_scene(store):
+    from vorch.state import Scene, new_job
+
+    job = new_job(idea="edit me")
+    job.status = JobStatus.NEEDS_APPROVAL
+    job.scenes = [Scene(index=0, keyframe_prompt="old kf", animation_prompt="old an")]
+    store.save_job(job)
+    return job
+
+
+def test_update_scenes_applies_edits(client):
+    job = _paused_job_with_scene(client.store)
+    r = client.put(
+        f"/api/jobs/{job.id}/scenes",
+        json={"scenes": [{"index": 0, "keyframe_prompt": "new kf", "description": "d"}]},
+    )
+    assert r.status_code == 200
+    scene = r.json()["scenes"][0]
+    assert scene["keyframe_prompt"] == "new kf"
+    assert scene["description"] == "d"
+    assert scene["animation_prompt"] == "old an"  # untouched
+
+
+def test_update_scenes_missing_job_404(client):
+    r = client.put("/api/jobs/nope/scenes", json={"scenes": [{"index": 0, "description": "x"}]})
+    assert r.status_code == 404
+
+
+def test_update_scenes_while_running_409(client):
+    job = _paused_job_with_scene(client.store)
+    client.app.state.manager._active.add(job.id)  # simulate a run segment in flight
+    r = client.put(f"/api/jobs/{job.id}/scenes", json={"scenes": [{"index": 0, "description": "x"}]})
+    assert r.status_code == 409

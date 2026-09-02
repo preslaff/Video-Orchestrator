@@ -149,6 +149,43 @@ def test_submit_rejects_missing_master(tmp_path):
     asyncio.run(go())
 
 
+def test_update_scenes_applies_edits(tmp_path):
+    from vorch.state import Scene
+
+    async def go():
+        store = Store(str(tmp_path / "q.db"))
+        job = new_job(idea="x")
+        job.status = JobStatus.NEEDS_APPROVAL
+        job.scenes = [Scene(index=0, keyframe_prompt="old kf", animation_prompt="old an")]
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+        mgr.update_scenes(job.id, [{"index": 0, "keyframe_prompt": "new kf", "description": "d"}])
+        reloaded = store.load_job(job.id)
+        store.close()
+        return reloaded
+
+    j = asyncio.run(go())
+    assert j.scenes[0].keyframe_prompt == "new kf"
+    assert j.scenes[0].description == "d"
+    assert j.scenes[0].animation_prompt == "old an"  # untouched (not in edit)
+
+
+def test_update_scenes_rejected_while_active(tmp_path):
+    async def go():
+        store = Store(str(tmp_path / "q.db"))
+        job = new_job(idea="x")
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+        mgr._active.add(job.id)  # simulate a run in flight
+        try:
+            with pytest.raises(RuntimeError):
+                mgr.update_scenes(job.id, [{"index": 0, "keyframe_prompt": "x"}])
+        finally:
+            store.close()
+
+    asyncio.run(go())
+
+
 def test_duplicate_approve_ignored_while_active(tmp_path):
     """A second approve while a run segment is in flight is a no-op."""
     calls = {"n": 0}
