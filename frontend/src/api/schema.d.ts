@@ -1064,6 +1064,11 @@ export interface components {
             mode?: ("t2i" | "edit") | null;
             /** References */
             references?: string[] | null;
+            /**
+             * Apply Suggestion
+             * @default false
+             */
+            apply_suggestion: boolean;
         };
         /** StillsSettings */
         StillsSettings: {

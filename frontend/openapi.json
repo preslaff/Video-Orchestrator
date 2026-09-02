@@ -3002,6 +3002,11 @@
               }
             ],
             "title": "References"
+          },
+          "apply_suggestion": {
+            "type": "boolean",
+            "title": "Apply Suggestion",
+            "default": false
           }
         },
         "type": "object",

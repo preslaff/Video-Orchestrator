@@ -43,7 +43,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
       <ProgressPanel job={j} events={live.events} connected={live.connected} />
 
       {(j.status === 'needs_approval' || j.status === 'done' || j.status === 'failed') && j.scenes.length > 0 && (
-        <GatePanel key={`${j.id}-${j.status}-${j.updated_at}`} job={j} />
+        <GatePanel key={`${j.id}-${j.status}-${j.updated_at}`} job={j} decisions={decisions.data} />
       )}
 
       <div className="grid gap-4 lg:grid-cols-3">

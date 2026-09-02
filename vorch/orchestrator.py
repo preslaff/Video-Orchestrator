@@ -234,6 +234,12 @@ class Orchestrator:
         for field_name in self.SCENE_EDIT_FIELDS:
             if edits and edits.get(field_name) is not None:
                 setattr(scene, field_name, edits[field_name])
+        applied = ""
+        if what == "keyframe" and edits and edits.get("apply_suggestion"):
+            fix = self.last_fix_suggestion(job, scene)
+            if fix and fix not in scene.keyframe_prompt:
+                scene.keyframe_prompt = f"{scene.keyframe_prompt.rstrip('. ')}. Correction: {fix}"
+                applied = fix
         if what == "keyframe":
             scene.keyframe_path = None
             scene.keyframe_verdict = None
@@ -247,10 +253,12 @@ class Orchestrator:
         scene.status = SceneStatus.PENDING if what == "keyframe" else SceneStatus.KEYFRAME
         scene.regenerations += 1
         job.export = None
-        changed = ", ".join(k for k in self.SCENE_EDIT_FIELDS if edits and edits.get(k) is not None)
+        changed = [k for k in self.SCENE_EDIT_FIELDS if edits and edits.get(k) is not None]
+        if applied:
+            changed.append("applied evaluator suggestion")
         self.store.log_decision(Decision(
             job_id=job.id, scene_index=index, phase=what, attempt=scene.regenerations,
-            action="regenerate", reason=f"edited: {changed}" if changed else "same prompts, new seed",
+            action="regenerate", reason=f"edited: {', '.join(changed)}" if changed else "same prompts, new seed",
         ))
         if what == "keyframe" and job.kind == "video" and job.autonomy != "full":
             # The keyframes gate must be passed again for the new frame.
@@ -258,6 +266,16 @@ class Orchestrator:
                                              attempt=1, action="reopened"))
         self.store.save_job(job)
         return scene
+
+    def last_fix_suggestion(self, job: Job, scene: Scene) -> str:
+        """The evaluator's most recent fix suggestion for a scene: the stored verdict,
+        else the last 'retry' decision's reason."""
+        if scene.keyframe_verdict is not None and scene.keyframe_verdict.fix_suggestion:
+            return scene.keyframe_verdict.fix_suggestion
+        for d in reversed(self.store.decisions(job.id)):
+            if d.scene_index == scene.index and d.phase == "keyframe" and d.action == "retry" and d.reason:
+                return d.reason
+        return ""
 
     def regenerate(self, job: Job, index: int, *, what: str = "keyframe", edits: dict | None = None) -> Job:
         """``reopen_scene`` + ``run``: rerun only what was cleared (other scenes keep their files)."""

@@ -453,3 +453,31 @@ def test_regenerate_seed_offsets(wired, monkeypatch):
     o.run(job)
     o.regenerate(job, 0)
     assert seeds == [100, 10_100, 110]  # scene 0, scene 1, scene 0 regenerated (+10)
+
+
+def test_regenerate_applies_evaluator_suggestion(wired, monkeypatch):
+    store, master, calls = wired
+    seen_prompts = []
+
+    def retry_eval(prompt, task, *, seed, max_attempts, on_attempt=None, **kw):
+        seen_prompts.append(prompt)
+        calls["keyframe"] += 1
+        v = _verdict_retry()  # fix_suggestion="use a peel"
+        if on_attempt:
+            on_attempt(1, f"/kf/{calls['keyframe']}.png", v)
+        return f"/kf/{calls['keyframe']}.png", v
+
+    monkeypatch.setattr(pipeline, "generate_keyframe_evaluated", retry_eval)
+    o = Orchestrator(store, max_attempts=1, face_swap=False)
+    job = o.create_job("fix", autonomy="full")
+    o.run(job)
+    assert o.last_fix_suggestion(job, job.scenes[0]) == "use a peel"
+
+    o.regenerate(job, 0, edits={"apply_suggestion": True})
+    assert seen_prompts[-1] == "kf::d1. Correction: use a peel"
+    assert job.scenes[0].keyframe_prompt.endswith("Correction: use a peel")
+    reasons = [d.reason for d in store.decisions(job.id) if d.action == "regenerate"]
+    assert reasons[-1] == "edited: applied evaluator suggestion"
+    # Applying again does not duplicate the correction.
+    o.regenerate(job, 0, edits={"apply_suggestion": True})
+    assert job.scenes[0].keyframe_prompt.count("Correction:") == 1

@@ -66,6 +66,7 @@ class SceneRegenerate(BaseModel):
     animation_negative: str | None = None
     mode: Literal["t2i", "edit"] | None = None
     references: list[str] | None = None
+    apply_suggestion: bool = False   # append the evaluator's last fix suggestion to the keyframe prompt
 
 
 # --- responses ---------------------------------------------------------------

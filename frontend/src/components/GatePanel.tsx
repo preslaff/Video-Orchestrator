@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { errorMessage } from '@/api/client'
-import type { JobPublic, SceneEdit } from '@/api/types'
+import type { DecisionOut, JobPublic, SceneEdit } from '@/api/types'
 import { useApprove, useRegenerateScene, useUpdateScenes } from '@/hooks/useJobs'
 import { Button, ErrorBox } from '@/components/ui'
 
@@ -27,7 +27,7 @@ function draftsFrom(job: JobPublic): Record<number, Draft> {
  * keyframe" / "Re-animate" — the variant picker chooses which candidate is the
  * scene's keyframe, and Approve continues the run.
  */
-export function GatePanel({ job }: { job: JobPublic }) {
+export function GatePanel({ job, decisions = [] }: { job: JobPublic; decisions?: DecisionOut[] }) {
   const [drafts, setDrafts] = useState(() => draftsFrom(job))
   const update = useUpdateScenes(job.id)
   const approve = useApprove(job.id)
@@ -54,11 +54,30 @@ export function GatePanel({ job }: { job: JobPublic }) {
         animation_negative: video ? d.animation_negative : null,
         mode: what === 'keyframe' ? d.mode : null,
         references: what === 'keyframe' ? d.references.split('\n').map((x) => x.trim()).filter(Boolean) : null,
+        apply_suggestion: false, // suggestions are applied in the editable prompt above
       },
     })
   }
 
   const set = (i: number, patch: Partial<Draft>) => setDrafts((d) => ({ ...d, [i]: { ...d[i], ...patch } }))
+
+  /** Evaluator fix suggestions for a scene: every logged retry + the stored verdict, newest first. */
+  const suggestionsFor = (index: number): string[] => {
+    const scene = job.scenes.find((x) => x.index === index)
+    const out: string[] = []
+    const fromVerdict = scene?.keyframe_verdict?.fix_suggestion
+    if (fromVerdict) out.push(fromVerdict)
+    for (const d of [...decisions].reverse()) {
+      if (d.scene_index === index && d.phase === 'keyframe' && d.action === 'retry' && d.reason && !out.includes(d.reason)) out.push(d.reason)
+    }
+    return out
+  }
+
+  const applySuggestion = (index: number, text: string) => {
+    const d = drafts[index]
+    if (d.keyframe_prompt.includes(text)) return
+    set(index, { keyframe_prompt: `${d.keyframe_prompt.replace(/[.\s]+$/, '')}. Correction: ${text}` })
+  }
 
   const save = () => {
     const scenes: SceneEdit[] = job.scenes.map((s) => {
@@ -122,8 +141,23 @@ export function GatePanel({ job }: { job: JobPublic }) {
                 <textarea value={d.keyframe_prompt} onChange={(e) => set(s.index, { keyframe_prompt: e.target.value })} rows={3} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
               <label className="block"><span className="text-xs text-neutral-500">keyframe negative</span>
                 <input value={d.keyframe_negative} onChange={(e) => set(s.index, { keyframe_negative: e.target.value })} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
-              {s.keyframe_verdict && s.keyframe_verdict.decision !== 'accept' && (
-                <p className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-900"><b>last verdict: retry</b> — {s.keyframe_verdict.fix_suggestion || 'no fix suggestion'}</p>
+              {suggestionsFor(s.index).length > 0 && (
+                <div className="space-y-1 rounded bg-amber-50 p-2 text-xs text-amber-900">
+                  <div className="font-semibold">Evaluator suggestions{s.keyframe_verdict?.decision === 'retry' ? ' (last verdict: retry)' : ''}</div>
+                  {suggestionsFor(s.index).map((text, i) => {
+                    const applied = d.keyframe_prompt.includes(text)
+                    return (
+                      <div key={i} className="flex items-start gap-2">
+                        <p className="flex-1">{text}</p>
+                        <button type="button" disabled={applied} onClick={() => applySuggestion(s.index, text)}
+                          className="shrink-0 rounded border border-amber-300 bg-white px-2 py-0.5 font-medium disabled:opacity-50">
+                          {applied ? 'applied' : 'Apply to prompt'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                  <p className="text-amber-700">Applying appends “Correction: …” to the keyframe prompt, exactly like the automatic retry; edit it, then Regenerate keyframe.</p>
+                </div>
               )}
               {!locked && (
                 <div className="grid grid-cols-[8rem_1fr] gap-2">
