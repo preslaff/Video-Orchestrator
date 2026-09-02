@@ -10,17 +10,30 @@ T = TypeVar("T")
 
 
 class JobSpec(BaseModel):
-    """Request body for creating a job (mirrors the YAML job spec / DESIGN §7)."""
+    """Request body for creating a job.
+
+    The profile (``profile_id`` → project default → built-in default) carries
+    the generation settings; ``profile_overrides`` deep-merges on top; the
+    legacy ``evaluate`` / ``face_swap`` / ``max_attempts`` knobs apply only when
+    sent. ``force`` bypasses a failing environment check.
+    """
 
     idea: str
-    master_face: str = ""  # required only when face_swap is on
     style: str = ""
-    autonomy: str = "semi"
+    autonomy: Literal["semi", "full"] = "semi"
     n_scenes: int | None = None
     seed: int = 0
-    max_attempts: int = 2
-    evaluate: bool = True
-    face_swap: bool = True
+    project_id: str | None = None
+    profile_id: str | None = None
+    profile_overrides: dict[str, Any] | None = None
+    mode: Literal["t2i", "edit"] = "t2i"
+    reference_asset_ids: list[str] = []
+    reference_images: list[str] = []
+    master_face: str = ""          # explicit path; else the project's master_face asset
+    max_attempts: int | None = None
+    evaluate: bool | None = None
+    face_swap: bool | None = None
+    force: bool = False
 
 
 class SceneEdit(BaseModel):

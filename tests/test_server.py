@@ -36,7 +36,7 @@ def client(tmp_path, make_store, monkeypatch):
     from vorch import config
 
     store = make_store()
-    manager = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+    manager = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j), auto_export=False)
     media = tmp_path / "media"
     media.mkdir()
     monkeypatch.setattr(config, "COMFY_OUTPUT", media)
@@ -430,3 +430,23 @@ def test_list_jobs_project_filter_and_summary_fields(client):
     page = client.get("/api/jobs").json()
     assert page["items"][0]["kind"] == "stills" and page["items"][0]["profile_id"] == "stills_16x9"
     assert client.get("/api/jobs?project_id=nope").json()["total"] == 0
+
+
+def test_create_job_env_fail_409_carries_report(tmp_path, make_store):
+    from vorch.envcheck import CheckResult, EnvReport, EnvironmentNotReady
+
+    store = make_store()
+    report = EnvReport([CheckResult("gemma", "fail", "unreachable")], "now", 2)
+
+    def gate(profile, project):
+        raise EnvironmentNotReady(report)
+
+    manager = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j), env_check=gate, auto_export=False)
+    app = create_app(store=store, manager=manager, media_dir=tmp_path)
+    with TestClient(app) as c:
+        r = c.post("/api/jobs", json={"idea": "x", "face_swap": False})
+        assert r.status_code == 409
+        body = r.json()["error"]
+        assert body["code"] == "environment_not_ready" and body["details"]["checks"][0]["name"] == "gemma"
+        assert c.post("/api/jobs", json={"idea": "x", "face_swap": False, "force": True}).status_code == 200
+        assert c.post("/api/jobs", json={"idea": "x", "profile_id": "nope", "force": True}).status_code == 400

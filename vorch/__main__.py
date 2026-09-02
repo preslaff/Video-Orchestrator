@@ -235,15 +235,27 @@ def _print_provenance(job) -> None:
 
 
 def _orchestrator(store: Store, spec: dict) -> Orchestrator:
-    retry = spec.get("retry") or {}
+    """Orchestrator for a job.yaml: profile from `profile:` / `aspect:` / legacy knobs."""
+    from . import profiles
+
     return Orchestrator(
         store,
+        profile=profiles.from_legacy_spec(spec),
         n_scenes=spec.get("n_scenes"),
         seed=int(spec.get("seed", config.SEED_RANDOM)),
-        max_attempts=int(retry.get("max_attempts", 2)),
-        evaluate=bool(spec.get("evaluate", True)),
-        face_swap=bool(spec.get("face_swap", True)),
     )
+
+
+def _export_if_done(store: Store, job, *, enabled: bool = True) -> None:
+    from . import export, projects
+
+    if not enabled or job.status is not JobStatus.DONE or job.export:
+        return
+    project = projects.load(store, job.project_id) if job.project_id else None
+    rec = export.export_job(store, job, project)
+    job.export = rec.to_dict()
+    store.save_job(job)
+    print(f"exported {len(rec.files)} file(s) -> {rec.path}" + ("" if rec.ok else f"  ({rec.error})"))
 
 
 def _cmd_run(args) -> int:
@@ -253,20 +265,34 @@ def _cmd_run(args) -> int:
         spec = yaml.safe_load(f) or {}
     if not spec.get("idea"):
         raise ValueError(f"{args.spec}: 'idea' is required")
-    if spec.get("face_swap", True) and not spec.get("master_face"):
-        raise ValueError(f"{args.spec}: 'master_face' is required when face_swap is on")
+
+    from . import projects
 
     store = _open_store()
     try:
         o = _orchestrator(store, spec)
+        project = None
+        if spec.get("project"):
+            project = projects.load_by_slug(store, spec["project"]) or projects.load(store, spec["project"])
+            if project is None:
+                raise ValueError(f"{args.spec}: unknown project {spec['project']!r}")
+        master = spec.get("master_face", "")
+        if not master and project is not None and projects.master_face(project):
+            master = projects.master_face(project).path
+        if o.face_swap and not master:
+            raise ValueError(f"{args.spec}: 'master_face' is required when face_swap is on")
         job = o.create_job(
             spec["idea"],
             style=spec.get("style", ""),
-            master_face=spec.get("master_face", ""),
+            master_face=master,
             autonomy=spec.get("autonomy", "semi"),
+            mode=spec.get("mode", "t2i"),
+            reference_images=spec.get("references") or [],
+            project_id=project.id if project else None,
         )
         o.run(job)
         _print_job(job, store)
+        _export_if_done(store, job, enabled=bool(spec.get("export", True)))
     finally:
         store.close()
     return 0
@@ -283,6 +309,7 @@ def _cmd_approve(args) -> int:
         o = Orchestrator.from_job(store, job)  # run-config restored from the job
         o.approve(job, args.gate)
         _print_job(job, store)
+        _export_if_done(store, job)
     finally:
         store.close()
     return 0

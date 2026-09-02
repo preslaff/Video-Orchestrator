@@ -58,7 +58,10 @@ def create_app(
     """
     if store is None:
         store = Store.open()
-    manager = manager or JobManager(store)
+    if manager is None:
+        from ..envcheck import gate
+
+        manager = JobManager(store, env_check=lambda profile, project: gate(profile, project, store=store))
     app = FastAPI(title="Video Orchestrator")
     install_cors(app)
     install_error_handlers(app)

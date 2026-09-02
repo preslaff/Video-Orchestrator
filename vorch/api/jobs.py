@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
+from ..envcheck import EnvironmentNotReady
 from ..queue import JobManager
 from ..state import JobStatus, Store
 from .deps import get_manager, get_store
@@ -40,9 +41,18 @@ async def create_job(
             max_attempts=spec.max_attempts,
             evaluate=spec.evaluate,
             face_swap=spec.face_swap,
+            project_id=spec.project_id,
+            profile_id=spec.profile_id,
+            profile_overrides=spec.profile_overrides,
+            mode=spec.mode,
+            reference_asset_ids=spec.reference_asset_ids,
+            reference_images=spec.reference_images,
+            force=spec.force,
         )
-    except FileNotFoundError as e:
-        raise ApiError(400, "bad_request", str(e))
+    except EnvironmentNotReady as e:
+        raise ApiError(409, "environment_not_ready", str(e), details=e.report.to_dict())
+    except (FileNotFoundError, KeyError, ValueError) as e:
+        raise ApiError(400, "bad_request", str(e).strip("'"))
     return job_to_public(job, store)
 
 

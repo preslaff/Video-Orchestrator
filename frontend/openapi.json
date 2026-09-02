@@ -712,11 +712,6 @@
             "type": "string",
             "title": "Idea"
           },
-          "master_face": {
-            "type": "string",
-            "title": "Master Face",
-            "default": ""
-          },
           "style": {
             "type": "string",
             "title": "Style",
@@ -724,6 +719,10 @@
           },
           "autonomy": {
             "type": "string",
+            "enum": [
+              "semi",
+              "full"
+            ],
             "title": "Autonomy",
             "default": "semi"
           },
@@ -743,20 +742,107 @@
             "title": "Seed",
             "default": 0
           },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "profile_overrides": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Overrides"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "t2i",
+              "edit"
+            ],
+            "title": "Mode",
+            "default": "t2i"
+          },
+          "reference_asset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reference Asset Ids",
+            "default": []
+          },
+          "reference_images": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reference Images",
+            "default": []
+          },
+          "master_face": {
+            "type": "string",
+            "title": "Master Face",
+            "default": ""
+          },
           "max_attempts": {
-            "type": "integer",
-            "title": "Max Attempts",
-            "default": 2
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Attempts"
           },
           "evaluate": {
-            "type": "boolean",
-            "title": "Evaluate",
-            "default": true
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluate"
           },
           "face_swap": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Face Swap"
+          },
+          "force": {
             "type": "boolean",
-            "title": "Face Swap",
-            "default": true
+            "title": "Force",
+            "default": false
           }
         },
         "type": "object",
@@ -764,7 +850,7 @@
           "idea"
         ],
         "title": "JobSpec",
-        "description": "Request body for creating a job (mirrors the YAML job spec / DESIGN §7)."
+        "description": "Request body for creating a job.\n\nThe profile (``profile_id`` → project default → built-in default) carries\nthe generation settings; ``profile_overrides`` deep-merges on top; the\nlegacy ``evaluate`` / ``face_swap`` / ``max_attempts`` knobs apply only when\nsent. ``force`` bypasses a failing environment check."
       },
       "JobStatus": {
         "type": "string",

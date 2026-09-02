@@ -278,3 +278,86 @@ def test_broker_global_subscriber_sees_all_jobs():
 
     got, after = asyncio.run(go())
     assert got == ["a", "b"] and after == 0
+
+
+# --- submission: profile snapshot, env gate, auto-export -------------------------
+
+
+def test_submit_snapshots_profile_and_project(tmp_path, make_store, monkeypatch):
+    from vorch import config, projects
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    monkeypatch.setattr(config, "EXPORT_ROOT", tmp_path / "export")
+
+    async def go():
+        store = make_store()
+        proj = projects.save(store, projects.new_project("Snap", default_profile_id="social_9x16"))
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+        job = await mgr.submit("idea", project_id=proj.id, face_swap=False,
+                               profile_overrides={"video": {"length": 81}})
+        await asyncio.gather(*list(mgr._tasks))
+        return store.load_job(job.id)
+
+    job = asyncio.run(go())
+    assert job.profile_id == "social_9x16" and job.profile["video"]["length"] == 81
+    assert job.profile["face_swap"]["enabled"] is False and job.kind == "video"
+    assert job.project_id and job.status is JobStatus.DONE
+    assert job.export and job.export["ok"] is True and job.export["files"] == []  # nothing to deliver, recorded
+
+
+def test_env_gate_blocks_on_fail_and_force_bypasses(tmp_path, make_store):
+    from vorch.envcheck import CheckResult, EnvReport, EnvironmentNotReady
+
+    report = EnvReport([CheckResult("comfy", "fail", "down")], "now", 1)
+    seen = []
+
+    def gate(profile, project):
+        seen.append(profile.id)
+        raise EnvironmentNotReady(report)
+
+    async def go():
+        store = make_store()
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j),
+                         env_check=gate, auto_export=False)
+        with pytest.raises(EnvironmentNotReady) as ei:
+            await mgr.submit("idea", face_swap=False)
+        assert ei.value.report is report and seen == ["cinematic_16x9"]
+        job = await mgr.submit("idea", face_swap=False, force=True)  # bypass
+        await asyncio.gather(*list(mgr._tasks))
+        return store.load_job(job.id).status
+
+    assert asyncio.run(go()) is JobStatus.DONE
+
+
+def test_auto_export_on_done_emits_event(tmp_path, make_store, monkeypatch):
+    from vorch import export as export_mod
+
+    rec = export_mod.ExportRecord(path=str(tmp_path / "exp"), exported_at="t", files=["s01_clip.mp4"])
+    monkeypatch.setattr(export_mod, "export_job", lambda store, job, project: rec)
+
+    async def go():
+        store = make_store()
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+        job = await mgr.submit("idea", face_swap=False)
+        q = mgr.events(job.id, after=0)
+        events = await _drain(q)
+        return [e["type"] for e in events], store.load_job(job.id).export
+
+    types, saved = asyncio.run(go())
+    assert types[-2:] == ["export", "end"] and saved["files"] == ["s01_clip.mp4"]
+
+
+def test_export_now_requires_done_unless_forced(tmp_path, make_store, monkeypatch):
+    from vorch import export as export_mod
+    from vorch.state import new_job
+
+    monkeypatch.setattr(export_mod, "export_job", lambda store, job, project: export_mod.ExportRecord("p", "t"))
+    store = make_store()
+    mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+    job = store.save_job(new_job(idea="x"))
+    with pytest.raises(RuntimeError):
+        mgr.export_now(job.id)
+    assert mgr.export_now(job.id, force=True).path == "p"
+    assert store.load_job(job.id).export["path"] == "p"
+    with pytest.raises(KeyError):
+        mgr.export_now("nope")

@@ -16,8 +16,11 @@ import logging
 from collections import deque
 from collections.abc import Callable
 
+from . import export as export_mod
+from . import projects as projects_mod
 from .orchestrator import Orchestrator
 from .state import Job, JobStatus, Store
+from .submission import resolve_submission
 
 log = logging.getLogger("vorch.queue")
 
@@ -86,9 +89,16 @@ class JobManager:
         store: Store,
         *,
         orchestrator_factory: Callable[[Store, Job], Orchestrator] | None = None,
+        env_check: Callable[..., object] | None = None,
+        auto_export: bool = True,
     ):
+        """``env_check(profile, project)`` (e.g. ``envcheck.gate``) runs before every
+        submit unless the caller forces; ``auto_export`` materialises the handoff
+        folder when a job reaches DONE."""
         self.store = store
         self.broker = Broker()
+        self._env_check = env_check
+        self._auto_export = auto_export
         self._lock = asyncio.Lock()  # one generation at a time (single GPU)
         self._tasks: set[asyncio.Task] = set()
         self._active: set[str] = set()  # jobs with a run segment in flight
@@ -106,19 +116,55 @@ class JobManager:
         autonomy: str = "semi",
         n_scenes: int | None = None,
         seed: int = 0,
-        max_attempts: int = 2,
-        evaluate: bool = True,
-        face_swap: bool = True,
+        max_attempts: int | None = None,
+        evaluate: bool | None = None,
+        face_swap: bool | None = None,
+        project_id: str | None = None,
+        profile_id: str | None = None,
+        profile_overrides: dict | None = None,
+        mode: str = "t2i",
+        reference_asset_ids: list[str] | None = None,
+        reference_images: list[str] | None = None,
+        force: bool = False,
     ) -> Job:
-        """Create + persist a job (validates the master face when swapping) and run it."""
-        orch = Orchestrator(
-            self.store, n_scenes=n_scenes, seed=seed, max_attempts=max_attempts,
-            evaluate=evaluate, face_swap=face_swap,
+        """Resolve profile/project/assets, gate on the environment, create + run the job.
+
+        Raises KeyError (unknown project/profile/asset), FileNotFoundError (master
+        face / reference missing), ValueError (bad overrides or mode), and
+        ``envcheck.EnvironmentNotReady`` when a check fails and ``force`` is off.
+        """
+        sub = resolve_submission(
+            self.store, project_id=project_id, profile_id=profile_id,
+            profile_overrides=profile_overrides, master_face=master_face,
+            reference_asset_ids=reference_asset_ids or (), reference_images=reference_images or (),
+            evaluate=evaluate, face_swap=face_swap, max_attempts=max_attempts,
         )
-        job = orch.create_job(idea, style=style, master_face=master_face, autonomy=autonomy)
+        if self._env_check is not None and not force:
+            self._env_check(sub.profile, sub.project)
+        orch = Orchestrator(self.store, profile=sub.profile, n_scenes=n_scenes, seed=seed)
+        job = orch.create_job(
+            idea, style=style, master_face=sub.master_face, autonomy=autonomy, mode=mode,
+            reference_images=sub.reference_images, project_id=sub.project_id,
+        )
         self._active.add(job.id)
         self._spawn(self._execute(job, lambda o, j: o.run(j)))
         return job
+
+    def export_now(self, job_id: str, *, force: bool = False) -> export_mod.ExportRecord:
+        """Materialise the handoff folder for a finished job (synchronous file I/O)."""
+        if job_id in self._active:
+            raise RuntimeError(f"job {job_id} is running")
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job.status is not JobStatus.DONE and not force:
+            raise RuntimeError(f"job is {job.status.value}, not done (use force to export anyway)")
+        project = projects_mod.load(self.store, job.project_id) if job.project_id else None
+        rec = export_mod.export_job(self.store, job, project)
+        job.export = rec.to_dict()
+        self.store.save_job(job)
+        self.broker.publish(job.id, {"type": "export", "path": rec.path, "files": rec.files, "ok": rec.ok})
+        return rec
 
     async def approve(self, job_id: str, gate: str) -> Job:
         """Clear a gate and resume the job in the background; returns its current state.
@@ -188,6 +234,8 @@ class JobManager:
         async with self._lock:
             try:
                 await loop.run_in_executor(None, fn, orch, job)
+                if self._auto_export:
+                    await self._maybe_export(loop, job)
             except Exception as e:  # surface failure as state + event, never crash the loop
                 log.exception("job %s failed", job.id)
                 job.status = JobStatus.FAILED
@@ -196,6 +244,22 @@ class JobManager:
             finally:
                 self._active.discard(job.id)
                 self.broker.publish(job.id, {"job_id": job.id, "type": "end"})
+
+    async def _maybe_export(self, loop, job: Job) -> None:
+        """After a run segment: export once when the job just reached DONE."""
+        fresh = self.store.load_job(job.id)
+        if fresh is None or fresh.status is not JobStatus.DONE or fresh.export:
+            return
+        project = projects_mod.load(self.store, fresh.project_id) if fresh.project_id else None
+        try:
+            rec = await loop.run_in_executor(None, export_mod.export_job, self.store, fresh, project)
+        except Exception as e:  # noqa: BLE001 - export must never fail a finished job
+            log.warning("job %s: export failed: %s", job.id, e)
+            return
+        fresh.export = rec.to_dict()
+        self.store.save_job(fresh)
+        job.export = fresh.export
+        self.broker.publish(job.id, {"type": "export", "path": rec.path, "files": rec.files, "ok": rec.ok})
 
     def _spawn(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
