@@ -121,3 +121,105 @@ def test_update_scenes_while_running_409(client):
     client.app.state.manager._active.add(job.id)  # simulate a run segment in flight
     r = client.put(f"/api/jobs/{job.id}/scenes", json={"scenes": [{"index": 0, "description": "x"}]})
     assert r.status_code == 409
+
+
+# --- commit 2: envelope, gate validation, public projection -------------------
+
+
+def test_error_envelope_shape_on_404(client):
+    r = client.get("/api/jobs/nope")
+    assert r.status_code == 404
+    body = r.json()
+    assert body["error"]["code"] == "not_found" and body["error"]["message"]
+
+
+def test_approve_invalid_gate_422(client):
+    job = _paused_job_with_scene(client.store)
+    r = client.post(f"/api/jobs/{job.id}/approve/bogus")
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "validation_error"
+
+
+def test_approve_not_paused_409(client):
+    jid = client.post("/api/jobs", json={"idea": "x", "face_swap": False}).json()["id"]
+    # FakeOrch finishes synchronously-ish; wait for the run to settle.
+    import time
+    for _ in range(50):
+        if client.get(f"/api/jobs/{jid}").json()["status"] == "done":
+            break
+        time.sleep(0.02)
+    r = client.post(f"/api/jobs/{jid}/approve/storyboard")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "conflict"
+
+
+def test_job_detail_reports_pending_gate(client):
+    from vorch.state import Decision
+
+    job = _paused_job_with_scene(client.store)
+    assert client.get(f"/api/jobs/{job.id}").json()["pending_gate"] == "storyboard"
+    client.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="storyboard",
+                                       attempt=1, action="approved"))
+    assert client.get(f"/api/jobs/{job.id}").json()["pending_gate"] == "keyframes"
+    job.status = JobStatus.DONE
+    client.store.save_job(job)
+    assert client.get(f"/api/jobs/{job.id}").json()["pending_gate"] is None
+
+
+def test_job_public_has_media_urls(client, tmp_path, monkeypatch):
+    from vorch import config
+    from vorch.state import Scene, new_job
+
+    out = tmp_path / "comfy_out"
+    (out / "video").mkdir(parents=True)
+    monkeypatch.setattr(config, "COMFY_OUTPUT", out)
+    kf = out / "Flux2-Klein_00001_.png"
+    kf.write_bytes(b"\x89PNG")
+    vid = out / "video" / "clip.mp4"
+    vid.write_bytes(b"\x00")
+
+    job = new_job(idea="m", master_face=client.master)
+    job.scenes = [Scene(index=0, keyframe_path=str(kf), video_path=str(vid))]
+    client.store.save_job(job)
+
+    s = client.get(f"/api/jobs/{job.id}").json()["scenes"][0]
+    assert s["keyframe_url"] == "/media/Flux2-Klein_00001_.png"
+    assert s["video_url"] == "/media/video/clip.mp4"
+    assert s["swapped_url"] is None
+    # local paths are still present for the export step
+    assert s["keyframe_path"] == str(kf)
+
+
+def test_delete_job_204_409_404(client):
+    job = _paused_job_with_scene(client.store)
+    client.app.state.manager._active.add(job.id)
+    assert client.delete(f"/api/jobs/{job.id}").status_code == 409
+    client.app.state.manager._active.discard(job.id)
+    assert client.delete(f"/api/jobs/{job.id}").status_code == 204
+    assert client.get(f"/api/jobs/{job.id}").status_code == 404
+    assert client.delete(f"/api/jobs/{job.id}").status_code == 404
+
+
+def test_decisions_missing_job_404(client):
+    assert client.get("/api/jobs/nope/decisions").status_code == 404
+
+
+def test_provenance_endpoint(client, tmp_path, monkeypatch):
+    from vorch import config, provenance
+    from vorch.state import Scene, new_job
+
+    out = tmp_path / "o"
+    out.mkdir()
+    monkeypatch.setattr(config, "COMFY_OUTPUT", out)
+    kf = out / "k.png"
+    kf.write_bytes(b"\x89PNG")
+    provenance.write_manifest(kf, "keyframe", {"positive": "a cat", "seed": 42})
+    sw = out / "s.png"
+    sw.write_bytes(b"\x89PNG")  # no manifest
+
+    job = new_job(idea="p")
+    job.scenes = [Scene(index=0, keyframe_path=str(kf), swapped_path=str(sw))]
+    client.store.save_job(job)
+
+    rows = client.get(f"/api/jobs/{job.id}/provenance").json()
+    assert [(r["kind"], r["has_manifest"]) for r in rows] == [("keyframe", True), ("swapped", False)]
+    assert rows[0]["seed"] == 42 and rows[0]["prompt"] == "a cat" and rows[0]["url"] == "/media/k.png"

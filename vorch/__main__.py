@@ -159,8 +159,7 @@ def _print_job(job, store: Store) -> None:
         vid = s.video_path or "-"
         print(f"  scene {s.index} [{s.status.value}]  kf={kf}  video={vid}")
     if job.status is JobStatus.NEEDS_APPROVAL:
-        done = {d.phase for d in store.decisions(job.id) if d.action == "approved"}
-        gate = GATE_KEYFRAMES if GATE_STORYBOARD in done else GATE_STORYBOARD
+        gate = Orchestrator.next_gate(job, store)
         print(f"  -> paused. approve with:  python -m vorch approve {job.id} {gate}")
 
 

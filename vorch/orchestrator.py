@@ -254,6 +254,27 @@ class Orchestrator:
 
     # -- gates & phase predicates --
 
+    @staticmethod
+    def gates(job: Job) -> list[str]:
+        """The approval gates this job passes through, in order."""
+        return [GATE_STORYBOARD, GATE_KEYFRAMES]
+
+    @classmethod
+    def next_gate(cls, job: Job, store: Store) -> str | None:
+        """The first gate not yet approved (regardless of the job's status)."""
+        approved = {d.phase for d in store.decisions(job.id) if d.action == "approved"}
+        for g in cls.gates(job):
+            if g not in approved:
+                return g
+        return None
+
+    @classmethod
+    def pending_gate(cls, job: Job, store: Store) -> str | None:
+        """The gate a paused job is waiting on; None unless NEEDS_APPROVAL."""
+        if job.status is not JobStatus.NEEDS_APPROVAL:
+            return None
+        return cls.next_gate(job, store)
+
     def _gate(self, job: Job, name: str) -> bool:
         """Return True (and pause the job) if this gate blocks progress."""
         if job.autonomy == "full" or self._approved(job, name):

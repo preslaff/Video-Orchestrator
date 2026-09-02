@@ -19,6 +19,7 @@ from nicegui import app as nicegui_app
 from nicegui import ui
 
 from .. import config, provenance
+from ..orchestrator import Orchestrator
 from ..queue import JobManager
 from ..server import register_routes
 from ..state import JobStatus, Store
@@ -43,8 +44,7 @@ def _manager() -> JobManager:
 
 def _pending_gate(job, store) -> str:
     """Which gate a paused job is waiting on (inferred from approvals so far)."""
-    approved = {d.phase for d in store.decisions(job.id) if d.action == "approved"}
-    return "keyframes" if "storyboard" in approved else "storyboard"
+    return Orchestrator.next_gate(job, store) or "keyframes"
 
 
 def _outputs_url(path: str | None, *, video: bool = False) -> str | None:

@@ -15,9 +15,10 @@ from fastapi import FastAPI
 from ..queue import JobManager
 from ..state import Store
 from . import events, jobs
+from .errors import ApiError, install_error_handlers
 from .schemas import JobSpec, SceneEdit, SceneEdits
 
-__all__ = ["JobSpec", "SceneEdit", "SceneEdits", "create_app", "register_routes"]
+__all__ = ["ApiError", "JobSpec", "SceneEdit", "SceneEdits", "create_app", "register_routes"]
 
 log = logging.getLogger("vorch.api")
 
@@ -36,5 +37,6 @@ def create_app(store: Store | None = None, manager: JobManager | None = None) ->
         store = Store.open()
     manager = manager or JobManager(store)
     app = FastAPI(title="Video Orchestrator")
+    install_error_handlers(app)
     register_routes(app, manager, store)
     return app

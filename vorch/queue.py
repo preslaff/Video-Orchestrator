@@ -108,6 +108,10 @@ class JobManager:
         """Subscribe to a job's event stream (drain until a {'type': 'end'} event)."""
         return self.broker.subscribe(job_id)
 
+    def is_active(self, job_id: str) -> bool:
+        """True while a run segment (run/approve) for this job is in flight."""
+        return job_id in self._active
+
     def update_scenes(self, job_id: str, edits: list[dict]) -> Job:
         """Apply prompt/description edits to a paused job's scenes and persist them.
 
