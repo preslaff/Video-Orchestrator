@@ -63,7 +63,7 @@ export function useJobEvents(jobId: string | undefined, opts: UseJobEventsOption
         return
       }
       if (typeof data.id === 'number') lastId.current = Math.max(lastId.current, data.id)
-      setEvents((prev) => [...prev, data])
+      setEvents((prev) => [...prev, { ...data, _at: Date.now() }])
       invalidateJob()
       if (LIST_EVENTS.has(data.type)) void qc.invalidateQueries({ queryKey: ['jobs'] })
       if (data.type === 'end' || data.type === 'export' || data.type === 'error') {

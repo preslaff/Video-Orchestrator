@@ -16,7 +16,7 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from vorch import db
+from vorch import config, db, registry
 from vorch.state import Store
 
 TEST_DSN = os.environ.get("VORCH_TEST_DATABASE_URL", "postgresql:///vorch_test")
@@ -70,3 +70,15 @@ def make_store(pg_dsn: str, pg_schema: str):
 @pytest.fixture
 def store(make_store) -> Store:
     return make_store()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_user_workflows(tmp_path, monkeypatch):
+    """Never read the developer's ~/vorch/workflows in tests: a user entry there
+    would change which workflows are registered. Each test gets an empty dir."""
+    user_dir = tmp_path / "user_workflows"
+    user_dir.mkdir()
+    monkeypatch.setattr(config, "USER_WORKFLOW_DIR", user_dir)
+    registry.reset_cache()
+    yield
+    registry.reset_cache()

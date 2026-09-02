@@ -28,7 +28,8 @@ const STATUS_STYLES: Record<string, string> = {
 
 export function StatusBadge({ status }: { status: JobStatus | string }) {
   return (
-    <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[status] ?? 'bg-neutral-100'}`}>
+    <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLES[status] ?? 'bg-neutral-100'}`}>
+      {status === 'running' && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-600" />}
       {status.replace('_', ' ')}
     </span>
   )

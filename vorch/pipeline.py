@@ -137,6 +137,7 @@ def generate_keyframe_evaluated(
     filename_prefix: str | None = None,
     mode: str = "t2i",
     references: Sequence[str] = (),
+    on_start: Callable[[int, int], None] | None = None,
 ) -> tuple[Path, Verdict]:
     """Generate a keyframe, evaluate it, and retry with the fix up to N times.
 
@@ -144,7 +145,7 @@ def generate_keyframe_evaluated(
     if none were accepted — the caller's human gate decides what to do then.
     ``on_attempt(attempt, path, verdict)`` is invoked after each evaluation so the
     caller can log every attempt to its decision log (DESIGN.md §8), not just the
-    final one.
+    final one; ``on_start(attempt, seed)`` fires before each generation (progress UI).
     """
     attempt_prompt = prompt
     kf_path: Path
@@ -153,6 +154,8 @@ def generate_keyframe_evaluated(
         # seed 0 = random (each retry differs); a fixed seed is bumped per attempt.
         attempt_seed = config.derive_seed(seed, attempt=attempt)
         log.info("keyframe: attempt %d/%d (seed=%s, mode=%s)", attempt, max_attempts, attempt_seed, mode)
+        if on_start is not None:
+            on_start(attempt, attempt_seed)
         kf_path = _make_keyframe(
             attempt_prompt, seed=attempt_seed, params=params, negative=negative,
             filename_prefix=filename_prefix, mode=mode, references=references,

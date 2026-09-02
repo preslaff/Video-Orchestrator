@@ -377,3 +377,22 @@ def test_update_scenes_chosen_variant(wired):
     assert updated.scenes[0].keyframe_verdict.score == 7
     with pytest.raises(ValueError):
         mgr.update_scenes(job.id, [{"index": 0, "chosen_variant": 5}])
+
+
+def test_progress_events_phase_and_step(wired):
+    """Every phase announces itself and every generation step is announced before it runs."""
+    store, master, _ = wired
+    o = Orchestrator(store)
+    seen: list[dict] = []
+    o.emit = seen.append
+    job = o.create_job("progress", master_face=str(master), autonomy="full")
+    o.run(job)
+    types = [(e["type"], e.get("phase") or e.get("step")) for e in seen]
+    assert types[:3] == [("status", None), ("phase", "storyboard"), ("step", "storyboard")]
+    assert ("phase", "keyframes") in types and ("phase", "videos") in types
+    kf_steps = [e for e in seen if e["type"] == "step" and e["step"] == "keyframe"]
+    assert [e["index"] for e in kf_steps] == [0, 1] and kf_steps[0]["attempt"] == 1 and kf_steps[0]["max_attempts"] == 2
+    order = [(e["type"], e.get("step"), e.get("index")) for e in seen if e["type"] in ("step", "keyframe", "video")]
+    assert order.index(("step", "keyframe", 0)) < order.index(("keyframe", None, 0))
+    assert ("step", "swap", 0) in order and order.index(("step", "animate", 1)) < order.index(("video", None, 1))
+    assert seen[-1] == {"job_id": job.id, "type": "status", "status": "done"}

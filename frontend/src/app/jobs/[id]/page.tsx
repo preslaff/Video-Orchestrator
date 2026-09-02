@@ -10,6 +10,7 @@ import { Timeline } from '@/components/Timeline'
 import { DecisionLog } from '@/components/DecisionLog'
 import { SceneCard, ScenePrompts } from '@/components/SceneGrid'
 import { GatePanel } from '@/components/GatePanel'
+import { ProgressPanel } from '@/components/ProgressPanel'
 
 export default function JobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -38,6 +39,8 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         <span className="text-xs text-neutral-500">{j.kind} · {j.profile_id ?? 'default profile'} · {profile?.aspect ?? '16:9'} · seed {j.seed || 'random'}</span>
         {j.pending_gate && <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900">waiting for approval: {j.pending_gate}</span>}
       </div>
+
+      <ProgressPanel job={j} events={live.events} connected={live.connected} />
 
       {(j.status === 'needs_approval' || (j.status === 'done' && j.scenes.some((s) => s.variants.length > 1))) && (
         <GatePanel key={`${j.id}-${j.status}-${j.updated_at}`} job={j} />

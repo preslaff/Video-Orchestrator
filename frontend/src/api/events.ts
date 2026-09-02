@@ -1,6 +1,8 @@
 /** SSE contract with the backend (vorch/api/events.py). `id` is per-job and monotonic. */
 export const EVENT_TYPES = [
   'status',
+  'phase',
+  'step',
   'storyboard',
   'verdict',
   'keyframe',
@@ -20,7 +22,40 @@ export interface JobEvent {
   id?: number
   type: EventType | string
   job_id: string
+  /** Client-side arrival time (ms); set by useJobEvents for elapsed-time display. */
+  _at?: number
   [key: string]: unknown
+}
+
+export const PHASE_LABELS: Record<string, string> = {
+  storyboard: 'Storyboard',
+  keyframes: 'Keyframes',
+  videos: 'Videos',
+  stills: 'Finishing stills',
+  export: 'Export',
+}
+
+/** One-line description of a running step, for the activity indicator. */
+export function describeStep(e: JobEvent): string {
+  const scene = typeof e.index === 'number' ? `scene ${Number(e.index) + 1}` : ''
+  const variant = typeof e.variant === 'number' && Number(e.variants) > 1 ? ` · variant ${Number(e.variant) + 1}/${String(e.variants)}` : ''
+  switch (e.step) {
+    case 'storyboard':
+      return 'Gemma is writing the storyboard and the per-scene prompts'
+    case 'keyframe': {
+      const attempt = Number(e.max_attempts) > 1 ? ` · attempt ${String(e.attempt)}/${String(e.max_attempts)}` : ''
+      const mode = e.mode === 'edit' ? ' (reference edit)' : ''
+      return `Generating keyframe for ${scene}${variant}${attempt}${mode}${Number(e.max_attempts) > 1 ? ' — Gemma evaluates each attempt' : ''}`
+    }
+    case 'swap':
+      return `Imposing the master face on ${scene}${variant} (ReActor)`
+    case 'animate':
+      return `Animating ${scene} with Wan — ${String(e.length)} frames @ ${String(e.fps)} fps (~${String(e.seconds)}s); this is the slow step`
+    case 'post':
+      return `Post-processing ${scene}${variant}: ${Array.isArray(e.chain) ? e.chain.join(' → ') : ''}`
+    default:
+      return String(e.step ?? 'working')
+  }
 }
 
 /** Events after which the jobs list (status column) should refresh. */
@@ -30,6 +65,10 @@ export function describeEvent(e: JobEvent): string {
   switch (e.type) {
     case 'status':
       return `status → ${String(e.status)}`
+    case 'phase':
+      return `phase: ${PHASE_LABELS[String(e.phase)] ?? String(e.phase)}${e.total ? ` (${String(e.total)} scene(s))` : ''}`
+    case 'step':
+      return describeStep(e)
     case 'storyboard':
       return `storyboard: ${String(e.scenes)} scene(s)`
     case 'verdict':

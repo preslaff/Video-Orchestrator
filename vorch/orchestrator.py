@@ -224,6 +224,8 @@ class Orchestrator:
 
     def _phase_storyboard(self, job: Job) -> None:
         log.info("job %s: storyboard (idea=%r)", job.id, job.idea)
+        self._event(job, "phase", phase="storyboard", total=self.n_scenes)
+        self._event(job, "step", step="storyboard", detail="Gemma writes the storyboard and prompts")
         context = storyboard.PromptContext.from_params(self.params)
         briefs = storyboard.generate_storyboard(job.idea, n_scenes=self.n_scenes, context=context)
         scenes: list[Scene] = []
@@ -265,6 +267,7 @@ class Orchestrator:
         resumed run continues mid-scene."""
         ref_cache: dict = {}  # reference path -> staged name (upload once per run)
         n = self.variants_per_scene
+        self._event(job, "phase", phase="keyframes", total=len(job.scenes), variants=n)
         for scene in job.scenes:
             if not self._scene_needs_keyframes(scene, n):
                 continue  # resume: already done
@@ -290,7 +293,16 @@ class Orchestrator:
 
     def _one_keyframe(self, job: Job, scene: Scene, *, seed: int, refs, variant: int):
         prefix = output_prefix(job, scene.index, "keyframe", variant if self.variants_per_scene > 1 else None)
+        n_var = self.variants_per_scene
+        # Announce the step before generation (progress UI); retries re-announce via on_start.
+        self._event(job, "step", step="keyframe", index=scene.index, variant=variant, variants=n_var,
+                    attempt=1, max_attempts=self.max_attempts if self.evaluate else 1, mode=scene.mode)
         if self.evaluate:
+            def on_start(attempt, _seed, _idx=scene.index):
+                if attempt > 1:
+                    self._event(job, "step", step="keyframe", index=_idx, variant=variant, variants=n_var,
+                                attempt=attempt, max_attempts=self.max_attempts, mode=scene.mode)
+
             def log_attempt(attempt, _path, verdict, _idx=scene.index):
                 # Every attempt -> decision log (DESIGN §8), not just the last.
                 self.store.record_verdict(job.id, _idx, "keyframe", verdict, attempt=attempt)
@@ -302,7 +314,7 @@ class Orchestrator:
                 scene.keyframe_prompt, scene.keyframe_prompt,
                 seed=seed, max_attempts=self.max_attempts, on_attempt=log_attempt,
                 params=self.params, negative=scene.keyframe_negative or None,
-                mode=scene.mode, references=refs, filename_prefix=prefix,
+                mode=scene.mode, references=refs, filename_prefix=prefix, on_start=on_start,
             )
         path, _ = pipeline._fresh_keyframe(
             scene.keyframe_prompt, seed=seed, evaluate=False, max_attempts=1,
@@ -326,6 +338,7 @@ class Orchestrator:
         mark the scenes complete. Post-steps for stills hook in here."""
         do_swap = self.face_swap and bool(job.master_face)
         master_name = comfy.upload_image(job.master_face) if do_swap else None
+        self._event(job, "phase", phase="stills", total=len(job.scenes))
         for scene in job.scenes:
             if scene.status is SceneStatus.COMPLETE:
                 continue
@@ -338,6 +351,7 @@ class Orchestrator:
                     if variant.swapped_path:
                         continue
                     provenance.set_context(variant=v if len(scene.variants) > 1 else None)
+                    self._event(job, "step", step="swap", index=scene.index, variant=v, variants=len(scene.variants))
                     swapped = pipeline.swap_master_onto(
                         variant.path, master_name, params=self.params,
                         label=f"scene {scene.index} variant {v} faceswap",
@@ -357,6 +371,8 @@ class Orchestrator:
                 for v, variant in enumerate(scene.variants):
                     if variant.post_paths:
                         continue
+                    self._event(job, "step", step="post", index=scene.index, variant=v,
+                                chain=[st.workflow for st in self.params.post_steps])
                     src = variant.swapped_path or variant.path
                     outs = run_chain(
                         src, self.params.post_steps, seed=variant.seed,
@@ -397,6 +413,8 @@ class Orchestrator:
     def _phase_videos(self, job: Job) -> None:
         do_swap = self.face_swap and bool(job.master_face)
         master_name = comfy.upload_image(job.master_face) if do_swap else None
+        self._event(job, "phase", phase="videos", total=len(job.scenes),
+                    length=self.params.length, fps=self.params.fps)
         for scene in job.scenes:
             if scene.video_path:
                 continue  # resume: already done
@@ -406,6 +424,7 @@ class Orchestrator:
             provenance.set_context(scene=scene.index)
             if do_swap:
                 log.info("job %s: video scene %d (swap -> animate)", job.id, scene.index)
+                self._event(job, "step", step="swap", index=scene.index)
                 swapped = pipeline.swap_master_onto(
                     scene.keyframe_path, master_name, params=self.params,
                     filename_prefix=output_prefix(job, scene.index, "swapped"),
@@ -419,6 +438,8 @@ class Orchestrator:
                 frame = scene.keyframe_path
 
             seed = config.derive_seed(self.seed, scene=scene.index)
+            self._event(job, "step", step="animate", index=scene.index,
+                        length=self.params.length, fps=self.params.fps, seconds=self.params.clip_seconds)
             video = pipeline.animate_frame(
                 frame, scene.animation_prompt, seed=seed,
                 params=self.params, negative=scene.animation_negative or None,
@@ -433,6 +454,8 @@ class Orchestrator:
             self.store.save_job(job)
             self._event(job, "video", index=scene.index, path=scene.video_path)
             if self.params.post_steps:
+                self._event(job, "step", step="post", index=scene.index,
+                            chain=[st.workflow for st in self.params.post_steps])
                 outs = run_chain(
                     video, self.params.post_steps, fps=self.params.fps, seed=seed,
                     filename_prefix=output_prefix(job, scene.index, "post"),
