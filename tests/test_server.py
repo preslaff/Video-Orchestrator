@@ -421,3 +421,12 @@ def test_openapi_snapshot_matches_frontend():
     assert openapi_schema() == json.loads(snap.read_text()), (
         "API schema changed — run `make api-types` and commit frontend/openapi.json"
     )
+
+
+def test_list_jobs_project_filter_and_summary_fields(client):
+    from vorch.state import new_job
+
+    client.store.save_job(new_job(idea="s", kind="stills", profile_id="stills_16x9"))
+    page = client.get("/api/jobs").json()
+    assert page["items"][0]["kind"] == "stills" and page["items"][0]["profile_id"] == "stills_16x9"
+    assert client.get("/api/jobs?project_id=nope").json()["total"] == 0

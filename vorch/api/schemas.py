@@ -59,6 +59,16 @@ class VerdictOut(BaseModel):
     fix_suggestion: str = ""
 
 
+class VariantOut(BaseModel):
+    path: str
+    url: str | None = None
+    seed: int | None = None
+    verdict: VerdictOut | None = None
+    swapped_path: str | None = None
+    swapped_url: str | None = None
+    post_paths: list[str] = []
+
+
 class ScenePublic(BaseModel):
     index: int
     description: str = ""
@@ -82,6 +92,9 @@ class ScenePublic(BaseModel):
     swapped_path: str | None = None
     swapped_url: str | None = None
     swap_verdict: VerdictOut | None = None
+    variants: list[VariantOut] = []
+    raw_video_path: str | None = None
+    post_paths: list[str] = []
 
 
 class JobPublic(BaseModel):
@@ -97,6 +110,11 @@ class JobPublic(BaseModel):
     face_swap: bool
     mode: str = "t2i"
     reference_images: list[str] = []
+    project_id: str | None = None
+    profile_id: str | None = None
+    profile: dict | None = None
+    kind: str = "video"
+    export: dict | None = None
     status: str
     created_at: str
     updated_at: str
@@ -109,6 +127,9 @@ class JobSummaryOut(BaseModel):
     status: str
     idea: str
     updated_at: str
+    project_id: str | None = None
+    kind: str = "video"
+    profile_id: str | None = None
 
 
 class Page(BaseModel, Generic[T]):

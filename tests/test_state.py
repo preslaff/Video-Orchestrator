@@ -245,3 +245,60 @@ def test_list_jobs_paging_and_status_filter(store):
     assert [s.idea for s in store.list_jobs(limit=2, offset=1)] == ["n2", "n1"]
     assert [s.idea for s in store.list_jobs(status=JobStatus.DONE)] == ["n3", "n1"]
     assert store.count_jobs() == 4 and store.count_jobs(status="done") == 2
+
+
+# --- 0002: setup fields + migration from a v1 schema ----------------------------
+
+
+def test_migration_0001_to_0002_on_existing_schema(pg_dsn, pg_schema):
+    """A schema that only has 0001 applied (with data) migrates forward cleanly."""
+    import psycopg
+    from psycopg import sql
+
+    from vorch import db
+
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        conn.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(pg_schema)))
+        conn.execute("CREATE TABLE schema_migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())")
+        conn.execute(db.available_migrations()[0][1].read_text())
+        conn.execute("INSERT INTO schema_migrations (version) VALUES (1)")
+        conn.execute("INSERT INTO jobs (id, status, idea, created_at, updated_at, data) VALUES "
+                     "('old1', 'done', 'legacy', now(), now(), '{\"id\": \"old1\", \"idea\": \"legacy\", \"status\": \"done\"}')")
+    s = Store(pg_dsn, schema=pg_schema)
+    try:
+        assert s.schema_version() == db.latest_version() >= 2
+        old = s.load_job("old1")
+        assert old is not None and old.kind == "video" and old.project_id is None and old.profile is None
+        assert s.list_jobs()[0].kind == "video"
+    finally:
+        s.close()
+
+
+def test_job_setup_fields_and_variants_roundtrip(store):
+    from vorch.state import Variant
+
+    job = new_job(idea="x", project_id=None, profile_id="social_9x16",
+                  profile={"id": "social_9x16", "kind": "stills"}, kind="stills")
+    job.scenes = [Scene(index=0, variants=[
+        Variant(path="/v1.png", seed=11, verdict=_verdict("accept", 7)),
+        Variant(path="/v2.png", seed=12, swapped_path="/v2s.png", post_paths=["/v2p.png"]),
+    ], raw_video_path=None, post_paths=[])]
+    job.export = {"path": "/exp", "ok": True}
+    store.save_job(job)
+    got = store.load_job(job.id)
+    assert got.profile_id == "social_9x16" and got.profile["kind"] == "stills" and got.kind == "stills"
+    assert got.export == {"path": "/exp", "ok": True}
+    v = got.scenes[0].variants
+    assert [x.path for x in v] == ["/v1.png", "/v2.png"] and v[0].verdict.score == 7
+    assert v[1].swapped_path == "/v2s.png" and v[1].post_paths == ["/v2p.png"]
+    summary = store.list_jobs()[0]
+    assert summary.kind == "stills" and summary.profile_id == "social_9x16"
+
+
+def test_list_jobs_filters_by_project(store):
+    from vorch.state import Store as _S  # noqa: F401
+
+    # project rows are added in the projects module; a NULL project filter suffices here
+    store.save_job(new_job(idea="a"))
+    assert store.count_jobs(project_id="nope") == 0
+    assert store.list_jobs(project_id="nope") == []

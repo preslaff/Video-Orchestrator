@@ -63,6 +63,17 @@ class SceneStatus(str, Enum):
 
 
 @dataclass
+class Variant:
+    """One generated candidate for a scene's keyframe (stills jobs make several)."""
+
+    path: str
+    seed: int | None = None
+    verdict: Verdict | None = None
+    swapped_path: str | None = None
+    post_paths: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Scene:
     """One scene's full record — creative brief + generated artifacts + verdicts.
 
@@ -89,6 +100,9 @@ class Scene:
     swapped_path: str | None = None
     swap_verdict: Verdict | None = None
     status: SceneStatus = SceneStatus.PENDING
+    variants: list[Variant] = field(default_factory=list)   # keyframe candidates; keyframe_path = chosen
+    raw_video_path: str | None = None    # Wan output before post-steps (video_path = final)
+    post_paths: list[str] = field(default_factory=list)      # post-step outputs in order
 
 
 @dataclass
@@ -107,6 +121,11 @@ class Job:
     face_swap: bool = True
     mode: str = "t2i"                        # default keyframe mode for new scenes
     reference_images: list[str] = field(default_factory=list)
+    project_id: str | None = None
+    profile_id: str | None = None
+    profile: dict | None = None            # frozen OutputProfile snapshot at submit
+    kind: str = "video"                      # video | stills (copy of profile.kind)
+    export: dict | None = None             # ExportRecord (handoff folder) once exported
     status: JobStatus = JobStatus.PENDING
     scenes: list[Scene] = field(default_factory=list)
     created_at: str = ""
@@ -141,6 +160,10 @@ def new_job(
     face_swap: bool = True,
     mode: str = "t2i",
     reference_images: list[str] | None = None,
+    project_id: str | None = None,
+    profile_id: str | None = None,
+    profile: dict | None = None,
+    kind: str = "video",
     scenes: list[Scene] | None = None,
 ) -> Job:
     """Create a fresh Job with a generated id and creation timestamp."""
@@ -158,6 +181,10 @@ def new_job(
         face_swap=face_swap,
         mode=mode,
         reference_images=list(reference_images or []),
+        project_id=project_id,
+        profile_id=profile_id,
+        profile=profile,
+        kind=kind,
         scenes=scenes or [],
         created_at=ts,
         updated_at=ts,
@@ -173,6 +200,26 @@ def _verdict_to_dict(v: Verdict | None) -> dict | None:
 
 def _verdict_from_dict(d: dict | None) -> Verdict | None:
     return Verdict.model_validate(d) if d is not None else None
+
+
+def _variant_to_dict(v: Variant) -> dict:
+    return {
+        "path": v.path,
+        "seed": v.seed,
+        "verdict": _verdict_to_dict(v.verdict),
+        "swapped_path": v.swapped_path,
+        "post_paths": list(v.post_paths),
+    }
+
+
+def _variant_from_dict(d: dict) -> Variant:
+    return Variant(
+        path=d["path"],
+        seed=d.get("seed"),
+        verdict=_verdict_from_dict(d.get("verdict")),
+        swapped_path=d.get("swapped_path"),
+        post_paths=list(d.get("post_paths", []) or []),
+    )
 
 
 def _scene_to_dict(s: Scene) -> dict:
@@ -196,6 +243,9 @@ def _scene_to_dict(s: Scene) -> dict:
         "swapped_path": s.swapped_path,
         "swap_verdict": _verdict_to_dict(s.swap_verdict),
         "status": s.status.value,
+        "variants": [_variant_to_dict(v) for v in s.variants],
+        "raw_video_path": s.raw_video_path,
+        "post_paths": list(s.post_paths),
     }
 
 
@@ -220,6 +270,9 @@ def _scene_from_dict(d: dict) -> Scene:
         swapped_path=d.get("swapped_path"),
         swap_verdict=_verdict_from_dict(d.get("swap_verdict")),
         status=SceneStatus(d.get("status", "pending")),
+        variants=[_variant_from_dict(v) for v in d.get("variants", []) or []],
+        raw_video_path=d.get("raw_video_path"),
+        post_paths=list(d.get("post_paths", []) or []),
     )
 
 
@@ -237,6 +290,11 @@ def job_to_dict(job: Job) -> dict:
         "face_swap": job.face_swap,
         "mode": job.mode,
         "reference_images": list(job.reference_images),
+        "project_id": job.project_id,
+        "profile_id": job.profile_id,
+        "profile": job.profile,
+        "kind": job.kind,
+        "export": job.export,
         "status": job.status.value,
         "scenes": [_scene_to_dict(s) for s in job.scenes],
         "created_at": job.created_at,
@@ -258,6 +316,11 @@ def job_from_dict(d: dict) -> Job:
         face_swap=d.get("face_swap", True),
         mode=d.get("mode", "t2i"),
         reference_images=list(d.get("reference_images", []) or []),
+        project_id=d.get("project_id"),
+        profile_id=d.get("profile_id"),
+        profile=d.get("profile"),
+        kind=d.get("kind", "video"),
+        export=d.get("export"),
         status=JobStatus(d.get("status", "pending")),
         scenes=[_scene_from_dict(s) for s in d.get("scenes", [])],
         created_at=d.get("created_at", ""),
@@ -285,6 +348,9 @@ class JobSummary:
     status: JobStatus
     idea: str
     updated_at: str
+    project_id: str | None = None
+    kind: str = "video"
+    profile_id: str | None = None
 
 
 class Store:
@@ -349,13 +415,15 @@ class Store:
         with self._pool.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO jobs (id, status, idea, created_at, updated_at, data)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO jobs (id, status, idea, created_at, updated_at, data, project_id, kind)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     status = EXCLUDED.status,
                     idea = EXCLUDED.idea,
                     updated_at = EXCLUDED.updated_at,
-                    data = EXCLUDED.data
+                    data = EXCLUDED.data,
+                    project_id = EXCLUDED.project_id,
+                    kind = EXCLUDED.kind
                 """,
                 (
                     job.id,
@@ -364,6 +432,8 @@ class Store:
                     _to_ts(job.created_at),
                     _to_ts(job.updated_at),
                     Jsonb(job_to_dict(job)),
+                    job.project_id,
+                    job.kind,
                 ),
             )
         return job
@@ -379,10 +449,14 @@ class Store:
         limit: int | None = None,
         offset: int = 0,
         status: JobStatus | str | None = None,
+        project_id: str | None = None,
     ) -> list[JobSummary]:
-        """Newest first; optional status filter and limit/offset paging."""
-        where, params = self._job_filter(status)
-        q = f"SELECT id, status, idea, updated_at FROM jobs{where} ORDER BY updated_at DESC"
+        """Newest first; optional status / project filters and limit/offset paging."""
+        where, params = self._job_filter(status, project_id)
+        q = (
+            "SELECT id, status, idea, updated_at, project_id, kind, data->>'profile_id' AS profile_id "
+            f"FROM jobs{where} ORDER BY updated_at DESC"
+        )
         if limit is not None:
             q += " LIMIT %s OFFSET %s"
             params += [limit, offset]
@@ -394,21 +468,28 @@ class Store:
                 status=JobStatus(r["status"]),
                 idea=r["idea"],
                 updated_at=_from_ts(r["updated_at"]),
+                project_id=r["project_id"],
+                kind=r["kind"],
+                profile_id=r["profile_id"],
             )
             for r in rows
         ]
 
-    def count_jobs(self, *, status: JobStatus | str | None = None) -> int:
-        where, params = self._job_filter(status)
+    def count_jobs(self, *, status: JobStatus | str | None = None, project_id: str | None = None) -> int:
+        where, params = self._job_filter(status, project_id)
         with self._pool.connection() as conn:
             return conn.execute(f"SELECT count(*) AS n FROM jobs{where}", params).fetchone()["n"]
 
     @staticmethod
-    def _job_filter(status: JobStatus | str | None) -> tuple[str, list]:
-        if status is None:
-            return "", []
-        value = status.value if isinstance(status, JobStatus) else str(status)
-        return " WHERE status = %s", [value]
+    def _job_filter(status: JobStatus | str | None, project_id: str | None = None) -> tuple[str, list]:
+        clauses, params = [], []
+        if status is not None:
+            clauses.append("status = %s")
+            params.append(status.value if isinstance(status, JobStatus) else str(status))
+        if project_id is not None:
+            clauses.append("project_id = %s")
+            params.append(project_id)
+        return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
 
     def delete_job(self, job_id: str) -> None:
         """Delete a job and (via ON DELETE CASCADE) its decision log."""

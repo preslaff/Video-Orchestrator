@@ -51,13 +51,16 @@ async def list_jobs(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     status: JobStatus | None = None,
+    project_id: str | None = None,
     store: Store = Depends(get_store),
 ) -> Page[JobSummaryOut]:
     items = [
-        JobSummaryOut(id=s.id, status=s.status.value, idea=s.idea, updated_at=s.updated_at)
-        for s in store.list_jobs(limit=limit, offset=offset, status=status)
+        JobSummaryOut(id=s.id, status=s.status.value, idea=s.idea, updated_at=s.updated_at,
+                      project_id=s.project_id, kind=s.kind, profile_id=s.profile_id)
+        for s in store.list_jobs(limit=limit, offset=offset, status=status, project_id=project_id)
     ]
-    return Page(items=items, total=store.count_jobs(status=status), limit=limit, offset=offset)
+    total = store.count_jobs(status=status, project_id=project_id)
+    return Page(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{job_id}", response_model=JobPublic)

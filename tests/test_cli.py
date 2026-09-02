@@ -72,8 +72,10 @@ def test_db_status_and_import_commands(tmp_path, store, monkeypatch, capsys):
     assert "imported 1 jobs, 3 decisions" in capsys.readouterr().out
 
     assert cli.main(["db", "status"]) == 0
+    from vorch import db
+
     out = capsys.readouterr().out
-    assert "schema version: 1" in out and "jobs: 1" in out
+    assert f"schema version: {db.latest_version()}" in out and "jobs: 1" in out
 
 
 class _NoClose:

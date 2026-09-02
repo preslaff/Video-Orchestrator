@@ -12,8 +12,8 @@ from pathlib import Path
 from .. import config, provenance
 from ..evaluator import Verdict
 from ..orchestrator import Orchestrator
-from ..state import Job, Scene, Store, _scene_to_dict, job_to_dict
-from .schemas import JobPublic, ProvenanceOut, ScenePublic, VerdictOut
+from ..state import Job, Scene, Store, Variant, _scene_to_dict, job_to_dict
+from .schemas import JobPublic, ProvenanceOut, ScenePublic, VariantOut, VerdictOut
 
 
 def media_url(path: str | None) -> str | None:
@@ -33,8 +33,16 @@ def verdict_out(v: Verdict | None) -> VerdictOut | None:
     return VerdictOut(decision=v.decision, needs_review=v.needs_review, **v.model_dump())
 
 
+def variant_out(v: Variant) -> VariantOut:
+    return VariantOut(
+        path=v.path, url=media_url(v.path), seed=v.seed, verdict=verdict_out(v.verdict),
+        swapped_path=v.swapped_path, swapped_url=media_url(v.swapped_path), post_paths=list(v.post_paths),
+    )
+
+
 def scene_to_public(s: Scene) -> ScenePublic:
     d = _scene_to_dict(s)
+    d["variants"] = [variant_out(v) for v in s.variants]
     d.update(
         keyframe_url=media_url(s.keyframe_path),
         video_url=media_url(s.video_path),
