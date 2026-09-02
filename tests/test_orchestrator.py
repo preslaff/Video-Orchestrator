@@ -396,3 +396,60 @@ def test_progress_events_phase_and_step(wired):
     assert order.index(("step", "keyframe", 0)) < order.index(("keyframe", None, 0))
     assert ("step", "swap", 0) in order and order.index(("step", "animate", 1)) < order.index(("video", None, 1))
     assert seen[-1] == {"job_id": job.id, "type": "status", "status": "done"}
+
+
+# --- regenerate one scene ---------------------------------------------------------------
+
+
+def test_regenerate_keyframe_reopens_gate_and_reruns_only_that_scene(wired):
+    store, master, calls = wired
+    o = Orchestrator(store, evaluate=False, seed=100)
+    job = o.create_job("redo", master_face=str(master))
+    o.run(job)
+    o.approve(job, GATE_STORYBOARD)
+    o.approve(job, GATE_KEYFRAMES)
+    assert job.status is JobStatus.DONE and calls == {"keyframe": 2, "swap": 2, "animate": 2}
+    old_kf0, old_vid1 = job.scenes[0].keyframe_path, job.scenes[1].video_path
+    job.export = {"path": "/x", "ok": True}
+    store.save_job(job)
+
+    o.regenerate(job, 0, edits={"keyframe_prompt": "kf::better"})
+    # Only scene 0 was redone, and the job paused at the keyframes gate again.
+    assert calls == {"keyframe": 3, "swap": 2, "animate": 2}
+    assert job.status is JobStatus.NEEDS_APPROVAL and Orchestrator.pending_gate(job, store) == GATE_KEYFRAMES
+    s0 = job.scenes[0]
+    assert s0.keyframe_path != old_kf0 and s0.video_path is None and s0.keyframe_prompt == "kf::better"
+    assert s0.regenerations == 1 and job.scenes[1].video_path == old_vid1
+    assert store.load_job(job.id).export is None
+    log = [(d.scene_index, d.phase, d.action) for d in store.decisions(job.id)]
+    assert (0, "keyframe", "regenerate") in log and (None, "keyframes", "reopened") in log
+
+    o.approve(job, GATE_KEYFRAMES)
+    assert job.status is JobStatus.DONE and calls == {"keyframe": 3, "swap": 3, "animate": 3}
+
+
+def test_regenerate_video_only_and_errors(wired):
+    store, master, calls = wired
+    o = Orchestrator(store, evaluate=False, face_swap=False)
+    job = o.create_job("clip", autonomy="full")
+    o.run(job)
+    assert job.status is JobStatus.DONE and calls["animate"] == 2
+    o.regenerate(job, 1, what="video", edits={"animation_prompt": "an::slower"})
+    assert job.status is JobStatus.DONE and calls == {"keyframe": 2, "swap": 0, "animate": 3}
+    assert job.scenes[1].animation_prompt == "an::slower" and job.scenes[1].regenerations == 1
+    with pytest.raises(KeyError):
+        o.reopen_scene(job, 9)
+    with pytest.raises(ValueError):
+        o.reopen_scene(job, 0, what="audio")
+
+
+def test_regenerate_seed_offsets(wired, monkeypatch):
+    store, master, _ = wired
+    seeds = []
+    monkeypatch.setattr(pipeline, "_fresh_keyframe",
+                        lambda prompt, *, seed, **kw: seeds.append(seed) or (f"/kf/{seed}.png", None))
+    o = Orchestrator(store, evaluate=False, face_swap=False, seed=100)
+    job = o.create_job("seeds", autonomy="full")
+    o.run(job)
+    o.regenerate(job, 0)
+    assert seeds == [100, 10_100, 110]  # scene 0, scene 1, scene 0 regenerated (+10)

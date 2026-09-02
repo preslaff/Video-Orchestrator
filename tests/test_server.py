@@ -450,3 +450,17 @@ def test_create_job_env_fail_409_carries_report(tmp_path, make_store):
         assert body["code"] == "environment_not_ready" and body["details"]["checks"][0]["name"] == "gemma"
         assert c.post("/api/jobs", json={"idea": "x", "face_swap": False, "force": True}).status_code == 200
         assert c.post("/api/jobs", json={"idea": "x", "profile_id": "nope", "force": True}).status_code == 400
+
+
+def test_regenerate_scene_route(client):
+    from vorch.state import Scene, new_job
+
+    job = new_job(idea="r")
+    job.status = JobStatus.DONE
+    job.scenes = [Scene(index=0, keyframe_path="/k.png", video_path="/v.mp4")]
+    client.store.save_job(job)
+    r = client.post(f"/api/jobs/{job.id}/scenes/0/regenerate", json={"what": "keyframe", "keyframe_prompt": "new"})
+    assert r.status_code == 200
+    assert client.post(f"/api/jobs/{job.id}/scenes/7/regenerate", json={}).status_code == 404
+    assert client.post("/api/jobs/nope/scenes/0/regenerate", json={}).status_code == 404
+    assert client.post(f"/api/jobs/{job.id}/scenes/0/regenerate", json={"what": "audio"}).status_code == 422

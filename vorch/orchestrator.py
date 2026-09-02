@@ -212,6 +212,59 @@ class Orchestrator:
         self._event(job, "status", status=job.status.value)
         return job
 
+    SCENE_EDIT_FIELDS = ("description", "keyframe_prompt", "keyframe_negative", "animation_prompt",
+                         "animation_negative", "mode", "references")
+
+    def reopen_scene(self, job: Job, index: int, *, what: str = "keyframe", edits: dict | None = None) -> Scene:
+        """Discard a scene's keyframe (and everything built on it) or just its clip,
+        apply prompt edits, and reopen the keyframes gate so the result is reviewed.
+
+        ``what="keyframe"``: keyframe, variants, swap, clip, post-steps are cleared and
+        the scene is regenerated from the keyframes phase; ``what="video"``: only the
+        clip/post outputs are cleared (video jobs). The job's export is cleared so the
+        handoff folder is rebuilt when the job completes again.
+        """
+        scene = next((s for s in job.scenes if s.index == index), None)
+        if scene is None:
+            raise KeyError(f"job {job.id} has no scene {index}")
+        if what not in ("keyframe", "video"):
+            raise ValueError("what must be 'keyframe' or 'video'")
+        if what == "video" and job.kind != "video":
+            raise ValueError("stills jobs have no clip to regenerate")
+        for field_name in self.SCENE_EDIT_FIELDS:
+            if edits and edits.get(field_name) is not None:
+                setattr(scene, field_name, edits[field_name])
+        if what == "keyframe":
+            scene.keyframe_path = None
+            scene.keyframe_verdict = None
+            scene.variants = []
+            scene.swapped_path = None
+            scene.swap_verdict = None
+        scene.video_path = None
+        scene.raw_video_path = None
+        scene.video_verdict = None
+        scene.post_paths = []
+        scene.status = SceneStatus.PENDING if what == "keyframe" else SceneStatus.KEYFRAME
+        scene.regenerations += 1
+        job.export = None
+        changed = ", ".join(k for k in self.SCENE_EDIT_FIELDS if edits and edits.get(k) is not None)
+        self.store.log_decision(Decision(
+            job_id=job.id, scene_index=index, phase=what, attempt=scene.regenerations,
+            action="regenerate", reason=f"edited: {changed}" if changed else "same prompts, new seed",
+        ))
+        if what == "keyframe" and job.kind == "video" and job.autonomy != "full":
+            # The keyframes gate must be passed again for the new frame.
+            self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase=GATE_KEYFRAMES,
+                                             attempt=1, action="reopened"))
+        self.store.save_job(job)
+        return scene
+
+    def regenerate(self, job: Job, index: int, *, what: str = "keyframe", edits: dict | None = None) -> Job:
+        """``reopen_scene`` + ``run``: rerun only what was cleared (other scenes keep their files)."""
+        self.reopen_scene(job, index, what=what, edits=edits)
+        log.info("job %s: regenerating %s of scene %d", job.id, what, index)
+        return self.run(job)
+
     def approve(self, job: Job, gate: str) -> Job:
         """Clear a semi-auto gate (logged as a decision) and continue the run."""
         self.store.log_decision(
@@ -278,7 +331,8 @@ class Orchestrator:
             )
             for v in range(len(scene.variants), n):
                 provenance.set_context(scene=scene.index, variant=v if n > 1 else None)
-                seed = config.derive_seed(self.seed, scene=scene.index, variant=v)
+                seed = config.derive_seed(self.seed, scene=scene.index, variant=v,
+                                          attempt=1 + 10 * scene.regenerations)
                 path, verdict = self._one_keyframe(job, scene, seed=seed, refs=refs, variant=v)
                 scene.variants.append(Variant(path=str(path), seed=_seed_used(path, seed), verdict=verdict))
                 self.store.save_job(job)  # persist per variant — resumable
@@ -437,7 +491,7 @@ class Orchestrator:
                 log.info("job %s: video scene %d (animate keyframe, no swap)", job.id, scene.index)
                 frame = scene.keyframe_path
 
-            seed = config.derive_seed(self.seed, scene=scene.index)
+            seed = config.derive_seed(self.seed, scene=scene.index, attempt=1 + 10 * scene.regenerations)
             self._event(job, "step", step="animate", index=scene.index,
                         length=self.params.length, fps=self.params.fps, seconds=self.params.clip_seconds)
             video = pipeline.animate_frame(
@@ -482,9 +536,14 @@ class Orchestrator:
     @classmethod
     def next_gate(cls, job: Job, store: Store) -> str | None:
         """The first gate not yet approved (regardless of the job's status)."""
-        approved = {d.phase for d in store.decisions(job.id) if d.action == "approved"}
+        state: dict[str, bool] = {}
+        for d in store.decisions(job.id):
+            if d.action == "approved":
+                state[d.phase] = True
+            elif d.action == "reopened":
+                state[d.phase] = False
         for g in cls.gates(job):
-            if g not in approved:
+            if not state.get(g):
                 return g
         return None
 
@@ -506,10 +565,16 @@ class Orchestrator:
         return True
 
     def _approved(self, job: Job, name: str) -> bool:
-        return any(
-            d.phase == name and d.action == "approved"
-            for d in self.store.decisions(job.id)
-        )
+        """A gate counts as approved until a later 'reopened' entry (scene regeneration)."""
+        approved = False
+        for d in self.store.decisions(job.id):
+            if d.phase != name:
+                continue
+            if d.action == "approved":
+                approved = True
+            elif d.action == "reopened":
+                approved = False
+        return approved
 
     def _needs_keyframes(self, job: Job) -> bool:
         n = self.variants_per_scene

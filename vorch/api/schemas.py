@@ -54,6 +54,20 @@ class SceneEdits(BaseModel):
     scenes: list[SceneEdit]
 
 
+class SceneRegenerate(BaseModel):
+    """Redo one scene: ``keyframe`` (everything from the keyframe on) or ``video`` (clip only).
+    Optional prompt edits are applied first."""
+
+    what: Literal["keyframe", "video"] = "keyframe"
+    description: str | None = None
+    keyframe_prompt: str | None = None
+    keyframe_negative: str | None = None
+    animation_prompt: str | None = None
+    animation_negative: str | None = None
+    mode: Literal["t2i", "edit"] | None = None
+    references: list[str] | None = None
+
+
 # --- responses ---------------------------------------------------------------
 
 Gate = Literal["storyboard", "keyframes"]

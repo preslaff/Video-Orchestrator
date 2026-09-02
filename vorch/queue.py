@@ -183,6 +183,23 @@ class JobManager:
         self._spawn(self._execute(job, lambda o, j: o.approve(j, gate)))
         return job
 
+    async def regenerate(self, job_id: str, index: int, *, what: str = "keyframe",
+                         edits: dict | None = None) -> Job:
+        """Redo one scene's keyframe (or clip) as a new run segment; the job pauses at
+        the keyframes gate again for review (video jobs, semi autonomy)."""
+        if job_id in self._active:
+            raise RuntimeError(f"job {job_id} is running; wait for the current segment")
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job.status is JobStatus.RUNNING:
+            raise RuntimeError("job is running")
+        if not any(s.index == index for s in job.scenes):
+            raise KeyError(f"scene {index}")
+        self._active.add(job.id)
+        self._spawn(self._execute(job, lambda o, j: o.regenerate(j, index, what=what, edits=edits)))
+        return job
+
     def events(self, job_id: str, *, after: int | None = None) -> asyncio.Queue:
         """Subscribe to a job's event stream (drain until a {'type': 'end'} event)."""
         return self.broker.subscribe(job_id, after=after)

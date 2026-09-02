@@ -103,6 +103,7 @@ class Scene:
     variants: list[Variant] = field(default_factory=list)   # keyframe candidates; keyframe_path = chosen
     raw_video_path: str | None = None    # Wan output before post-steps (video_path = final)
     post_paths: list[str] = field(default_factory=list)      # post-step outputs in order
+    regenerations: int = 0               # manual keyframe/clip redo count (seed offset)
 
 
 @dataclass
@@ -246,6 +247,7 @@ def _scene_to_dict(s: Scene) -> dict:
         "variants": [_variant_to_dict(v) for v in s.variants],
         "raw_video_path": s.raw_video_path,
         "post_paths": list(s.post_paths),
+        "regenerations": s.regenerations,
     }
 
 
@@ -273,6 +275,7 @@ def _scene_from_dict(d: dict) -> Scene:
         variants=[_variant_from_dict(v) for v in d.get("variants", []) or []],
         raw_video_path=d.get("raw_video_path"),
         post_paths=list(d.get("post_paths", []) or []),
+        regenerations=int(d.get("regenerations", 0) or 0),
     )
 
 

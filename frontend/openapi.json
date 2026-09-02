@@ -351,6 +351,67 @@
         }
       }
     },
+    "/api/jobs/{job_id}/scenes/{index}/regenerate": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Regenerate Scene",
+        "operationId": "regenerate_scene_api_jobs__job_id__scenes__index__regenerate_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SceneRegenerate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/approve/{gate}": {
       "post": {
         "tags": [
@@ -2846,6 +2907,106 @@
           "status"
         ],
         "title": "ScenePublic"
+      },
+      "SceneRegenerate": {
+        "properties": {
+          "what": {
+            "type": "string",
+            "enum": [
+              "keyframe",
+              "video"
+            ],
+            "title": "What",
+            "default": "keyframe"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "keyframe_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keyframe Prompt"
+          },
+          "keyframe_negative": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keyframe Negative"
+          },
+          "animation_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Animation Prompt"
+          },
+          "animation_negative": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Animation Negative"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "t2i",
+                  "edit"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "references": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "References"
+          }
+        },
+        "type": "object",
+        "title": "SceneRegenerate",
+        "description": "Redo one scene: ``keyframe`` (everything from the keyframe on) or ``video`` (clip only).\nOptional prompt edits are applied first."
       },
       "StillsSettings": {
         "properties": {

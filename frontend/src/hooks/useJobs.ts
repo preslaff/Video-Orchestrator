@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import { keys } from '@/api/keys'
-import type { JobSpec, JobStatus, SceneEdit } from '@/api/types'
+import type { JobSpec, JobStatus, SceneEdit, SceneRegenerate } from '@/api/types'
 
 export interface JobsFilter {
   status?: JobStatus
@@ -134,6 +134,24 @@ export function useRunExport(id: string) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.exportStatus(id) })
       void qc.invalidateQueries({ queryKey: keys.job(id) })
+    },
+  })
+}
+
+export function useRegenerateScene(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ index, body }: { index: number; body: SceneRegenerate }) => {
+      const { data, error } = await api.POST('/api/jobs/{job_id}/scenes/{index}/regenerate', {
+        params: { path: { job_id: id, index } },
+        body,
+      })
+      if (error) throw error
+      return data
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.job(id) })
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
     },
   })
 }

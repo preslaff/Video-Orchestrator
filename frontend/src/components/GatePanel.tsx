@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { errorMessage } from '@/api/client'
 import type { JobPublic, SceneEdit } from '@/api/types'
-import { useApprove, useUpdateScenes } from '@/hooks/useJobs'
+import { useApprove, useRegenerateScene, useUpdateScenes } from '@/hooks/useJobs'
 import { Button, ErrorBox } from '@/components/ui'
 
 type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; references: string; chosen_variant: number | null }
@@ -28,11 +28,7 @@ function draftsFrom(job: JobPublic): Record<number, Draft> {
  */
 export function GatePanel({ job }: { job: JobPublic }) {
   const [drafts, setDrafts] = useState(() => draftsFrom(job))
-  const update = useUpdateScenes(job.id)
-  const approve = useApprove(job.id)
-  const editable = job.status === 'needs_approval' || job.status === 'done'
-  if (!editable) return null
-  const video = job.kind === 'video'
+XX
 
   const set = (i: number, patch: Partial<Draft>) => setDrafts((d) => ({ ...d, [i]: { ...d[i], ...patch } }))
 
@@ -42,10 +38,10 @@ export function GatePanel({ job }: { job: JobPublic }) {
       return {
         index: s.index,
         description: d.description,
-        keyframe_prompt: s.keyframe_path ? null : d.keyframe_prompt,
-        keyframe_negative: s.keyframe_path ? null : d.keyframe_negative,
-        animation_prompt: video && !s.video_path ? d.animation_prompt : null,
-        animation_negative: video && !s.video_path ? d.animation_negative : null,
+        keyframe_prompt: d.keyframe_prompt,
+        keyframe_negative: d.keyframe_negative,
+        animation_prompt: video ? d.animation_prompt : null,
+        animation_negative: video ? d.animation_negative : null,
         mode: s.keyframe_path ? null : d.mode,
         references: s.keyframe_path ? null : d.references.split('\n').map((x) => x.trim()).filter(Boolean),
         chosen_variant: d.chosen_variant,
@@ -61,8 +57,8 @@ export function GatePanel({ job }: { job: JobPublic }) {
           <h2 className="font-semibold">{job.pending_gate ? `Gate: ${job.pending_gate}` : 'Post-run edits'}</h2>
           <p className="text-sm text-neutral-700">
             {job.pending_gate === 'storyboard' && 'Review the storyboard and prompts, then approve to generate keyframes.'}
-            {job.pending_gate === 'keyframes' && 'Review the keyframes (pick a variant, tweak animation prompts), then approve to render the clips (the expensive Wan phase).'}
-            {!job.pending_gate && 'Pick a different variant and re-export if needed.'}
+            {job.pending_gate === 'keyframes' && 'Review the keyframes: regenerate any scene (optionally with an edited prompt), pick a variant, tweak animation prompts, then approve to render the clips (the expensive Wan phase).'}
+            {!job.pending_gate && 'Regenerate a keyframe or re-animate a scene (the export folder is rebuilt when the job completes again), or pick a different variant and re-export.'}
           </p>
         </div>
         <div className="flex gap-2">
@@ -74,7 +70,7 @@ export function GatePanel({ job }: { job: JobPublic }) {
           )}
         </div>
       </div>
-      <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : null} />
+      <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : null} />
       {update.isSuccess && !update.isPending && <p className="text-xs text-green-700">Saved.</p>}
 
       <div className="grid gap-3 md:grid-cols-2">
@@ -83,14 +79,23 @@ export function GatePanel({ job }: { job: JobPublic }) {
           const locked = !!s.keyframe_path
           return (
             <div key={s.index} className="space-y-2 rounded border border-neutral-200 bg-white p-3 text-sm">
-              <div className="font-medium">Scene {s.index + 1} <span className="text-xs font-normal text-neutral-500">{locked ? 'keyframe made — prompt locked' : 'prompts editable'}</span></div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-medium">Scene {s.index + 1} <span className="text-xs font-normal text-neutral-500">{locked ? 'keyframe made — prompt edits apply on regenerate' : 'prompts editable'}</span></div>
+                {locked && (
+                  <div className="flex gap-1">
+                    <Button disabled={busy} onClick={() => regenerate(s.index, 'keyframe')} title="new keyframe (new seed, current prompts); swap + clip are redone after approval">Regenerate keyframe</Button>
+                    {video && s.video_path && <Button disabled={busy} onClick={() => regenerate(s.index, 'video')} title="keep the keyframe, render the clip again with the current animation prompt">Re-animate</Button>}
+                  </div>
+                )}
+              </div>
               <label className="block"><span className="text-xs text-neutral-500">description</span>
                 <textarea value={d.description} onChange={(e) => set(s.index, { description: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
               <label className="block"><span className="text-xs text-neutral-500">keyframe prompt</span>
-                <textarea value={d.keyframe_prompt} readOnly={locked} onChange={(e) => set(s.index, { keyframe_prompt: e.target.value })} rows={3} className={`mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 ${locked ? 'bg-neutral-50 text-neutral-500' : ''}`} /></label>
-              {!locked && (
-                <label className="block"><span className="text-xs text-neutral-500">keyframe negative</span>
-                  <input value={d.keyframe_negative} onChange={(e) => set(s.index, { keyframe_negative: e.target.value })} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+                <textarea value={d.keyframe_prompt} onChange={(e) => set(s.index, { keyframe_prompt: e.target.value })} rows={3} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+              <label className="block"><span className="text-xs text-neutral-500">keyframe negative</span>
+                <input value={d.keyframe_negative} onChange={(e) => set(s.index, { keyframe_negative: e.target.value })} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+              {s.keyframe_verdict && s.keyframe_verdict.decision !== 'accept' && (
+                <p className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-900"><b>last verdict: retry</b> — {s.keyframe_verdict.fix_suggestion || 'no fix suggestion'}</p>
               )}
               {!locked && (
                 <div className="grid grid-cols-[8rem_1fr] gap-2">
@@ -104,12 +109,10 @@ export function GatePanel({ job }: { job: JobPublic }) {
               )}
               {video && (
                 <>
-                  <label className="block"><span className="text-xs text-neutral-500">animation prompt</span>
-                    <textarea value={d.animation_prompt} readOnly={!!s.video_path} onChange={(e) => set(s.index, { animation_prompt: e.target.value })} rows={2} className={`mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 ${s.video_path ? 'bg-neutral-50 text-neutral-500' : ''}`} /></label>
-                  {!s.video_path && (
-                    <label className="block"><span className="text-xs text-neutral-500">animation negative</span>
-                      <input value={d.animation_negative} onChange={(e) => set(s.index, { animation_negative: e.target.value })} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
-                  )}
+                  <label className="block"><span className="text-xs text-neutral-500">animation prompt{s.video_path ? ' (edits apply on re-animate)' : ''}</span>
+                    <textarea value={d.animation_prompt} onChange={(e) => set(s.index, { animation_prompt: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+                  <label className="block"><span className="text-xs text-neutral-500">animation negative</span>
+                    <input value={d.animation_negative} onChange={(e) => set(s.index, { animation_negative: e.target.value })} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
                 </>
               )}
               {s.variants.length > 1 && (

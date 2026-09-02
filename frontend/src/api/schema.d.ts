@@ -91,6 +91,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/scenes/{index}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Regenerate Scene */
+        post: operations["regenerate_scene_api_jobs__job_id__scenes__index__regenerate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/approve/{gate}": {
         parameters: {
             query?: never;
@@ -1021,6 +1038,33 @@ export interface components {
              */
             post_paths: string[];
         };
+        /**
+         * SceneRegenerate
+         * @description Redo one scene: ``keyframe`` (everything from the keyframe on) or ``video`` (clip only).
+         *     Optional prompt edits are applied first.
+         */
+        SceneRegenerate: {
+            /**
+             * What
+             * @default keyframe
+             * @enum {string}
+             */
+            what: "keyframe" | "video";
+            /** Description */
+            description?: string | null;
+            /** Keyframe Prompt */
+            keyframe_prompt?: string | null;
+            /** Keyframe Negative */
+            keyframe_negative?: string | null;
+            /** Animation Prompt */
+            animation_prompt?: string | null;
+            /** Animation Negative */
+            animation_negative?: string | null;
+            /** Mode */
+            mode?: ("t2i" | "edit") | null;
+            /** References */
+            references?: string[] | null;
+        };
         /** StillsSettings */
         StillsSettings: {
             /**
@@ -1355,6 +1399,42 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SceneEdits"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    regenerate_scene_api_jobs__job_id__scenes__index__regenerate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SceneRegenerate"];
             };
         };
         responses: {

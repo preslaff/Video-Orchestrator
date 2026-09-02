@@ -11,7 +11,7 @@ from .deps import get_manager, get_store
 from .errors import ApiError
 from .public import job_to_public, provenance_rows
 from .schemas import (
-    DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SceneEdits,
+    DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SceneEdits, SceneRegenerate,
 )
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -118,6 +118,27 @@ async def update_scenes(
         job = manager.update_scenes(job_id, [e.model_dump() for e in edits.scenes])
     except KeyError:
         raise ApiError(404, "not_found", "no such job")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    except ValueError as e:
+        raise ApiError(400, "bad_request", str(e))
+    return job_to_public(job, store)
+
+
+@router.post("/{job_id}/scenes/{index}/regenerate", response_model=JobPublic)
+async def regenerate_scene(
+    job_id: str,
+    index: int,
+    body: SceneRegenerate,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    _load(store, job_id)
+    edits = body.model_dump(exclude={"what"}, exclude_none=True)
+    try:
+        job = await manager.regenerate(job_id, index, what=body.what, edits=edits)
+    except KeyError as e:
+        raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
     except RuntimeError as e:
         raise ApiError(409, "conflict", str(e))
     except ValueError as e:
