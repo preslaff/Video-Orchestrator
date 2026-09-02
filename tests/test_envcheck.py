@@ -173,3 +173,19 @@ def test_database_check_without_store(healthy, monkeypatch):
     monkeypatch.setattr(config, "DATABASE_URL", "postgresql:///definitely_not_a_db_xyz")
     rep = envcheck.run_checks(force=True)
     assert _by_name(rep)["database"].status == "fail" and not rep.ok
+
+
+def test_probe_png_is_truecolor_and_decodable(tmp_path):
+    import struct
+    import subprocess
+
+    data = envcheck.probe_png()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    w, h, depth, color = struct.unpack(">IIBB", data[16:26])
+    assert (w, h, depth, color) == (64, 64, 8, 2)  # 8-bit RGB, not palette (llama-server rejects pal8)
+    if shutil.which("ffprobe"):
+        f = tmp_path / "p.png"
+        f.write_bytes(data)
+        out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "stream=width,height,pix_fmt",
+                                       "-of", "csv=p=0", str(f)]).decode().strip()
+        assert out == "64,64,rgb24"

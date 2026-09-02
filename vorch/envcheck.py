@@ -11,12 +11,13 @@ itself, and the export / projects roots.
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import shutil
+import struct
 import tempfile
 import time
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,11 +34,28 @@ log = logging.getLogger("vorch.envcheck")
 Status = Literal["ok", "warn", "fail"]
 _ORDER = {"ok": 0, "warn": 1, "fail": 2}
 
-# 8x8 red PNG for the vision probe.
-_PROBE_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX/AAD///9BHTQRAAAACklEQVQI12NoAAAAggCB"
-    "d81dvAAAAABJRU5ErkJggg=="
-)
+
+
+def probe_png(width: int = 64, height: int = 64, rgb: tuple[int, int, int] = (200, 40, 40)) -> bytes:
+    """A plain 8-bit RGB PNG for the vision probe.
+
+    llama-server's image loader rejects tiny palette PNGs ("Failed to load image
+    or audio file"), so the probe is generated as truecolor at a sane size.
+    """
+    raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+_PROBE_PNG = probe_png()
 
 
 @dataclass
