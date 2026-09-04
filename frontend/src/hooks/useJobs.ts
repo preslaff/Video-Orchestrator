@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import { keys } from '@/api/keys'
-import type { JobSpec, JobStatus, SceneEdit, SceneRegenerate } from '@/api/types'
+import type { AssemblySpecIn, AssemblyStatus, JobSpec, JobStatus, SceneEdit, SceneRegenerate } from '@/api/types'
 
 export interface JobsFilter {
   status?: JobStatus
@@ -152,6 +152,36 @@ export function useRegenerateScene(id: string) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.job(id) })
       void qc.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
+export function useAssembly(id: string | undefined) {
+  return useQuery({
+    queryKey: keys.assembly(id ?? ''),
+    enabled: !!id,
+    queryFn: async () => {
+      const { data, error } = await api.GET('/api/jobs/{job_id}/assemble', { params: { path: { job_id: id! } } })
+      if (error) throw error
+      return data as AssemblyStatus
+    },
+  })
+}
+
+export function useRunAssembly(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ spec, force = false }: { spec: AssemblySpecIn; force?: boolean }) => {
+      const { data, error } = await api.POST('/api/jobs/{job_id}/assemble', {
+        params: { path: { job_id: id }, query: { force } },
+        body: spec,
+      })
+      if (error) throw error
+      return data as AssemblyStatus
+    },
+    onSuccess: (data) => {
+      qc.setQueryData(keys.assembly(id), data)
+      void qc.invalidateQueries({ queryKey: keys.job(id) })
     },
   })
 }

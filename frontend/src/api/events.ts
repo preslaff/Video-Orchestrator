@@ -12,6 +12,7 @@ export const EVENT_TYPES = [
   'stills',
   'gate',
   'export',
+  'assembly',
   'error',
   'end',
 ] as const
@@ -53,6 +54,8 @@ export function describeStep(e: JobEvent): string {
       return `Animating ${scene} with Wan — ${String(e.length)} frames @ ${String(e.fps)} fps (~${String(e.seconds)}s); this is the slow step`
     case 'post':
       return `Post-processing ${scene}${variant}: ${Array.isArray(e.chain) ? e.chain.join(' → ') : ''}`
+    case 'assemble':
+      return `Assembling ${String(e.n_clips)} clip(s) into one video (~${String(e.seconds)}s @ ${String(e.fps)} fps) with ffmpeg`
     default:
       return String(e.step ?? 'working')
   }
@@ -60,6 +63,9 @@ export function describeStep(e: JobEvent): string {
 
 /** Events after which the jobs list (status column) should refresh. */
 export const LIST_EVENTS = new Set<string>(['status', 'gate', 'end', 'error', 'export'])
+
+/** Events after which the job's export/assembly panels should refetch. */
+export const DELIVERABLE_EVENTS = new Set<string>(['export', 'assembly', 'end', 'error'])
 
 export function describeEvent(e: JobEvent): string {
   switch (e.type) {
@@ -87,6 +93,8 @@ export function describeEvent(e: JobEvent): string {
       return `paused at gate "${String(e.gate)}" — approval needed`
     case 'export':
       return `exported ${Array.isArray(e.files) ? e.files.length : '?'} file(s) → ${String(e.path)}`
+    case 'assembly':
+      return e.ok ? `assembled ${String(e.n_clips)} clip(s), ${String(e.duration)}s → ${String(e.path)}` : `assembly failed: ${String(e.error)}`
     case 'error':
       return `error: ${String(e.error)}`
     case 'end':

@@ -12,6 +12,7 @@ import { DecisionLog } from '@/components/DecisionLog'
 import { SceneCard, ScenePrompts } from '@/components/SceneGrid'
 import { GatePanel } from '@/components/GatePanel'
 import { ProgressPanel } from '@/components/ProgressPanel'
+import { AssemblePanel } from '@/components/AssemblePanel'
 
 export default function JobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -88,6 +89,12 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
           ))}
         </div>
       </Card>
+
+      {j.kind === 'video' && j.scenes.some((s) => s.video_url) && (
+        <Collapsible title="Assemble" count={j.scenes.filter((s) => s.video_url).length} defaultOpen hint="join the clips into one video with transitions">
+          <AssemblePanel key={j.scenes.map((s) => s.video_path ?? '-').join('|')} job={j} events={live.events} onStarted={live.reconnect} />
+        </Collapsible>
+      )}
 
       <div className="space-y-3">
         <Collapsible title="Decision log" count={decisions.data?.length ?? 0} hint="why each frame was accepted, retried or flagged · click to expand">

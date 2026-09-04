@@ -4,6 +4,7 @@ export const keys = {
   decisions: (id: string) => ['decisions', id] as const,
   provenance: (id: string) => ['provenance', id] as const,
   exportStatus: (id: string) => ['export', id] as const,
+  assembly: (id: string) => ['assembly', id] as const,
   env: (profileId?: string, deep?: boolean) => ['env', profileId ?? null, !!deep] as const,
   config: ['config'] as const,
   workflows: ['workflows'] as const,

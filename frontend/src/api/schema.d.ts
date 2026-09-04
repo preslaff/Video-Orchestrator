@@ -180,6 +180,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/assemble": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Assembly Status */
+        get: operations["assembly_status_api_jobs__job_id__assemble_get"];
+        put?: never;
+        /** Run Assembly */
+        post: operations["run_assembly_api_jobs__job_id__assemble_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/setup/env": {
         parameters: {
             query?: never;
@@ -411,6 +429,164 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AssemblyClipOut */
+        AssemblyClipOut: {
+            /** Scene Index */
+            scene_index: number;
+            /**
+             * Source
+             * @default final
+             */
+            source: string;
+            /** Path */
+            path: string;
+            /** Url */
+            url?: string | null;
+            /** Duration */
+            duration?: number | null;
+            /** Fps */
+            fps?: number | null;
+            /** Width */
+            width?: number | null;
+            /** Height */
+            height?: number | null;
+            /**
+             * Has Raw
+             * @default false
+             */
+            has_raw: boolean;
+            /** Error */
+            error?: string | null;
+        };
+        /** AssemblyCutIn */
+        AssemblyCutIn: {
+            /**
+             * Transition
+             * @default fade
+             */
+            transition: string;
+            /**
+             * Duration
+             * @default 0.5
+             */
+            duration: number;
+        };
+        /** AssemblyItemIn */
+        AssemblyItemIn: {
+            /** Scene Index */
+            scene_index: number;
+            /**
+             * Source
+             * @default final
+             * @enum {string}
+             */
+            source: "final" | "raw";
+        };
+        /** AssemblyRecordOut */
+        AssemblyRecordOut: {
+            /** Path */
+            path: string;
+            /** Url */
+            url?: string | null;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /**
+             * Duration
+             * @default 0
+             */
+            duration: number;
+            /**
+             * N Clips
+             * @default 0
+             */
+            n_clips: number;
+            /**
+             * Spec
+             * @default {}
+             */
+            spec: {
+                [key: string]: unknown;
+            };
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /**
+             * Size Bytes
+             * @default 0
+             */
+            size_bytes: number;
+            /** Fps */
+            fps?: number | null;
+            /** Width */
+            width?: number | null;
+            /** Height */
+            height?: number | null;
+            /**
+             * Exists
+             * @default false
+             */
+            exists: boolean;
+            /**
+             * Exported
+             * @default false
+             */
+            exported: boolean;
+        };
+        /**
+         * AssemblySpecIn
+         * @description All fields optional: omitted items = every clip in order, omitted cuts = fade 0.5s.
+         */
+        AssemblySpecIn: {
+            /** Items */
+            items?: components["schemas"]["AssemblyItemIn"][] | null;
+            /** Cuts */
+            cuts?: components["schemas"]["AssemblyCutIn"][] | null;
+            /** Fps */
+            fps?: number | null;
+            /** Width */
+            width?: number | null;
+            /** Height */
+            height?: number | null;
+            /**
+             * Crf
+             * @default 18
+             */
+            crf: number;
+            /**
+             * Encoder
+             * @default libx264
+             * @enum {string}
+             */
+            encoder: "libx264" | "h264_nvenc";
+        };
+        /** AssemblyStatus */
+        AssemblyStatus: {
+            /** Available */
+            available: boolean;
+            /** Active */
+            active: boolean;
+            /** Transitions */
+            transitions: string[];
+            /** Default Spec */
+            default_spec: {
+                [key: string]: unknown;
+            };
+            /** Clips */
+            clips: components["schemas"]["AssemblyClipOut"][];
+            /** Profile Fps */
+            profile_fps?: number | null;
+            record?: components["schemas"]["AssemblyRecordOut"] | null;
+        };
         /** AssetOut */
         AssetOut: {
             /** Id */
@@ -559,6 +735,10 @@ export interface components {
             kind: string;
             /** Export */
             export?: {
+                [key: string]: unknown;
+            } | null;
+            /** Assembly */
+            assembly?: {
                 [key: string]: unknown;
             } | null;
             /** Status */
@@ -1602,6 +1782,75 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assembly_status_api_jobs__job_id__assemble_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssemblyStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_assembly_api_jobs__job_id__assemble_post: {
+        parameters: {
+            query?: {
+                /** @description assemble even if the job is not done */
+                force?: boolean;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AssemblySpecIn"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssemblyStatus"];
                 };
             };
             /** @description Validation Error */

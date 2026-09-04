@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { apiOrigin } from '@/api/client'
-import { EVENT_TYPES, LIST_EVENTS, type JobEvent } from '@/api/events'
+import { DELIVERABLE_EVENTS, EVENT_TYPES, LIST_EVENTS, type JobEvent } from '@/api/events'
 import { keys } from '@/api/keys'
 
 export interface UseJobEventsOptions {
@@ -66,10 +66,11 @@ export function useJobEvents(jobId: string | undefined, opts: UseJobEventsOption
       setEvents((prev) => [...prev, { ...data, _at: Date.now() }])
       invalidateJob()
       if (LIST_EVENTS.has(data.type)) void qc.invalidateQueries({ queryKey: ['jobs'] })
-      if (data.type === 'end' || data.type === 'export' || data.type === 'error') {
+      if (DELIVERABLE_EVENTS.has(data.type)) {
         void qc.invalidateQueries({ queryKey: keys.decisions(jobId) })
         void qc.invalidateQueries({ queryKey: keys.provenance(jobId) })
         void qc.invalidateQueries({ queryKey: keys.exportStatus(jobId) })
+        void qc.invalidateQueries({ queryKey: keys.assembly(jobId) })
       }
       onEventRef.current?.(data)
       if (data.type === 'end') {
