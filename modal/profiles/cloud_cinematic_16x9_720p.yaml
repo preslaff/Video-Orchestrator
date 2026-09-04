@@ -1,0 +1,7 @@
+# Import: python -m vorch profiles --import modal/profiles/cloud_cinematic_16x9_720p.yaml
+# 720p Wan 2.2 fp16 needs the 80 GB class; keyframes are rendered at 1280x720 to match.
+name: Cloud cinematic 16:9 720p (Wan fp16 on Modal)
+base: cinematic_16x9
+overrides:
+  keyframe: {width: 1280, height: 720}
+  video: {workflow: animate_wan22_fp16, width: 1280, height: 720, length: 81, fps: 16}

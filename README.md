@@ -48,7 +48,7 @@ auditable.
 | Stills jobs | Storyboard → N keyframe variants per scene, best chosen by verdict, face swap per variant, no video phase. |
 | Post-processing | Any registered `postprocess` workflow (interpolation, upscale, …) runs after each clip or still, in order. |
 | Pluggable workflows | Register a newly exported ComfyUI graph with a YAML sidecar, no Python: `vorch registry inspect` → `add` → `validate --online`. |
-| Cloud backends (optional) | Any workflow can declare `backend: modal-h100`; its runs go to a remote ComfyUI (e.g. on Modal) and the outputs are downloaded into the local layout. Design, cost model and phases in [`docs/modal-backend.md`](docs/modal-backend.md). |
+| Cloud backends (optional) | Any workflow can declare `backend: modal-h100`; its runs go to a remote ComfyUI (e.g. on Modal) and the outputs are downloaded into the local layout. Design, cost model and phases in [`docs/modal-backend.md`](docs/modal-backend.md); deployment files and runbook in [`modal/`](modal/README.md) (`pip install -e ".[cloud]"`). |
 | Deliverables | A per-job **export folder** for Shotcut (numbered stills/clips, manifest, storyboard, README). **Assemble** selected clips into one video with per-cut ffmpeg `xfade` transitions, per-clip speed, kept as versions. |
 | Live control | Next.js UI with live progress (phase stepper, current step, elapsed time), server-sent events with replay, decision log, provenance (seed + prompt per file). |
 | Operations | Environment check (database, ComfyUI, Gemma + vision probe, ffmpeg, GPU headroom, every workflow's node classes and model files), VRAM guard between heavy models, PostgreSQL state, CLI for everything. |

@@ -1,0 +1,6 @@
+# Import: python -m vorch profiles --import modal/profiles/cloud_social_9x16_fp8.yaml
+# Cheapest cloud option: Wan 2.2 fp8_scaled on the L40S backend, vertical 480p.
+name: Cloud social 9:16 (Wan fp8 on Modal L40S)
+base: social_9x16
+overrides:
+  video: {workflow: animate_wan22_fp8, width: 480, height: 832, length: 81, fps: 16}

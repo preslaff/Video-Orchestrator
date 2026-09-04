@@ -1,0 +1,24 @@
+# Copy to ~/vorch/backends.yaml and paste the URLs printed by `modal deploy modal/vorch_comfy.py`.
+# The file holds NO secrets: only the names of environment variables that carry the proxy token
+# (export MODAL_PROXY_KEY=wk-… MODAL_PROXY_SECRET=ws-… in the shell that runs `vorch serve`).
+backends:
+  modal-l40s:
+    url: https://<workspace>--vorch-comfy-comfy-l40s.modal.run
+    auth: modal-proxy
+    key_env: MODAL_PROXY_KEY
+    secret_env: MODAL_PROXY_SECRET
+    request_timeout: 60
+    poll_interval: 3
+    cold_start_grace: 600        # first start pulls the image; later starts are ~1-2 min
+    gpu: L40S
+    cost_per_hour: 1.95
+  modal-h100:
+    url: https://<workspace>--vorch-comfy-comfy-h100.modal.run
+    auth: modal-proxy
+    key_env: MODAL_PROXY_KEY
+    secret_env: MODAL_PROXY_SECRET
+    request_timeout: 60
+    poll_interval: 3
+    cold_start_grace: 600
+    gpu: H100
+    cost_per_hour: 3.95

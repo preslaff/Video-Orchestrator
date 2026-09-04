@@ -1,6 +1,6 @@
 # Modal cloud backend — design
 
-> **Status (2026-09-05):** designed; Phase A (the code seam) is implemented in the repo, Phases B–E
+> **Status (2026-09-05):** designed; Phase A (the code seam) is implemented and verified; Phase B's files are in `modal/` awaiting deployment on Georgi's account; Phases C–E
 > are planned. Facts about Modal and the models were researched in September 2026 and carry
 > dates; re-verify prices and model availability before Phase B.
 
@@ -161,77 +161,40 @@ readiness, submits, polls, and downloads the result as
 `COMFY_OUTPUT/Flux2-Klein_00057_.loopback.png` (8 s end to end at 512², 8 steps) with a manifest
 recording `backend: loopback` and the GPU label. Nothing in the local default path changes.
 
-## 4. Modal deployment (Phase B)
+## 4. Modal deployment (Phase B, implemented in `modal/`)
 
-Install once: `pip install modal && modal setup` (browser login). Create a proxy auth token in
-the Modal dashboard and export `MODAL_PROXY_KEY` / `MODAL_PROXY_SECRET` locally. Store the
-Hugging Face token as a Modal secret: `modal secret create huggingface HF_TOKEN=…`.
+Runbook: [`modal/README.md`](../modal/README.md). Files:
 
-`modal/vorch_comfy.py` (to be added to the repo):
+| file | what |
+|---|---|
+| `modal/vorch_comfy.py` | app `vorch-comfy`: ComfyUI **v0.34.0** (git clone at the tag, pinned to the local version) on `debian_slim` + `ffmpeg`; two functions `comfy_l40s` (L40S, 64 GB RAM) and `comfy_h100` (H100, 128 GB RAM), each `@modal.web_server(8188, startup_timeout=600, requires_proxy_auth=True)` with `@modal.concurrent(max_inputs=8)`, `max_containers=1`, `scaledown_window=600`, `timeout=24h`; the `vorch-models` Volume mounted at `models/`; ComfyUI started with `--listen 0.0.0.0 --max-upload-size 1024` and awaited on `/system_stats`. No custom nodes in Phase B (the Wan templates are core nodes only); `CUSTOM_NODES` takes `(git url, ref)` pairs for Phase C. |
+| `modal/download_models.py` | `modal run … --only wan22_fp16|wan22_fp8|all`: `hf_hub_download` from `Comfy-Org/Wan_2.2_ComfyUI_Repackaged` into `models/<subdir>/` on the Volume (size-checked skip, `volume.commit()`); `HF_TOKEN` passed from the local shell for gated repos. |
+| `modal/workflows/` | `animate_wan22_fp16` (→ `modal-h100`) and `animate_wan22_fp8` (→ `modal-l40s`): the built-in `animate` graph with `UNETLoader`/`CLIPLoader` instead of the GGUF loaders, same node ids and params, sizes up to 1280. Copied into `~/vorch/workflows/`. |
+| `modal/profiles/` | `{name, base, overrides}` YAMLs for `vorch profiles --import`: cloud cinematic 16:9 (fp16, 81 frames), cloud cinematic 720p, cloud social 9:16 (fp8 on L40S). Klein and ReActor stay local in all of them. |
+| `modal/backends.example.yaml` | template for `~/vorch/backends.yaml` (`auth: modal-proxy`, env-var names only, `cold_start_grace: 600`). |
 
-```python
-import subprocess, time, urllib.request
-import modal
+Install once: `pip install -e ".[cloud]" && modal setup` (browser login). Create a proxy auth
+token in the Modal dashboard and export `MODAL_PROXY_KEY` / `MODAL_PROXY_SECRET` in the shell
+that runs `vorch serve`. `requires_proxy_auth=True` is mandatory: without it the endpoint is a
+public GPU.
 
-COMFY_VERSION = "0.34.0"          # keep equal to the local ComfyUI (see risk "version drift")
-NODES = ["ComfyUI-GGUF", "ComfyUI-VideoHelperSuite", "comfyui-reactor-node", "ComfyUI-GIMM-VFI",
-         "ComfyUI-KJNodes", "ComfyUI-LTXVideo"]
+Why not comfy-cli: a plain `git clone` at the version tag plus ComfyUI's own `requirements.txt`
+(PyPI torch wheels bundle CUDA) is fully deterministic and has no interactive prompts; custom
+nodes are cloned the same way.
 
-image = (modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
-    .pip_install("comfy-cli", "huggingface_hub[hf_transfer]")
-    .run_commands(f"comfy --skip-prompt install --nvidia --version {COMFY_VERSION}",
-                  "comfy node install " + " ".join(NODES))
-    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"}))
-models = modal.Volume.from_name("vorch-models", create_if_missing=True)
-hf = modal.Secret.from_name("huggingface")
-app = modal.App("vorch-comfy")
-
-def _serve(port=8188):
-    subprocess.Popen(f"comfy launch -- --listen 0.0.0.0 --port {port} --max-upload-size 1024", shell=True)
-    for _ in range(300):
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/system_stats", timeout=1); return
-        except Exception:
-            time.sleep(1)
-    raise RuntimeError("ComfyUI did not come up")
-
-COMMON = dict(image=image, timeout=24 * 3600, scaledown_window=600, max_containers=1,
-              volumes={"/root/comfy/ComfyUI/models": models}, secrets=[hf])
-
-@app.function(gpu="L40S", memory=65536, **COMMON)
-@modal.concurrent(max_inputs=8)
-@modal.web_server(8188, startup_timeout=300, requires_proxy_auth=True)
-def comfy_l40s(): _serve()
-
-@app.function(gpu="H100", memory=131072, **COMMON)
-@modal.concurrent(max_inputs=8)
-@modal.web_server(8188, startup_timeout=300, requires_proxy_auth=True)
-def comfy_h100(): _serve()
-```
-
-Two functions give two URLs and two backend names: `modal-l40s` for Klein 4B/9B, ReActor, GIMM,
-LTX-2.5 fp8; `modal-h100` for Wan 2.2 fp16 at 720p and LTX-2.5 bf16. `max_containers=1` with
-`@modal.concurrent(8)` lets one ComfyUI serve one job's uploads and polls; ComfyUI queues prompts
-itself. The Volume is mounted directly at `models/` so ReActor finds
-`models/insightface/inswapper_128.onnx` and `models/facerestore_models/GFPGANv1.4.pth` without
-symlinks. `requires_proxy_auth=True` is mandatory: without it the endpoint is a public GPU.
-
-`modal/download_models.py` (`modal run modal/download_models.py --only wan22`): a list of
-`(repo, file, models/<subdir>)` downloaded with `hf_hub_download` into the Volume, then
-`models.commit()`. Set: Wan 2.2 I2V A14B fp16 high + low (28.6 GB each), `umt5_xxl` encoder, Wan
-2.1 VAE; FLUX.2 Klein 4B bf16 (13 GB) + Qwen3 text encoder + FLUX.2 VAE (+ Klein 9B, 29 GB,
-non-commercial); LTX-2.5 dev + its Gemma-4-12B text encoder; `inswapper_128.onnx`, `GFPGANv1.4.pth`;
-GIMM-VFI weights. About 150 GB, within the 1 TiB free Volume tier.
+Model sets (Volume): `wan22_fp16` = high + low fp16 (28.6 GB each) + `umt5_xxl_fp16` (11.4 GB) +
+`wan_2.1_vae` ≈ 69 GB; `wan22_fp8` = fp8_scaled pair (14.3 GB each) + `umt5_xxl_fp8_e4m3fn_scaled`
+(6.7 GB) ≈ 36 GB. Phase C adds Klein 9B, LTX-2.5, ReActor and GIMM-VFI weights (~150 GB total).
 
 Cold starts, in order of effort: keep `scaledown_window=600` (a running job keeps the container
 warm through its polling); `min_containers=1` only during a work session and never in the
 committed file (about $2–4 per idle hour); memory snapshots (`enable_memory_snapshot=True` with
 ComfyUI started in `@modal.enter(snap=True)`) for the import phase; experimental GPU snapshots
 (community: 53–77 s down to 8–10 s) as a Phase C experiment. Loading 57 GB of Wan fp16 weights
-from the Volume at ~2.5 GB/s is 25–40 s regardless.
+from the Volume at ~2.5 GB/s is 25–40 s regardless. `backends.example.yaml` therefore sets
+`cold_start_grace: 600` (the first start also pulls the image).
 
-Deploy with `modal deploy modal/vorch_comfy.py`; the URLs go into `~/vorch/backends.yaml`.
+Deploy with `modal deploy modal/vorch_comfy.py`; the printed URLs go into `~/vorch/backends.yaml`.
 
 ## 5. Cloud workflows and profiles (Phase C)
 

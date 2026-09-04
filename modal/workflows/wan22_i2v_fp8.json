@@ -1,0 +1,207 @@
+{
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "2": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "3": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+   "type": "wan",
+   "device": "default"
+  }
+ },
+ "4": {
+  "inputs": {
+   "vae_name": "wan_2.1_vae.safetensors"
+  },
+  "class_type": "VAELoader",
+  "_meta": {
+   "title": "Load VAE"
+  }
+ },
+ "5": {
+  "inputs": {
+   "image": "start.png"
+  },
+  "class_type": "LoadImage",
+  "_meta": {
+   "title": "Load Image"
+  }
+ },
+ "6": {
+  "inputs": {
+   "text": "slow cinematic camera push-in",
+   "clip": [
+    "3",
+    0
+   ]
+  },
+  "class_type": "CLIPTextEncode",
+  "_meta": {
+   "title": "CLIP Text Encode (Prompt)"
+  }
+ },
+ "7": {
+  "inputs": {
+   "text": "distorted, deformed, blurry, low quality, morphing, extra fingers, melting, warping, jitter, static, frozen, text, watermark, oversaturated",
+   "clip": [
+    "3",
+    0
+   ]
+  },
+  "class_type": "CLIPTextEncode",
+  "_meta": {
+   "title": "CLIP Text Encode (Prompt)"
+  }
+ },
+ "8": {
+  "inputs": {
+   "width": 832,
+   "height": 480,
+   "length": 49,
+   "batch_size": 1,
+   "positive": [
+    "6",
+    0
+   ],
+   "negative": [
+    "7",
+    0
+   ],
+   "vae": [
+    "4",
+    0
+   ],
+   "start_image": [
+    "5",
+    0
+   ]
+  },
+  "class_type": "WanImageToVideo",
+  "_meta": {
+   "title": "WanImageToVideo"
+  }
+ },
+ "9": {
+  "inputs": {
+   "add_noise": "enable",
+   "noise_seed": 0,
+   "steps": 20,
+   "cfg": 3.5,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "start_at_step": 0,
+   "end_at_step": 10,
+   "return_with_leftover_noise": "enable",
+   "model": [
+    "1",
+    0
+   ],
+   "positive": [
+    "8",
+    0
+   ],
+   "negative": [
+    "8",
+    1
+   ],
+   "latent_image": [
+    "8",
+    2
+   ]
+  },
+  "class_type": "KSamplerAdvanced",
+  "_meta": {
+   "title": "KSampler (Advanced)"
+  }
+ },
+ "10": {
+  "inputs": {
+   "add_noise": "disable",
+   "noise_seed": 0,
+   "steps": 20,
+   "cfg": 3.5,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "start_at_step": 10,
+   "end_at_step": 10000,
+   "return_with_leftover_noise": "disable",
+   "model": [
+    "2",
+    0
+   ],
+   "positive": [
+    "8",
+    0
+   ],
+   "negative": [
+    "8",
+    1
+   ],
+   "latent_image": [
+    "9",
+    0
+   ]
+  },
+  "class_type": "KSamplerAdvanced",
+  "_meta": {
+   "title": "KSampler (Advanced)"
+  }
+ },
+ "11": {
+  "inputs": {
+   "samples": [
+    "10",
+    0
+   ],
+   "vae": [
+    "4",
+    0
+   ]
+  },
+  "class_type": "VAEDecode",
+  "_meta": {
+   "title": "VAE Decode"
+  }
+ },
+ "12": {
+  "inputs": {
+   "fps": 16,
+   "images": [
+    "11",
+    0
+   ]
+  },
+  "class_type": "CreateVideo",
+  "_meta": {
+   "title": "Create Video"
+  }
+ },
+ "13": {
+  "inputs": {
+   "filename_prefix": "video/wan22_fp8",
+   "format": "mp4",
+   "codec": "h264",
+   "video-preview": "",
+   "video": [
+    "12",
+    0
+   ]
+  },
+  "class_type": "SaveVideo",
+  "_meta": {
+   "title": "Save Video"
+  }
+ }
+}

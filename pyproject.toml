@@ -25,6 +25,10 @@ dev = [
     "pytest>=8.0",
     "httpx>=0.27",
 ]
+# Optional cloud backend (docs/modal-backend.md): the Modal client for `modal deploy|run`.
+cloud = [
+    "modal>=1.5",
+]
 
 [project.scripts]
 vorch = "vorch.__main__:main"

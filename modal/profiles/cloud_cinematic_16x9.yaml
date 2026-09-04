@@ -1,0 +1,7 @@
+# Import: python -m vorch profiles --import modal/profiles/cloud_cinematic_16x9.yaml
+# Klein keyframes + ReActor stay local; only the Wan phase runs on Modal (H100, fp16).
+name: Cloud cinematic 16:9 (Wan fp16 on Modal)
+base: cinematic_16x9
+overrides:
+  purpose: cinematic
+  video: {workflow: animate_wan22_fp16, width: 832, height: 480, length: 81, fps: 16}

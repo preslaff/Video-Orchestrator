@@ -402,10 +402,23 @@ def _cmd_setup(args) -> int:
 
 
 def _cmd_profiles(args) -> int:
+    import yaml
+
     from . import profiles
 
     store = _open_store()
     try:
+        if getattr(args, "import_file", None):
+            # {name, base, overrides} -> a new user profile (same shape as POST /api/profiles)
+            with open(args.import_file, encoding="utf-8") as f:
+                doc = yaml.safe_load(f) or {}
+            if not doc.get("name"):
+                raise ValueError(f"{args.import_file}: 'name' is required")
+            base = profiles.resolve(store, doc.get("base") or profiles.DEFAULT_PROFILE_ID)
+            p = profiles.clone(base, str(doc["name"]), overrides=doc.get("overrides") or {})
+            profiles.save(store, p)
+            print(f"imported profile {p.id}  ({p.name}; base {base.id})")
+            return 0
         for p in profiles.list_all(store):
             size = f"{p.keyframe.width}x{p.keyframe.height}"
             if p.video:
@@ -779,7 +792,9 @@ def build_parser() -> argparse.ArgumentParser:
     stc.add_argument("--profile", default=None, help="check this profile's workflows strictly")
     st.set_defaults(func=_cmd_setup)
 
-    pf = sub.add_parser("profiles", help="list output profiles (built-in + user)")
+    pf = sub.add_parser("profiles", help="list output profiles (built-in + user); --import adds one from YAML")
+    pf.add_argument("--import", dest="import_file", default=None, metavar="FILE",
+                    help="create a user profile from a YAML {name, base, overrides} (e.g. modal/profiles/*.yaml)")
     pf.set_defaults(func=_cmd_profiles)
 
     pj = sub.add_parser("projects", help="list projects")
