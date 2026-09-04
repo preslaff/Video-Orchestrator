@@ -1,33 +1,66 @@
-# Video Orchestrator
+# Video Orchestrator (vorch)
 
-Local, self-contained AI video-production pipeline. It turns a text idea into a series of
-consistent video clips — autonomously and entirely on your own machine — by directing two
-local systems in a self-evaluating loop:
+Local, self-contained AI raw-material generator for **cinematic and marketing video**. It
+turns a text idea into consistent keyframes and clips in the format you need (16:9, 9:16, 1:1,
+stills, longer clips), reviews every result with a vision model, and hands you a clean folder of
+raw material plus an optional first cut — all on your own machine. Final editing (audio, titles,
+colour) happens in an NLE such as Shotcut; this app prepares what goes into it.
 
-- **Gemma 4** (`gemma-4-26B-A4B`, multimodal) — the reasoning + vision "brain": writes
-  storyboards/prompts and **evaluates** every generated result, deciding accept or retry.
-- **ComfyUI** — the "hands": FLUX.2 Klein keyframes, Wan 2.2 image-to-video, ReActor face swap.
+Two local systems do the work, driven by a deterministic Python core:
+
+- **Gemma 4** (`gemma-4-26B-A4B`, multimodal, via llama.cpp) — the "brain + eyes": writes the
+  storyboard and prompts, and **evaluates** every generated image as a structured JSON verdict.
+- **ComfyUI** — the "hands": FLUX.2 Klein keyframes, Wan 2.2 image-to-video, ReActor face swap,
+  and any workflow you register yourself.
 
 ```
-idea → storyboard → [per scene: keyframe → EVALUATE → animate → EVALUATE → face swap → EVALUATE] → clips
+idea → storyboard ⏸ → keyframes (+evaluate/retry, variants) ⏸ → clips → post-steps → export (+ assembly)
 ```
 
-After each generation Gemma scores the result against the task and either accepts it or corrects
-the prompt and retries (up to N attempts).
+`⏸` marks a human approval gate (semi-autonomous mode). Everything is persisted, resumable and
+auditable.
+
+## Contents
+
+- [Feature overview](#feature-overview)
+- [Architecture](#architecture)
+- [Install](#install)
+- [Running the services](#running-the-services)
+- [The web UI](#the-web-ui)
+- [Setup phase](#setup-phase): environment check · projects & assets · output profiles · workflows
+- [Jobs](#jobs): wizard · gates · evaluator · regeneration · stills & variants · edit mode · post-steps
+- [Deliverables](#deliverables): export folder · assembling clips · versions · speed
+- [Command line](#command-line)
+- [HTTP API](#http-api)
+- [Configuration](#configuration)
+- [Reproducibility & provenance](#reproducibility--provenance)
+- [Development](#development)
+
+## Feature overview
+
+| Area | What you get |
+|---|---|
+| Formats | Output **profiles** decide aspect (16:9 / 9:16 / 1:1 / any W:H), keyframe and clip sizes, clip length (Wan 4n+1 frames), fps, sampler settings, style vocabulary and negatives. Built-ins: cinematic 16:9, social 9:16, social 1:1, stills 16:9. |
+| Storyboarding | Gemma breaks the idea into scenes and writes format-aware keyframe and motion prompts (framing hints for vertical/square, motion amount for the clip length, style prefix, negatives). |
+| Self-evaluation | Gemma vision judges each keyframe (action, identity, artifacts, composition, framing for the delivery format, 1–10 score) and the pipeline retries with the model's fix suggestion. Objective checks gate; the score only flags for review. |
+| Human gates | Semi-autonomous runs pause after the storyboard and before the expensive video phase. Edit prompts, pick variants, apply the evaluator's suggestions, regenerate a scene, then approve. |
+| Identity | A project's master face is imposed on keyframes with ReActor (optional per job). Reference-locked **edit mode** uses the Klein identity/KV edit workflows for "same composition, light edit" variants. |
+| Stills jobs | Storyboard → N keyframe variants per scene, best chosen by verdict, face swap per variant, no video phase. |
+| Post-processing | Any registered `postprocess` workflow (interpolation, upscale, …) runs after each clip or still, in order. |
+| Pluggable workflows | Register a newly exported ComfyUI graph with a YAML sidecar, no Python: `vorch registry inspect` → `add` → `validate --online`. |
+| Deliverables | A per-job **export folder** for Shotcut (numbered stills/clips, manifest, storyboard, README). **Assemble** selected clips into one video with per-cut ffmpeg `xfade` transitions, per-clip speed, kept as versions. |
+| Live control | Next.js UI with live progress (phase stepper, current step, elapsed time), server-sent events with replay, decision log, provenance (seed + prompt per file). |
+| Operations | Environment check (database, ComfyUI, Gemma + vision probe, ffmpeg, GPU headroom, every workflow's node classes and model files), VRAM guard between heavy models, PostgreSQL state, CLI for everything. |
 
 ## Architecture
-
-A **deterministic Python core** drives all control flow; Gemma is called as a *tool*, never as an
-autonomous planner. This choice (over an LLM-agent framework) was validated by a multi-source
-research pass — see [`DESIGN.md`](DESIGN.md) §11–12.
 
 ```
 ┌─ Next.js UI :3000 ──────────────┐    rewrites /api, /media
 │  setup (env · workflows · profiles ·│ ─────────────────────────┐
 │  projects) · new-job wizard · job   │                          ▼
-│  page (SSE timeline, gallery, gates)│   ┌─ FastAPI :8000 (vorch serve) ─────────────────────┐
-└─────────────────────────────────────┘   │  /api + SSE · /media (ComfyUI output)               │
-                                          │  JobManager (one GPU lock) → Orchestrator:         │
+│  page (SSE timeline, gallery, gates,│   ┌─ FastAPI :8000 (vorch serve) ─────────────────────┐
+│  assemble, export)                  │   │  /api + SSE · /media (ComfyUI output)               │
+└─────────────────────────────────────┘   │  JobManager (one GPU lock) → Orchestrator:         │
                                           │   STORYBOARD ─⏸─ KEYFRAMES ─⏸─ VIDEOS ─ POST ─ EXPORT│
                                           │  PostgreSQL: jobs (JSONB) · decisions · profiles ·  │
                                           │  projects        registry: workflows/*.yaml         │
@@ -39,210 +72,335 @@ research pass — see [`DESIGN.md`](DESIGN.md) §11–12.
                                      eval → JSON verdict            = deterministic generator
 ```
 
-The pipeline is phased (all keyframes → `/free` → all videos → `/free` → all swaps) to fit a
-**16GB VRAM** budget, with semi-autonomous human-approval gates after the storyboard and after
-keyframe evaluation.
+Design principles (see [`DESIGN.md`](DESIGN.md) §2, §11): a deterministic Python state machine
+drives everything and Gemma is called as a tool, never as a planner; ComfyUI workflows are
+**templates** whose listed node fields are replaced by id, never restructured; generation is
+**phased by stage** (all keyframes, then all videos) with VRAM freed between heavy models;
+Wan clip length is always 4n+1 frames; evaluation returns JSON.
 
-**Hardware target:** RTX 5070 Ti (16GB VRAM), 64GB RAM, Linux.
-
-## Status
-
-**Phase 1 — walking skeleton** ✅ — a deterministic single-scene driver that proves the ComfyUI
-chain end-to-end (keyframe → face swap → animate).
-
-**Phase 2 — in progress.** The **evaluator** is built: Gemma vision scores a keyframe into a
-validated `Verdict` and the pipeline retries with the fix suggestion (`run-scene --evaluate`,
-or the standalone `evaluate` command). **Sequential continuity** is built too: `run-sequence`
-chains scenes so the last frame of one clip seeds the next (`continuous: true`), re-locking
-identity each step. **State** is persisted: `state.py` stores each `Job`/`Scene` in PostgreSQL
-(JSONB, resumable) with an append-only **decision log** recording why every frame was accepted or
-retried. And the **orchestrator** ties it together: from a one-line idea it generates a
-storyboard (Gemma), then drives storyboard → keyframes (+eval/retry) → videos as a phased,
-resumable state machine with **semi-autonomous approval gates** (`run` / `approve` / `jobs`).
-A **VRAM guard** (`vram.py`) reclaims GPU memory at the Wan boundary. Phase 2 was validated
-end-to-end against live Gemma + ComfyUI.
-
-**Phase 3 — multipurpose raw material + setup phase** ✅ (Sept 2026). The app now produces
-raw material for cinematic *and* marketing use: **output profiles** (16:9 / 9:16 / 1:1 video,
-stills-only jobs with N variants, longer clips, style vocabularies) drive every size, length and
-prompt; keyframes can be **reference-locked edits** (identity / KV edit); registered
-**post-process** workflows run after each clip. The **setup phase** adds a structured
-**environment check**, **projects** with shared assets (master face, references), and a
-per-job **handoff export folder** for Shotcut (`sNN_clip.mp4`, `sNN_keyframe.png`, manifest,
-README). State moved to **PostgreSQL**; the UI is a **Next.js** app on the FastAPI API. Any
-ComfyUI workflow can be plugged in through a YAML sidecar without touching Python.
-
-### Pluggable workflows
-
-Each ComfyUI template is paired with a registry YAML (`workflows/*.yaml`) that names the
-node fields the orchestrator may replace. New workflows drop into `~/vorch/workflows/`
-without Python changes: `python -m vorch registry inspect <api.json>` → `registry add` →
-`registry validate --online`. See [`docs/workflows.md`](docs/workflows.md).
-
-## Repository layout
-
-| Path | What |
-|------|------|
-| [`NOTES.md`](NOTES.md) | The spec — endpoints, per-workflow node IDs, VRAM strategy, decisions. **Read first.** |
-| [`DESIGN.md`](DESIGN.md) | Orchestrator architecture, the validated stack, build order. |
-| [`SKILL.md`](SKILL.md) + `skills/` | Operational how-tos (ComfyUI API, Gemma eval/prompt, VRAM). |
-| `workflows/` | ComfyUI API-format workflow templates (Klein / Wan / ReActor). |
-| `vorch/` | The orchestrator package (clients, workflow registry, steps, pipeline, CLI). |
-| `tests/` | GPU-free checks for the workflow registry. |
+**Hardware target:** RTX 5070 Ti (16 GB VRAM), 64 GB RAM, Linux. The 16 GB ceiling drives the
+VRAM strategy: Gemma runs on the CPU (`--n-gpu-layers 0 --no-mmproj-offload`) so ComfyUI owns
+the GPU.
 
 ## Install
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install -e ".[app,dev]"      # core + FastAPI server + test tools
 ```
 
-The core needs `requests`/`pydantic`/`psycopg`; the `[app]` extra adds the FastAPI server (`vorch serve`).
+### PostgreSQL
 
-### Database (PostgreSQL)
-
-Job state and the decision log live in a local **PostgreSQL** database (psycopg 3, JSONB,
-plain-SQL migrations in `vorch/migrations/`). The default DSN `postgresql:///vorch` uses the
-local socket with peer auth, i.e. your OS user needs a PostgreSQL role with `CREATEDB`
-(`sudo -u postgres createuser -s $USER` once). Then:
+State lives in a local PostgreSQL database (psycopg 3, JSONB, plain-SQL migrations in
+`vorch/migrations/`). The default DSN `postgresql:///vorch` uses the local socket with peer
+auth, so your OS user needs a role with `CREATEDB` (`sudo -u postgres createuser -s $USER` once).
 
 ```bash
-python -m vorch db init                      # create the database + apply migrations
-python -m vorch db status                    # DSN, schema version, job count
-python -m vorch db import-sqlite runs/vorch.db   # one-off: bring over pre-PostgreSQL runs
+python -m vorch db init                          # create the database + apply migrations
+python -m vorch db status                        # DSN, schema version, job count
+python -m vorch db import-sqlite runs/vorch.db   # one-off import of pre-PostgreSQL runs
 ```
 
-Override with `VORCH_DATABASE_URL=postgresql://user:pass@host/db`. Tests use
-`VORCH_TEST_DATABASE_URL` (default `postgresql:///vorch_test`) and isolate every test in its
-own throwaway schema; they stop with a clear message if PostgreSQL is not running.
+### Node (UI only)
 
-## Usage
-
-Requires the local services running: **ComfyUI** on `:8188` (with the FLUX.2 / Wan / ReActor
-models) and, for prompt generation, **Gemma** (llama-server) on `:8080`. Endpoints and paths are
-configurable via `VORCH_*` environment variables (see `vorch/config.py`).
+The web UI needs Node 22 (`frontend/.nvmrc`); `vorch serve` never does.
 
 ```bash
-# Individual steps (each isolates one ComfyUI endpoint)
-python -m vorch keyframe "oil painting, woman kneading bread, impasto, visible brushstrokes"
-python -m vorch animate keyframe.png "slow camera push-in, hands kneading dough"
-python -m vorch faceswap scene.png master_face.jpeg
-
-# Score an image against an intent (Gemma vision → accept/retry verdict)
-python -m vorch evaluate keyframe.png "woman kneading bread, oil painting"
-
-# Show GPU memory (and optionally reclaim ComfyUI VRAM)
-python -m vorch vram
-python -m vorch vram --free
-
-# Full single scene: keyframe → swap → animate
-python -m vorch run-scene \
-  --keyframe-prompt "..." \
-  --animation-prompt "..." \
-  --master master_face.jpeg
-
-# ...with self-evaluation: judge the keyframe and retry with the fix (max N)
-python -m vorch run-scene --evaluate --max-attempts 2 \
-  --keyframe-prompt "..." --animation-prompt "..." --master master_face.jpeg
-
-# A sequence of scenes — continuous scenes start on the previous clip's last frame
-python -m vorch run-sequence scenes.yaml --master master_face.jpeg
+cd frontend && npm ci
 ```
 
-`scenes.yaml` is a list of scenes; flag `continuous: true` to seed a scene from the previous
-clip's last frame (otherwise it gets a fresh identity-locked keyframe):
+## Running the services
 
-```yaml
-- keyframe_prompt: "a castle at dawn, oil painting, impasto"
-  animation_prompt: "slow camera pan left"
-- keyframe_prompt: "(ignored when continuous)"
-  animation_prompt: "push in on the gate"
-  continuous: true
-```
+1. **ComfyUI** on `:8188` with the FLUX.2 Klein, Wan 2.2 (GGUF) and ReActor models.
+2. **Gemma** (llama-server) on `:8080`, on the CPU so it never competes with ComfyUI for VRAM,
+   and **with the vision projector** — without `--mmproj` every verdict is meaningless:
+   ```bash
+   ./build/bin/llama-server \
+     -m ~/models/gemma4/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf \
+     --mmproj ~/models/gemma4/mmproj-BF16.gguf \
+     --n-gpu-layers 0 --no-mmproj-offload --ctx-size 32768 \
+     --host 0.0.0.0 --port 8080
+   ```
+3. **API**: `.venv/bin/python -m vorch serve` → `http://127.0.0.1:8000/api` (docs at `/docs`).
+4. **UI**: `cd frontend && npm run dev` → `http://localhost:3000` (`make frontend && make start`
+   for a production build).
 
-Carried frames are re-locked to the master face by default (ReActor swap, countering Wan drift);
-pass `--no-relock` to disable. See [`docs/sequential-continuity-plan.md`](docs/sequential-continuity-plan.md).
+Check everything at once: `python -m vorch setup check --deep` (or *Setup → Environment* in
+the UI).
 
-### Full job from an idea (the orchestrator)
+## The web UI
 
-Drive the whole phased pipeline from a one-line idea via a YAML job spec
-(see [`examples/job.example.yaml`](examples/job.example.yaml)):
+| Route | Purpose |
+|---|---|
+| `/jobs` | All jobs with status, project, kind and profile; filters by project and status; live status badges; delete. |
+| `/jobs/new` | The **new-job wizard**: project → profile → brief (idea, style, scenes, seed, autonomy, keyframe mode + references, face swap, evaluation) → review. Submission is blocked, with reasons, while the environment check fails (a *force* switch overrides). |
+| `/jobs/[id]` | The **job page**: progress panel, gate/review panel, scene grid (keyframes, variants, clips), assemble panel, export panel, collapsible decision log and provenance. Everything updates live over SSE; the stream resumes across approval gates and reloads. |
+| `/setup/env` | Environment check with a re-run button and the effective configuration. |
+| `/setup/workflows` | Registered ComfyUI workflows, their parameters and requirements; how to add one. |
+| `/setup/profiles` | Output profiles: clone, edit (aspect presets, sizes, 4n+1 helper, style vocabulary, workflow pickers, post-steps), delete. Built-ins are read-only. |
+| `/setup/projects` | Projects with asset uploads (master face, references, products, logos) and their jobs. |
+
+## Setup phase
+
+### Environment check
+
+`GET /api/setup/env`, `vorch setup check [--deep] [--profile ID]`, or the Setup page. Each
+check reports ok / warn / fail:
+
+- **database** (reachable, migrations applied), **comfy** (`/system_stats`), **comfy_dirs**
+  (input/output writable), **gemma** (`/v1/models`), **gemma_vision** (deep only: a tiny image
+  probe that catches a llama-server started without `--mmproj`), **ffmpeg** / **ffprobe**,
+  **gpu** (free VRAM vs the guard), one row per registered **workflow** (YAML vs template, and
+  online: node classes and model files installed in ComfyUI), the selected **profile**, and the
+  **export** / **projects** roots.
+
+A job submit is refused while any check *fails* (warnings pass); the API returns the report with
+the 409.
+
+### Projects and assets
+
+A project groups jobs and owns shared files: the **master face** used for identity, and
+**reference** / **product** / **logo** images for edit mode. Assets are uploaded in the UI (or
+`vorch project add-asset <slug> <path> --kind master_face`), stored under
+`~/vorch/projects/<slug>/assets/` and content-hashed. A project also sets the default profile and
+an optional export root. Deleting a project keeps its jobs (unlinked).
+
+### Output profiles
+
+A profile is the complete generation preset for a job and is **snapshotted onto the job** at
+submit, so later edits never change a running job.
+
+| Block | Fields |
+|---|---|
+| identity | `purpose` (cinematic, social_vertical, social_square, ad_broll, stills), `kind` (video / stills), `aspect` |
+| keyframe | workflow, width × height (16-aligned), steps, cfg, unet |
+| video | workflow, width × height, `length` (4n+1: 49, 81, 121 …), fps, negative |
+| stills | variants per scene (1–8) |
+| style | keyframe prefix (technique first, e.g. "impasto oil painting" or "phone photo, natural light"), keyframe negative, animation suffix, animation negative |
+| face_swap | enabled, workflow, restore model |
+| evaluate | enabled, max attempts, review threshold |
+| edit_workflow | which `edit` workflow reference-locked keyframes use |
+| post_steps | ordered `postprocess` workflows with parameters |
+
+Built-ins (YAML in `vorch/profiles_builtin/`, read-only): `cinematic_16x9` (1024×576 → 832×480,
+49 frames), `social_9x16` (576×1024 → 480×832), `social_1x1` (768×768 → 640×640),
+`stills_16x9` (4 variants, no video). Clone one to change anything (for example `length: 81`
+for longer clips). Aspect presets compute the sizes; any `W:H` works.
+
+### Workflows (pluggable ComfyUI graphs)
+
+Every ComfyUI template ships with a YAML sidecar (`workflows/*.yaml`) that declares its
+**kind** (keyframe, animate, faceswap, edit, postprocess, custom), which parameters are staged
+files, its output nodes, and a semantic parameter → `(node, field)` map with types, ranges and
+constraints. Per-kind contracts guarantee the pipeline can drive any workflow of a kind.
+
+To use a new graph without touching Python: export it from ComfyUI as **API** JSON, then
 
 ```bash
-python -m vorch run job.yaml          # storyboard -> keyframes (+eval) -> videos
-python -m vorch jobs                  # list persisted jobs + status
-python -m vorch job <job_id>          # scenes + full decision log
+python -m vorch registry inspect ~/vorch/workflows/my_graph.json --online   # nodes + role guesses
+python -m vorch registry add ~/vorch/workflows/my_graph.json --kind postprocess
+python -m vorch registry validate my_graph --online                          # vs the running ComfyUI
 ```
 
-In `autonomy: semi` the run pauses at approval gates (after the storyboard, and again before the
-expensive Wan phase); inspect, then continue:
+Entries in `~/vorch/workflows/` override built-ins by name; the UI lists them under
+*Setup → Workflows* and offers them in profile pickers. Guide: [`docs/workflows.md`](docs/workflows.md).
+
+## Jobs
+
+### Creating a job
+
+From the wizard, the API (`POST /api/jobs`) or the CLI (`vorch run job.yaml`). The profile is
+resolved as `profile_id` → the project's default → `cinematic_16x9`, optionally deep-merged
+with `profile_overrides`; the master face comes from the request or the project's asset.
+
+`job.yaml` keys: `idea`, `style`, `n_scenes`, `seed` (0 = random, materialised and recorded),
+`autonomy` (`semi` | `full`), `profile`, `profile_overrides`, `aspect` (shortcut for sizes),
+`project` (slug), `mode` (`t2i` | `edit`), `references`, `master_face`, `face_swap`,
+`evaluate`, `retry.max_attempts`, `video.length` / `video.fps`, `export`.
+
+### Phases and gates
+
+Video jobs: **storyboard** ⏸ **keyframes** ⏸ **videos** (swap → Wan → post-steps) → done →
+export. Stills jobs: **storyboard** ⏸ **keyframes** (variants) → finish (swap per variant, image
+post-steps) → done → export. In `semi` autonomy the run pauses at each `⏸`; `full` runs through.
+
+At a gate (and after completion) the job page's review panel lets you edit the description,
+prompts and negatives per scene, switch a scene to edit mode with references, pick a keyframe
+variant, and **approve**. Prompts of scenes that already have a keyframe apply on regeneration.
+
+### Evaluation
+
+Each keyframe attempt is judged by Gemma vision against the scene's intent and the delivery
+format: `action_correct`, `identity_match`, `style_match`, `artifacts`, `composition_ok`,
+`framing_ok` (portrait/landscape/square framing), a 1–10 `score`, `verdict` and a
+`fix_suggestion`. The **objective** booleans decide accept/retry; the score only flags an
+accepted frame for review when below the profile's threshold. Every attempt, retry, review flag,
+approval and regeneration lands in the **decision log**.
+
+### Regenerating a scene
+
+"Regenerate keyframe" discards a scene's keyframe (and its swap and clip), applies any prompt
+edits, reopens the keyframes gate and reruns only that scene with a new seed. The evaluator's
+suggestions for the scene are listed with an **Apply to prompt** button, which appends
+`Correction: …` exactly as the automatic retry does. "Re-animate" keeps the keyframe and renders
+the clip again. The export folder is rebuilt when the job completes again.
+
+### Stills and variants
+
+A stills profile generates `variants` keyframes per scene with distinct seeds, evaluates each,
+and picks the best (accepted with the highest score). All variants are kept; choose a different
+one at the gate or after completion (re-export follows).
+
+### Edit mode (reference-locked keyframes)
+
+`mode: edit` (job-wide, or per scene at the gate) generates keyframes with the profile's edit
+workflow (`identity_edit` or `kv_edit`) from one or more reference images, which are fitted to
+the target size and staged once per run. Reference editing locks the composition, so it is meant
+for "same composition, light edit" variants and product placement, not for fresh scenes.
+
+### Post-processing chains
+
+A profile's `post_steps` run after each clip (and each still variant): the previous output is
+staged into ComfyUI, `fps` / `seed` are filled in when the workflow declares them, VRAM is
+reclaimed when the workflow changes, and steps whose input type does not match are skipped. The
+raw Wan clip is kept alongside the final one.
+
+### Live progress
+
+The job page shows a phase stepper, a progress bar over keyframe/clip units, the current step
+with elapsed time ("Animating scene 2 with Wan — 81 frames @ 16 fps (~5 s); this is the slow
+step"), and per-scene state chips. Events are named SSE messages with ids; reloads replay the
+timeline and reconnects resume from the last id.
+
+## Deliverables
+
+### Export folder (Shotcut handoff)
+
+Written automatically when a job finishes, or on demand (`POST /api/jobs/{id}/export`,
+`vorch export <job>`), under `~/vorch/export/<project slug or _unassigned>/<job8>_<idea>/`:
+
+```
+README.txt            fps, resolution, frames, clip length, scene order, Shotcut notes
+manifest.json         profile snapshot, prompts, seeds, verdicts, sources, assembly versions
+storyboard.md         per scene: description, prompts, verdicts, seeds
+s01_keyframe.png      s01_keyframe_v2.png … (stills variants)
+s01_swapped.png       (when the master face was imposed)
+s01_clip.mp4          s01_clip_raw.mp4 (when post-steps changed the clip)
+assembly.mp4          (optional: the current assembly)
+provenance/           copied sidecar manifests
+```
+
+Files are hardlinked when possible (copied across filesystems); re-export is idempotent and the
+UI flags a stale export after the job changed.
+
+### Assembling clips
+
+The **Assemble** panel joins selected clips of a job into one video:
+
+- tick and reorder scenes (final or raw clip per scene);
+- choose a **transition per cut**: any ffmpeg `xfade` transition (fades, wipes, slides,
+  shapes, wind …) with its length, or a hard cut;
+- set a **target duration per clip** to change its speed (0.25×–4×); slow motion repeats
+  frames or, with **smooth slow motion**, uses motion-compensated interpolation (much slower to
+  render);
+- optionally change the fps or use the NVENC encoder.
+
+ffmpeg renders once (h264, the clips' size, no audio) to `assembly_v<N>.mp4` next to the clips,
+with a provenance sidecar. **Every assembly is kept as a version**: play any, *Use for export*
+(it becomes `assembly.mp4` in the export folder), or delete it. From the CLI:
 
 ```bash
-python -m vorch approve <job_id> storyboard   # release the storyboard gate
-python -m vorch approve <job_id> keyframes    # release the pre-Wan gate
+python -m vorch assemble <job_id> --transition fade --duration 0.5   # same cut everywhere
+python -m vorch assemble <job_id> --spec cuts.json                    # per-cut / per-clip spec
+python -m vorch assemble <job_id> --list                              # versions (* = current)
+python -m vorch assemble <job_id> --select 2                          # make v2 current
 ```
 
-`autonomy: full` runs straight through. State + the decision log persist to PostgreSQL
-(`VORCH_DATABASE_URL`, default `postgresql:///vorch`), so a job is **resumable** and every
-accept/retry is auditable.
+`cuts.json` mirrors the API spec, e.g.
+`{"items":[{"scene_index":0,"target_seconds":6.1},{"scene_index":1}],"cuts":[{"transition":"wipeleft","duration":0.3}],"smooth":true}`.
 
-**Face swap is optional.** Set `face_swap: false` in the job spec (or the *Face swap* switch in the
-dashboard, or `--no-face-swap` on `run-scene`/`run-sequence`) to animate the keyframe directly
-without imposing a master face — useful for landscapes, objects, or generic characters. `master_face`
-is then not required.
+## Command line
 
-### Web UI (Next.js)
+`python -m vorch <command>` (or `vorch` once installed):
 
-The control panel is a separate **Next.js** app in `frontend/` (App Router, TypeScript,
-Tailwind, TanStack Query) that proxies `/api` and `/media` to FastAPI, so the browser stays
-same-origin. Node 22 (`frontend/.nvmrc`) is required for the UI only — `vorch serve` never
-needs it.
+| Command | What |
+|---|---|
+| `setup check [--deep] [--profile ID]` | environment report; exit 1 on any failure |
+| `profiles` · `projects` · `project add / add-asset / show` | setup-phase objects |
+| `registry list / validate [--online] / inspect <json> / add <json>` | workflow registry |
+| `run job.yaml` · `approve <job> storyboard\|keyframes` · `jobs` · `job <id>` | drive and inspect jobs |
+| `export <job> [--force]` · `assemble <job> …` | deliverables |
+| `keyframe` · `animate` · `edit` · `faceswap` · `evaluate` | single steps (`--aspect`, `--workflow`, `--negative`, `--ref`) |
+| `run-scene` · `run-sequence scenes.yaml` | one scene, or a sequence with last-frame continuity (`continuous: true`, `--no-relock`) |
+| `vram [--free]` | GPU memory; reclaim ComfyUI's models |
+| `serve [--host --port]` · `openapi` | the API server; the schema for the typed client |
+| `db init / status / import-sqlite <file>` | database |
+
+## HTTP API
+
+All routes under `/api`; interactive docs at `/docs`. Errors use one envelope:
+`{"error": {"code", "message", "details"}}`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST / GET | `/jobs` | create; list (`limit`, `offset`, `status`, `project_id`) |
+| GET / DELETE | `/jobs/{id}` | job with scenes, media URLs, pending gate, assembly; delete |
+| PUT | `/jobs/{id}/scenes` | edit prompts/negatives/mode/references, choose a variant |
+| POST | `/jobs/{id}/scenes/{i}/regenerate` | redo a keyframe or clip (optional edits, `apply_suggestion`) |
+| POST | `/jobs/{id}/approve/{gate}` | clear `storyboard` / `keyframes` |
+| GET | `/jobs/{id}/decisions` · `/provenance` | decision log; seed + prompt per file |
+| GET | `/jobs/{id}/events` · `/events` | SSE (named events, ids, `Last-Event-ID` replay) |
+| POST / GET | `/jobs/{id}/export` | run / inspect the export |
+| GET / POST | `/jobs/{id}/assemble` | status (clips, transitions, versions) / run |
+| POST / DELETE | `/jobs/{id}/assemble/versions/{n}/select` · `/versions/{n}` | make a version current / delete it |
+| GET | `/setup/env` · `/setup/config` | environment check; effective configuration |
+| GET | `/workflows` · `/workflows/{name}` | registry |
+| GET / POST / PUT / DELETE, POST `…/clone` | `/profiles[/{id}]` | profiles (built-ins read-only) |
+| GET / POST / PUT / DELETE | `/projects[/{id}]`, `/projects/{id}/assets[…]`, `/projects/{id}/jobs` | projects and assets (multipart upload) |
+| GET | `/media/{path}` | generated files (Range requests, no-cache) |
+
+## Configuration
+
+Environment variables (see `vorch/config.py`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VORCH_COMFY_URL` / `VORCH_GEMMA_URL` | `http://localhost:8188` / `:8080` | services |
+| `VORCH_COMFY_ROOT` | `~/comfy/ComfyUI` | its `input/` and `output/` dirs |
+| `VORCH_DATABASE_URL` / `VORCH_TEST_DATABASE_URL` | `postgresql:///vorch` / `…/vorch_test` | state |
+| `VORCH_WORKFLOW_DIR` / `VORCH_USER_WORKFLOW_DIR` | `workflows/` / `~/vorch/workflows` | registry |
+| `VORCH_PROJECTS_ROOT` / `VORCH_EXPORT_ROOT` | `~/vorch/projects` / `~/vorch/export` | files |
+| `VORCH_RUN_TIMEOUT` / `VORCH_ASSEMBLE_TIMEOUT` | 600 s | per ComfyUI workflow / ffmpeg assembly |
+| `VORCH_VRAM_GUARD_MB` / `VORCH_VRAM_SETTLE_SEC` | 10000 / 3 | VRAM guard |
+| `VORCH_UI_URL` / `VORCH_CORS_ORIGINS` | `http://localhost:3000` | UI origin (CORS only needed without the Next proxy) |
+
+Frontend: `API_ORIGIN` (server-side rewrite target, default `http://127.0.0.1:8000`) and
+`NEXT_PUBLIC_API_ORIGIN` (make the browser talk to FastAPI directly).
+
+## Reproducibility & provenance
+
+Every generated image, clip and assembly gets a sidecar `<file>.json` recording the workflow,
+template, exact prompts, the **materialised seed** (a job seed of 0 picks a random one, which is
+then recorded), sizes and all parameters, plus the job, profile, scene and variant it belongs to.
+Seeds derive deterministically per scene, variant, attempt and regeneration from the job seed, so
+a fixed seed reproduces a whole job. The decision log explains why each frame was accepted,
+retried, flagged or regenerated.
+
+## Development
 
 ```bash
-# terminal 1 — API + media
-.venv/bin/python -m vorch serve                 # http://127.0.0.1:8000/api, /docs
-
-# terminal 2 — UI (first time: npm ci)
-cd frontend && npm run dev                      # http://localhost:3000
+.venv/bin/python -m pytest -q          # ~300 tests; needs PostgreSQL (schema per test), ffmpeg for media tests
+cd frontend && npm test                # Vitest + Testing Library
+make api-types                         # regenerate frontend/openapi.json + TS types after API changes (a test enforces it)
+make frontend && make start            # production UI build
 ```
 
-`make frontend` builds it (`npm ci && next build`), `make start` serves the build, and
-`make api-types` regenerates `frontend/openapi.json` + `src/api/schema.d.ts` after any API
-change (a pytest snapshot test fails until you do). Frontend tests: `cd frontend && npm test`.
-If proxied SSE ever buffers, set `NEXT_PUBLIC_API_ORIGIN=http://127.0.0.1:8000` to have the
-browser talk to FastAPI directly (CORS is enabled for the Next origin).
-
-### Assembling clips (first cut with transitions)
-
-On the job page the **Assemble** panel joins selected clips of a job into one video: tick and
-order the scenes, choose a transition for every cut (any ffmpeg `xfade` transition — fades,
-wipes, slides, shapes — or a hard cut) with its length, optionally change the fps, and press
-Assemble. ffmpeg renders it once (h264, same size as the clips, no audio) to
-`assembly.mp4` next to the clips, served in the player and hardlinked into the export folder
-(listed in `manifest.json` / `README.txt`). The same from the CLI:
-
-```bash
-python -m vorch assemble <job_id> --transition fade --duration 0.5      # every cut
-python -m vorch assemble <job_id> --spec cuts.json                         # per-cut spec
-```
-
-Audio, titles and colour still happen in Shotcut; the assembly is a ready first cut.
-
-### Reproducibility
-
-Every generated image/video gets a sidecar manifest next to it — `<output>.json` — recording the
-exact prompt(s), the seed, the template, and all params that produced it. A `seed` of `0` means
-"pick a random one": a concrete seed is materialized, used, and recorded (so the saved value
-actually reproduces the result — re-running with that seed + prompt regenerates the same frame).
-
-Evaluation requires Gemma started with `--mmproj` (vision projector); without it the model is
-blind and verdicts are meaningless.
-
-Run the GPU-free registry checks with:
-
-```bash
-.venv/bin/python -m pytest -q
-```
+Documentation map: [`NOTES.md`](NOTES.md) (the original spec: endpoints, node ids, VRAM
+strategy, decisions), [`DESIGN.md`](DESIGN.md) (architecture, stack, build order),
+[`docs/workflows.md`](docs/workflows.md) (registering workflows),
+[`docs/sequential-continuity-plan.md`](docs/sequential-continuity-plan.md),
+[`SKILL.md`](SKILL.md) + `skills/` (operational how-tos), [`CLAUDE.md`](CLAUDE.md) (working
+rules for coding sessions).
 
 ## License
 
