@@ -240,7 +240,7 @@ def _orchestrator(store: Store, spec: dict) -> Orchestrator:
 
     return Orchestrator(
         store,
-        profile=profiles.from_legacy_spec(spec),
+        profile=profiles.from_legacy_spec(spec, store),
         n_scenes=spec.get("n_scenes"),
         seed=int(spec.get("seed", config.SEED_RANDOM)),
     )

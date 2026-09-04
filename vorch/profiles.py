@@ -216,16 +216,24 @@ def clone(profile: OutputProfile, name: str, *, overrides: dict | None = None) -
 # --- legacy mapping ------------------------------------------------------------------
 
 
-def from_legacy_spec(spec: dict) -> OutputProfile:
+def from_legacy_spec(spec: dict, store: Any | None = None) -> OutputProfile:
     """``job.yaml`` (pre-profile) -> a profile: cinematic_16x9 plus the old knobs.
 
-    Recognised keys: ``profile`` (id), ``profile_overrides``, ``evaluate``,
+    Recognised keys: ``profile`` (id — a built-in, or with ``store`` also a user
+    profile such as an imported cloud one), ``profile_overrides``, ``evaluate``,
     ``face_swap``, ``retry.max_attempts``, ``video.length`` / ``video.fps``,
     ``aspect`` (picks sizes via formats when no profile id is given).
     """
-    base = builtin_profiles().get(spec.get("profile") or DEFAULT_PROFILE_ID)
+    pid = spec.get("profile") or DEFAULT_PROFILE_ID
+    base = builtin_profiles().get(pid)
+    if base is None and store is not None:
+        try:
+            base = resolve(store, pid)
+        except KeyError:
+            base = None
     if base is None:
-        raise KeyError(f"unknown profile {spec.get('profile')!r}; built-ins: {sorted(builtin_profiles())}")
+        raise KeyError(f"unknown profile {pid!r}; built-ins: {sorted(builtin_profiles())}"
+                       + (" (user profiles: `vorch profiles`)" if store is not None else ""))
     ov: dict = {}
     if spec.get("aspect") and not spec.get("profile"):
         a = str(spec["aspect"])

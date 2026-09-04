@@ -106,3 +106,14 @@ def test_snapshot_roundtrips_through_genparams():
     snap = p.snapshot()
     assert GenParams.from_profile(snap) == GenParams.from_profile(p)
     assert OutputProfile.model_validate(snap) == p
+
+
+def test_from_legacy_spec_resolves_user_profiles_with_a_store(store):
+    cloud = profiles.save(store, profiles.clone(profiles.default_profile(), "Cloud",
+                                                overrides={"video": {"length": 81}}))
+    p = profiles.from_legacy_spec({"idea": "x", "profile": cloud.id}, store)
+    assert p.id == cloud.id and p.video.length == 81
+    with pytest.raises(KeyError, match="user profiles"):
+        profiles.from_legacy_spec({"idea": "x", "profile": "u_nope"}, store)
+    with pytest.raises(KeyError):
+        profiles.from_legacy_spec({"idea": "x", "profile": cloud.id})  # no store: built-ins only
