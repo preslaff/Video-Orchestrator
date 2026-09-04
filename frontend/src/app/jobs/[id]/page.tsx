@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { errorMessage } from '@/api/client'
 import { useDecisions, useExportStatus, useJob, useProvenance, useRunExport } from '@/hooks/useJobs'
 import { useJobEvents } from '@/hooks/useJobEvents'
+import { useProject } from '@/hooks/useSetup'
 import { Button, Card, Collapsible, Empty, ErrorBox, StatusBadge, fmtTime } from '@/components/ui'
 import { Timeline } from '@/components/Timeline'
 import { DecisionLog } from '@/components/DecisionLog'
@@ -18,6 +19,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   const decisions = useDecisions(id)
   const provenance = useProvenance(id)
   const exp = useExportStatus(id)
+  const project = useProject(job.data?.project_id ?? undefined)
   const runExport = useRunExport(id)
   // Always subscribe while the page is open: a finished job costs one synthetic
   // `end`, and a later approve/regenerate reconnects (onStarted) or resumes (active).
@@ -37,6 +39,13 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         <Link href="/jobs" className="text-sm text-neutral-500 hover:underline">← jobs</Link>
         <StatusBadge status={j.status} />
         <h1 className="text-xl font-semibold">{j.idea}</h1>
+        {j.project_id ? (
+          <Link href={`/setup/projects/${j.project_id}`} className="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-200" title="project">
+            📁 {project.data?.name ?? 'project'}
+          </Link>
+        ) : (
+          <span className="rounded bg-neutral-50 px-2 py-0.5 text-xs text-neutral-400">no project</span>
+        )}
         <span className="text-xs text-neutral-500">{j.kind} · {j.profile_id ?? 'default profile'} · {profile?.aspect ?? '16:9'} · seed {j.seed || 'random'}</span>
         {j.pending_gate && <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900">waiting for approval: {j.pending_gate}</span>}
       </div>
