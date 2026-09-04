@@ -116,3 +116,48 @@ def test_assemble_normalises_mismatched_sizes_and_fps(tmp_path):
     info = media.probe(out)
     assert (info.width, info.height, info.fps) == (64, 64, 8.0)
     assert info.frame_duration == pytest.approx(3.5, abs=0.13)
+
+
+# --- per-clip speed --------------------------------------------------------------
+
+
+def test_filtergraph_speed_chains():
+    base, _ = media.build_filtergraph([2, 2], [Cut("fade", 0.5)], width=64, height=64, fps=8)
+    same, _ = media.build_filtergraph([2, 2], [Cut("fade", 0.5)], width=64, height=64, fps=8, speeds=[1.0, 1.0])
+    assert same == base  # speed 1 keeps the historical chain byte for byte
+    fast, out = media.build_filtergraph([2, 2], [Cut("fade", 0.5)], width=64, height=64, fps=8, speeds=[0.5, 2.0])
+    assert "setpts=PTS/0.5,fps=8,tpad=stop_mode=clone:stop_duration=2,trim=duration=4.0000,format=yuv420p" in fast
+    assert "setpts=PTS/2,fps=8,tpad=stop_mode=clone:stop_duration=2,trim=duration=1.0000," in fast
+    assert "offset=3.5000[g0]" in fast and out == "[g0]"  # retimed 4.0 - 0.5
+    smooth, _ = media.build_filtergraph([2, 2], [Cut("fade", 0.5)], width=64, height=64, fps=8, speeds=[0.5, 2.0], smooth=True)
+    assert "setpts=PTS/0.5,tpad=stop_mode=clone:stop_duration=2,minterpolate=fps=8:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1,trim=duration=4.0000," in smooth
+    assert "setpts=PTS/2,fps=8,tpad" in smooth  # speed-ups never interpolate
+    assert media.total_duration([2, 2], [Cut("fade", 0.5)], [0.5, 2.0]) == pytest.approx(4.5)
+    assert media.retimed([3.0625, 2.0], [0.5, 1.0]) == [6.125, 2.0]
+
+
+def test_validate_speeds():
+    media.validate_speeds(None, 3)
+    media.validate_speeds([0.25, 4.0, 1.0], 3)
+    with pytest.raises(ValueError, match="need 2 speed"):
+        media.validate_speeds([1.0], 2)
+    with pytest.raises(ValueError, match="clip 1: speed 0.2"):
+        media.validate_speeds([0.2, 1.0], 2)
+    with pytest.raises(ValueError, match="clip 2"):
+        media.validate_speeds([1.0, 5.0], 2)
+
+
+@needs_ffmpeg
+def test_assemble_with_speeds_fast_and_smooth(tmp_path):
+    a, b = _clip(tmp_path, "a", "red"), _clip(tmp_path, "b", "green")
+    out = media.assemble([a, b], [Cut("fade", 0.5)], tmp_path / "fast.mp4", speeds=[0.5, 2.0])
+    info = media.probe(out)
+    assert info.frame_duration == pytest.approx(4.5, abs=0.13) and info.fps == 8.0
+    out = media.assemble([a, b], [Cut("fade", 0.5)], tmp_path / "smooth.mp4", speeds=[0.5, 2.0], smooth=True)
+    assert media.probe(out).frame_duration == pytest.approx(4.5, abs=0.26)
+    with pytest.raises(ValueError):
+        media.assemble([a, b], [Cut("fade", 0.5)], tmp_path / "bad.mp4", speeds=[0.1, 1.0])
+    assert not (tmp_path / "bad.mp4").exists() and not (tmp_path / "bad.mp4.part").exists()
+    # A transition longer than a sped-up clip is caught against the RETIMED length (1 s).
+    with pytest.raises(ValueError, match="shorter than both"):
+        media.assemble([a, b], [Cut("fade", 1.5)], tmp_path / "bad2.mp4", speeds=[1.0, 2.0])

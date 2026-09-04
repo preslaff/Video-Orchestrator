@@ -144,6 +144,10 @@ _XFADE_FALLBACK = (
 )
 ENCODERS = ("libx264", "h264_nvenc")
 VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv")
+MIN_SPEED, MAX_SPEED = 0.25, 4.0
+# Cloned tail fed to minterpolate (it drops ~3 source frames of lookahead); trimmed away.
+TPAD_SECONDS = 2.0
+_MINTERPOLATE = "minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"
 
 
 @lru_cache(maxsize=1)
@@ -229,8 +233,25 @@ def probe(path: str | Path) -> MediaInfo:
     )
 
 
-def total_duration(durations: list[float], cuts: list[Cut]) -> float:
-    return sum(durations) - sum(c.duration for c in cuts if c.transition != "none")
+def retimed(durations: list[float], speeds: list[float] | None = None) -> list[float]:
+    """Output length of each clip: source duration / speed (speed 1 = natural)."""
+    if not speeds:
+        return list(durations)
+    return [d / s for d, s in zip(durations, speeds)]
+
+
+def validate_speeds(speeds: list[float] | None, n: int) -> None:
+    if speeds is None:
+        return
+    if len(speeds) != n:
+        raise ValueError(f"{n} clip(s) need {n} speed(s), got {len(speeds)}")
+    for i, sp in enumerate(speeds):
+        if not (isinstance(sp, (int, float)) and MIN_SPEED <= sp <= MAX_SPEED):
+            raise ValueError(f"clip {i + 1}: speed {sp!r}× is outside {MIN_SPEED:g}–{MAX_SPEED:g}×")
+
+
+def total_duration(durations: list[float], cuts: list[Cut], speeds: list[float] | None = None) -> float:
+    return sum(retimed(durations, speeds)) - sum(c.duration for c in cuts if c.transition != "none")
 
 
 def validate_cuts(durations: list[float], cuts: list[Cut], *, fps: float) -> None:
@@ -259,21 +280,48 @@ def validate_cuts(durations: list[float], cuts: list[Cut], *, fps: float) -> Non
             raise ValueError(f"clip {i + 1}: transitions in ({t_in} s) + out ({t_out} s) exceed its {d:.2f} s")
 
 
-def _norm(width: int, height: int, fps: float) -> str:
+def _norm(width: int, height: int, fps: float, *, speed: float = 1.0, smooth: bool = False,
+          target: float | None = None) -> str:
+    """Per-input normalisation: size, (retimed) rate, format, timebase.
+
+    speed 1 keeps the historical chain byte for byte. Other speeds retime with
+    ``setpts``; slow-downs use frame duplication (``fps``) or, with ``smooth``,
+    motion-compensated interpolation. The source tail is padded with clones
+    before the interpolator (it needs lookahead) and the result is trimmed to
+    the exact retimed length so xfade offsets stay frame-exact.
+    """
     fps_s = f"{fps:g}"
-    return (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps_s},format=yuv420p,"
-            f"settb=AVTB,setpts=PTS-STARTPTS")
+    head = (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1")
+    tail = "format=yuv420p,settb=AVTB,setpts=PTS-STARTPTS"
+    if speed == 1.0:
+        return f"{head},fps={fps_s},{tail}"
+    pad = f"tpad=stop_mode=clone:stop_duration={TPAD_SECONDS:g}"
+    trim = f"trim=duration={target:.4f}" if target is not None else "trim=start=0"
+    if speed < 1.0 and smooth:
+        rate = f"{pad},{_MINTERPOLATE.format(fps=fps_s)}"
+    else:
+        rate = f"fps={fps_s},{pad}"
+    return f"{head},setpts=PTS/{speed:g},{rate},{trim},{tail}"
 
 
-def build_filtergraph(durations: list[float], cuts: list[Cut], *, width: int, height: int, fps: float) -> tuple[str, str]:
+def build_filtergraph(
+    durations: list[float], cuts: list[Cut], *, width: int, height: int, fps: float,
+    speeds: list[float] | None = None, smooth: bool = False,
+) -> tuple[str, str]:
     """``(filter_complex, output_label)`` for ``xfade`` chains joined by ``concat`` at hard cuts.
 
-    Inside a chain the xfade offset is the duration of the chain so far minus the
-    transition; groups (split at every ``none``) are concatenated.
+    ``durations`` are the *source* lengths; ``speeds`` (default 1.0 each) retime
+    them. Inside a chain the xfade offset is the retimed duration of the chain so
+    far minus the transition; groups (split at every ``none``) are concatenated.
     """
     n = len(durations)
-    parts = [f"[{i}:v]{_norm(width, height, fps)}[v{i}]" for i in range(n)]
+    speeds = list(speeds) if speeds else [1.0] * n
+    durations = retimed(durations, speeds)
+    parts = [
+        f"[{i}:v]{_norm(width, height, fps, speed=speeds[i], smooth=smooth, target=durations[i])}[v{i}]"
+        for i in range(n)
+    ]
     groups: list[list[int]] = [[0]]
     for i, c in enumerate(cuts):
         if c.transition == "none":
@@ -316,11 +364,15 @@ def assemble(
     preset: str = "medium",
     encoder: str = "libx264",
     timeout: float | None = None,
+    speeds: list[float] | None = None,
+    smooth: bool = False,
 ) -> Path:
     """Join ``clips`` into one h264 mp4 (no audio) with per-cut xfade transitions.
 
-    Size and fps default to the first clip. Written atomically (``.part`` then
-    rename). Raises ValueError for a bad spec, MediaError when ffmpeg fails.
+    ``speeds`` (one per clip, 0.25–4) retime clips; ``smooth`` renders slow-downs
+    with motion interpolation (much slower). Size and fps default to the first
+    clip. Written atomically (``.part`` then rename). Raises ValueError for a
+    bad spec, MediaError when ffmpeg fails.
     """
     paths = [Path(c).expanduser() for c in clips]
     for p in paths:
@@ -332,8 +384,14 @@ def assemble(
     fps = float(fps or infos[0].fps or config.WAN_FPS)
     width, height = size or (infos[0].width, infos[0].height)
     durations = [i.frame_duration for i in infos]
-    validate_cuts(durations, cuts, fps=fps)
-    graph, out = build_filtergraph(durations, cuts, width=width, height=height, fps=fps)
+    validate_speeds(speeds, len(paths))
+    rt = retimed(durations, speeds)
+    validate_cuts(rt, cuts, fps=fps)
+    graph, out = build_filtergraph(durations, cuts, width=width, height=height, fps=fps,
+                                   speeds=speeds, smooth=smooth)
+    if timeout is None:
+        smooth_secs = sum(t for t, sp in zip(rt, speeds or []) if smooth and sp < 1.0)
+        timeout = config.ASSEMBLE_TIMEOUT + 30 * smooth_secs
 
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -348,8 +406,7 @@ def assemble(
         cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
     cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", str(part)]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                       timeout=timeout or config.ASSEMBLE_TIMEOUT)
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=timeout)
     except subprocess.CalledProcessError as e:
         part.unlink(missing_ok=True)
         tail = (e.stderr or b"").decode(errors="replace")[-2000:].strip()
@@ -361,5 +418,7 @@ def assemble(
         part.unlink(missing_ok=True)
         raise MediaError("ffmpeg produced no output")
     os.replace(part, dest)
-    log.info("assembled %d clip(s) -> %s (%.2fs)", len(paths), dest, total_duration(durations, cuts))
+    log.info("assembled %d clip(s)%s -> %s (%.2fs)", len(paths),
+             f", {sum(1 for sp in (speeds or []) if sp != 1)} retimed{' smooth' if smooth else ''}" if speeds else "",
+             dest, total_duration(durations, cuts, speeds))
     return dest
