@@ -464,3 +464,86 @@ def test_regenerate_scene_route(client):
     assert client.post(f"/api/jobs/{job.id}/scenes/7/regenerate", json={}).status_code == 404
     assert client.post("/api/jobs/nope/scenes/0/regenerate", json={}).status_code == 404
     assert client.post(f"/api/jobs/{job.id}/scenes/0/regenerate", json={"what": "audio"}).status_code == 422
+
+
+# --- assembly routes -------------------------------------------------------------
+
+
+def _done_video_job(client, n=2, **extra):
+    from vorch.state import Scene, new_job
+
+    job = new_job(idea="asm", kind="video", profile={"video": {"width": 832, "height": 480, "fps": 16, "length": 49}}, **extra)
+    job.status = JobStatus.DONE
+    job.scenes = []
+    for i in range(n):
+        p = client.media / f"c{i}.mp4"
+        p.write_bytes(b"v")
+        job.scenes.append(Scene(index=i, keyframe_path=f"/k{i}.png", video_path=str(p)))
+    client.store.save_job(job)
+    return job
+
+
+@pytest.fixture
+def stub_media(monkeypatch):
+    from vorch import media
+    from vorch.media import MediaInfo
+
+    monkeypatch.setattr(media, "transitions", lambda: ("none", "fade", "wipeleft"))
+    monkeypatch.setattr(media, "probe", lambda p: MediaInfo(832, 480, 16.0, 3.0625, 49, "h264", False))
+
+
+def test_assembly_get_default_spec_and_transitions(client, stub_media):
+    job = _done_video_job(client)
+    st = client.get(f"/api/jobs/{job.id}/assemble").json()
+    assert st["available"] and st["active"] is False and st["transitions"][0] == "none" and "fade" in st["transitions"]
+    assert [i["scene_index"] for i in st["default_spec"]["items"]] == [0, 1]
+    assert st["default_spec"]["cuts"] == [{"transition": "fade", "duration": 0.5}]
+    assert st["clips"][0]["url"] == "/media/c0.mp4" and st["clips"][0]["duration"] == 3.062
+    assert st["profile_fps"] == 16 and st["record"] is None
+    assert client.get("/api/jobs/nope/assemble").status_code == 404
+
+
+def test_assembly_post_400_on_bad_spec(client, stub_media):
+    job = _done_video_job(client)
+    r = client.post(f"/api/jobs/{job.id}/assemble", json={"cuts": [{"transition": "swoosh"}]})
+    assert r.status_code == 400 and "unknown transition" in r.json()["error"]["message"]
+    r = client.post(f"/api/jobs/{job.id}/assemble", json={"items": [{"scene_index": 7}]})
+    assert r.status_code == 400 and "no scene 8" in r.json()["error"]["message"]
+    assert client.post(f"/api/jobs/{job.id}/assemble", json={"encoder": "magic"}).status_code == 422
+
+
+def test_assembly_post_409_not_done_and_while_active(client, stub_media):
+    job = _done_video_job(client)
+    job.status = JobStatus.NEEDS_APPROVAL
+    client.store.save_job(job)
+    assert client.post(f"/api/jobs/{job.id}/assemble").status_code == 409
+    client.app.state.manager._active.add(job.id)
+    assert client.post(f"/api/jobs/{job.id}/assemble?force=1").status_code == 409
+    client.app.state.manager._active.discard(job.id)
+
+
+def test_assembly_post_200_runs_and_records(client, stub_media, monkeypatch):
+    import time
+
+    from vorch import assembly as asm
+
+    def fake_run(job, spec, paths, *, emit=None):
+        out = client.media / "vorch" / job.id[:8] / "assembly.mp4"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"mp4")
+        return asm.AssemblyRecord(path=str(out), created_at="t", duration=5.62, n_clips=len(paths), spec=spec.to_dict(),
+                                  ok=True, size_bytes=3)
+
+    monkeypatch.setattr(asm, "run", fake_run)
+    job = _done_video_job(client)
+    r = client.post(f"/api/jobs/{job.id}/assemble", json={"cuts": [{"transition": "wipeleft", "duration": 0.3}], "fps": 16})
+    assert r.status_code == 200 and r.json()["active"] is True
+    for _ in range(100):
+        st = client.get(f"/api/jobs/{job.id}/assemble").json()
+        if st["record"] and not st["active"]:
+            break
+        time.sleep(0.02)
+    assert st["record"]["ok"] and st["record"]["duration"] == 5.62 and st["record"]["exists"] is True
+    assert st["record"]["url"] == f"/media/vorch/{job.id[:8]}/assembly.mp4"
+    assert st["record"]["spec"]["cuts"][0]["transition"] == "wipeleft"
+    assert client.get(f"/api/jobs/{job.id}").json()["assembly"]["ok"] is True

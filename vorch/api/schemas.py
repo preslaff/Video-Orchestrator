@@ -144,6 +144,7 @@ class JobPublic(BaseModel):
     profile: dict | None = None
     kind: str = "video"
     export: dict | None = None
+    assembly: dict | None = None
     status: str
     created_at: str
     updated_at: str
@@ -197,3 +198,68 @@ class ErrorBody(BaseModel):
 
 class ErrorEnvelope(BaseModel):
     error: ErrorBody
+
+
+# --- assembly ----------------------------------------------------------------
+
+
+class AssemblyItemIn(BaseModel):
+    scene_index: int
+    source: Literal["final", "raw"] = "final"
+
+
+class AssemblyCutIn(BaseModel):
+    transition: str = "fade"
+    duration: float = 0.5
+
+
+class AssemblySpecIn(BaseModel):
+    """All fields optional: omitted items = every clip in order, omitted cuts = fade 0.5s."""
+
+    items: list[AssemblyItemIn] | None = None
+    cuts: list[AssemblyCutIn] | None = None
+    fps: int | None = None
+    width: int | None = None
+    height: int | None = None
+    crf: int = 18
+    encoder: Literal["libx264", "h264_nvenc"] = "libx264"
+
+
+class AssemblyClipOut(BaseModel):
+    scene_index: int
+    source: str = "final"
+    path: str
+    url: str | None = None
+    duration: float | None = None
+    fps: float | None = None
+    width: int | None = None
+    height: int | None = None
+    has_raw: bool = False
+    error: str | None = None
+
+
+class AssemblyRecordOut(BaseModel):
+    path: str
+    url: str | None = None
+    created_at: str = ""
+    duration: float = 0.0
+    n_clips: int = 0
+    spec: dict = {}
+    ok: bool = True
+    error: str = ""
+    size_bytes: int = 0
+    fps: float | None = None
+    width: int | None = None
+    height: int | None = None
+    exists: bool = False
+    exported: bool = False
+
+
+class AssemblyStatus(BaseModel):
+    available: bool
+    active: bool
+    transitions: list[str]
+    default_spec: dict
+    clips: list[AssemblyClipOut]
+    profile_fps: int | None = None
+    record: AssemblyRecordOut | None = None

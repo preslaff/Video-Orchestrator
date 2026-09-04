@@ -625,6 +625,117 @@
         }
       }
     },
+    "/api/jobs/{job_id}/assemble": {
+      "get": {
+        "tags": [
+          "assembly"
+        ],
+        "summary": "Assembly Status",
+        "operationId": "assembly_status_api_jobs__job_id__assemble_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssemblyStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "assembly"
+        ],
+        "summary": "Run Assembly",
+        "operationId": "run_assembly_api_jobs__job_id__assemble_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "assemble even if the job is not done",
+              "default": false,
+              "title": "Force"
+            },
+            "description": "assemble even if the job is not done"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/AssemblySpecIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Spec"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssemblyStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/setup/env": {
       "get": {
         "tags": [
@@ -1466,6 +1577,384 @@
   },
   "components": {
     "schemas": {
+      "AssemblyClipOut": {
+        "properties": {
+          "scene_index": {
+            "type": "integer",
+            "title": "Scene Index"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "final"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "fps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fps"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "has_raw": {
+            "type": "boolean",
+            "title": "Has Raw",
+            "default": false
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scene_index",
+          "path"
+        ],
+        "title": "AssemblyClipOut"
+      },
+      "AssemblyCutIn": {
+        "properties": {
+          "transition": {
+            "type": "string",
+            "title": "Transition",
+            "default": "fade"
+          },
+          "duration": {
+            "type": "number",
+            "title": "Duration",
+            "default": 0.5
+          }
+        },
+        "type": "object",
+        "title": "AssemblyCutIn"
+      },
+      "AssemblyItemIn": {
+        "properties": {
+          "scene_index": {
+            "type": "integer",
+            "title": "Scene Index"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "final",
+              "raw"
+            ],
+            "title": "Source",
+            "default": "final"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scene_index"
+        ],
+        "title": "AssemblyItemIn"
+      },
+      "AssemblyRecordOut": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          },
+          "duration": {
+            "type": "number",
+            "title": "Duration",
+            "default": 0.0
+          },
+          "n_clips": {
+            "type": "integer",
+            "title": "N Clips",
+            "default": 0
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Spec",
+            "default": {}
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": true
+          },
+          "error": {
+            "type": "string",
+            "title": "Error",
+            "default": ""
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes",
+            "default": 0
+          },
+          "fps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fps"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "exists": {
+            "type": "boolean",
+            "title": "Exists",
+            "default": false
+          },
+          "exported": {
+            "type": "boolean",
+            "title": "Exported",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "title": "AssemblyRecordOut"
+      },
+      "AssemblySpecIn": {
+        "properties": {
+          "items": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AssemblyItemIn"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Items"
+          },
+          "cuts": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AssemblyCutIn"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cuts"
+          },
+          "fps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fps"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "crf": {
+            "type": "integer",
+            "title": "Crf",
+            "default": 18
+          },
+          "encoder": {
+            "type": "string",
+            "enum": [
+              "libx264",
+              "h264_nvenc"
+            ],
+            "title": "Encoder",
+            "default": "libx264"
+          }
+        },
+        "type": "object",
+        "title": "AssemblySpecIn",
+        "description": "All fields optional: omitted items = every clip in order, omitted cuts = fade 0.5s."
+      },
+      "AssemblyStatus": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "transitions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Transitions"
+          },
+          "default_spec": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Default Spec"
+          },
+          "clips": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblyClipOut"
+            },
+            "type": "array",
+            "title": "Clips"
+          },
+          "profile_fps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Fps"
+          },
+          "record": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AssemblyRecordOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "active",
+          "transitions",
+          "default_spec",
+          "clips"
+        ],
+        "title": "AssemblyStatus"
+      },
       "AssetOut": {
         "properties": {
           "id": {
@@ -1766,6 +2255,18 @@
               }
             ],
             "title": "Export"
+          },
+          "assembly": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assembly"
           },
           "status": {
             "type": "string",
