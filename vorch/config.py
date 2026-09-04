@@ -48,6 +48,13 @@ REACTOR_RESTORE_MODEL = "GFPGANv1.4.pth"
 
 # --- Behaviour ---------------------------------------------------------------
 RUN_TIMEOUT = int(os.environ.get("VORCH_RUN_TIMEOUT", "600"))  # seconds to wait per workflow
+# ComfyUI client: per-HTTP-call timeout, /history polling interval, and how long
+# connection errors are tolerated while a *remote* backend's container cold-starts.
+COMFY_REQUEST_TIMEOUT = float(os.environ.get("VORCH_COMFY_REQUEST_TIMEOUT", "30"))
+COMFY_POLL_INTERVAL = float(os.environ.get("VORCH_COMFY_POLL_INTERVAL", "2"))
+COMFY_COLD_START_GRACE = float(os.environ.get("VORCH_COMFY_COLD_START_GRACE", "240"))
+# Remote ComfyUI backends (e.g. Modal): name -> url/auth/timeouts. Missing file = local only.
+BACKENDS_FILE = Path(os.environ.get("VORCH_BACKENDS_FILE", "~/vorch/backends.yaml")).expanduser()
 ASSEMBLE_TIMEOUT = int(os.environ.get("VORCH_ASSEMBLE_TIMEOUT", "600"))  # ffmpeg clip assembly
 
 # Seeds. 0 is our "pick a random one" sentinel — NOT sent to ComfyUI verbatim
