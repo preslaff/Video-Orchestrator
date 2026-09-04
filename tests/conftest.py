@@ -17,6 +17,7 @@ import pytest
 from psycopg import sql
 
 from vorch import backends, config, db, registry
+from vorch.clients import comfy
 from vorch.state import Store
 
 TEST_DSN = os.environ.get("VORCH_TEST_DATABASE_URL", "postgresql:///vorch_test")
@@ -85,6 +86,8 @@ def _isolated_user_workflows(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "BACKENDS_FILE", tmp_path / "_isolated_backends.yaml")
     registry.reset_cache()
     backends.reset_cache()
+    comfy.reset_cache()
     yield
     registry.reset_cache()
     backends.reset_cache()
+    comfy.reset_cache()
