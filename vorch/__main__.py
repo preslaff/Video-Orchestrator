@@ -505,8 +505,12 @@ def _cmd_assemble(args) -> int:
             for v in assembly.versions_of(job):
                 cuts = ", ".join(c["transition"] if c["transition"] == "none" else f"{c['transition']} {c['duration']:g}s"
                                  for c in (v.get("spec") or {}).get("cuts", []))
+                spec = v.get("spec") or {}
+                speeds = ", ".join(f"s{i + 1:02d} {it.get('speed', 1):g}x" for i, it in enumerate(spec.get("items", []))
+                                   if it.get("target_seconds") is not None)
+                extra = (f"  speed: {speeds}" if speeds else "") + ("  smooth" if spec.get("smooth") else "")
                 mark = "*" if int(v.get("version", 0)) == cur else " "
-                print(f"{mark} v{v['version']:<3} {v.get('duration')}s  {v.get('n_clips')} clip(s)  {cuts or 'single clip'}  {v.get('path')}")
+                print(f"{mark} v{v['version']:<3} {v.get('duration')}s  {v.get('n_clips')} clip(s)  {cuts or 'single clip'}{extra}  {v.get('path')}")
             if not assembly.versions_of(job):
                 print("no assemblies yet")
             return 0
