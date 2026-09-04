@@ -25,7 +25,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import config, pipeline, profiles, provenance, storyboard
-from .clients import comfy
 from .genparams import DEFAULT, GenParams
 from .steps.postprocess import run_chain
 from .state import Decision, Job, JobStatus, Scene, SceneStatus, Store, Variant, new_job
@@ -409,7 +408,7 @@ class Orchestrator:
         """Stills jobs: impose the master face on every variant (when enabled) and
         mark the scenes complete. Post-steps for stills hook in here."""
         do_swap = self.face_swap and bool(job.master_face)
-        master_name = comfy.upload_image(job.master_face) if do_swap else None
+        master_name = pipeline.upload_master(job.master_face, self.params) if do_swap else None
         self._event(job, "phase", phase="stills", total=len(job.scenes))
         for scene in job.scenes:
             if scene.status is SceneStatus.COMPLETE:
@@ -484,7 +483,7 @@ class Orchestrator:
 
     def _phase_videos(self, job: Job) -> None:
         do_swap = self.face_swap and bool(job.master_face)
-        master_name = comfy.upload_image(job.master_face) if do_swap else None
+        master_name = pipeline.upload_master(job.master_face, self.params) if do_swap else None
         self._event(job, "phase", phase="videos", total=len(job.scenes),
                     length=self.params.length, fps=self.params.fps)
         for scene in job.scenes:

@@ -18,7 +18,7 @@ def capture(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "COMFY_OUTPUT", out_dir)
     n = {"i": 0}
 
-    def fake_run(wf, timeout=None):
+    def fake_run(wf, timeout=None, **kw):
         posted.append(wf)
         n["i"] += 1
         name = f"e{n['i']}.png"
@@ -26,7 +26,7 @@ def capture(monkeypatch, tmp_path):
         return [{"filename": name, "subfolder": "", "node_id": "22"}]
 
     monkeypatch.setattr(comfy, "run", fake_run)
-    monkeypatch.setattr(comfy, "upload_image", lambda p: f"staged:{p}")
+    monkeypatch.setattr(comfy, "upload_image", lambda p, **kw: f"staged:{p}")
     monkeypatch.setattr(pipeline, "fit_image", lambda src, w, h, dest=None: f"{src}@{w}x{h}")
     monkeypatch.setattr(vram, "reclaim", lambda *a, **k: None)
     return posted

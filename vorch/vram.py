@@ -17,6 +17,7 @@ import subprocess
 import time
 
 from . import config
+from .backends import ComfyBackend
 from .clients import comfy
 
 log = logging.getLogger("vorch.vram")
@@ -63,18 +64,26 @@ def log_state(label: str = "") -> None:
         log.info("vram%s: used=%d free=%d total=%d MB", tag, s["used"], s["free"], s["total"])
 
 
-def reclaim(min_mb: int | None = None, *, settle: float = config.VRAM_SETTLE_SEC) -> int | None:
+def reclaim(
+    min_mb: int | None = None, *, settle: float = config.VRAM_SETTLE_SEC,
+    backend: ComfyBackend | None = None,
+) -> int | None:
     """Reclaim ComfyUI VRAM, wait for it to settle, and return free MB after.
 
     ``min_mb=None`` (the default) frees unconditionally — use at a phase boundary
     (e.g. Klein/ReActor -> Wan). Pass ``min_mb`` to free only when free VRAM has
     dropped below that guard (a cheaper safety check before a heavy step).
+    A **remote** ``backend`` has its own GPU: nothing to do here (no /free, no
+    settle, no nvidia-smi) and the result is None.
     """
+    if backend is not None and backend.remote:
+        log.debug("vram: %s is remote; no local reclaim", backend.name)
+        return None
     before = gpu_free_mb()
     if min_mb is not None and before is not None and before >= min_mb:
         log.debug("vram: %d MB free >= %d guard; no reclaim", before, min_mb)
         return before
-    comfy.free()
+    comfy.free(backend=backend)
     if settle:
         time.sleep(settle)
     after = gpu_free_mb()

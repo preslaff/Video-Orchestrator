@@ -181,7 +181,7 @@ def test_run_step_selects_declared_output_node(monkeypatch, tmp_path):
         {"filename": "preview_00001_.png", "subfolder": "", "node_id": "11"},
         {"filename": "Wan22_00001_.mp4", "subfolder": "video", "node_id": "13"},
     ]
-    monkeypatch.setattr(comfy, "run", lambda wf, timeout=None: descriptors)
+    monkeypatch.setattr(comfy, "run", lambda wf, timeout=None, **kw: descriptors)
     monkeypatch.setattr(config, "COMFY_OUTPUT", tmp_path)
     paths = steps.run_step("animate", start_image="x.png", positive="m", length=49, seed=1)
     assert paths == [tmp_path / "video" / "Wan22_00001_.mp4"]

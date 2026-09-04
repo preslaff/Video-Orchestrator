@@ -73,7 +73,7 @@ def wired(monkeypatch, tmp_path, make_store):
     monkeypatch.setattr(pipeline, "keyframe", fake_kf)
     monkeypatch.setattr(pipeline, "swap_master_onto", fake_swap)
     monkeypatch.setattr(pipeline, "animate_frame", fake_animate)
-    monkeypatch.setattr(comfy, "upload_image", lambda p: str(p))
+    monkeypatch.setattr(comfy, "upload_image", lambda p, **kw: str(p))
 
     master = tmp_path / "master.jpg"
     master.write_bytes(b"\xff\xd8\xff")

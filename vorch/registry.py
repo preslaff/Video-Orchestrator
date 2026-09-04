@@ -6,6 +6,7 @@ id) plus a sidecar ``*.yaml`` that names the fields the orchestrator may touch::
     name: animate
     kind: animate                      # keyframe|animate|faceswap|edit|postprocess|custom
     template: wan22_i2v_gguf.json      # relative to the YAML's directory
+    backend: local                     # which ComfyUI runs it (vorch.backends; default local)
     inputs: {start_image: image}       # params that are files staged via /upload/image
     outputs: {type: video, nodes: ["13"]}
     params:
@@ -36,6 +37,7 @@ from typing import Any
 
 import yaml
 
+from . import backends as backends_mod
 from . import config
 
 log = logging.getLogger("vorch.registry")
@@ -186,6 +188,7 @@ class WorkflowSpec:
     tags: list[str] = field(default_factory=list)
     description: str = ""
     timeout: int | None = None
+    backend: str = backends_mod.LOCAL                       # ComfyUI that runs it (backends.yaml)
     source: Path | None = None
     builtin: bool = True
     requires_nodes: set[str] = field(default_factory=set)      # all class_types in the template
@@ -208,6 +211,7 @@ class WorkflowSpec:
             "description": self.description,
             "tags": list(self.tags),
             "timeout": self.timeout,
+            "backend": self.backend,
             "builtin": self.builtin,
             "source": str(self.source) if self.source else None,
             "inputs": dict(self.inputs),
@@ -291,6 +295,9 @@ def parse_spec(doc: dict, *, source: Path | None = None, builtin: bool = True) -
             raise RegistryError(f"{name}: input {k!r} is not a declared param")
         if v not in INPUT_TYPES:
             raise RegistryError(f"{name}: input {k!r} has unknown type {v!r}")
+    backend = str(doc.get("backend") or backends_mod.LOCAL)
+    if not backends_mod.NAME_RE.match(backend):
+        raise RegistryError(f"{name}: invalid backend name {backend!r}")
     outputs = doc.get("outputs") or {}
     out_type = outputs.get("type")
     if out_type is not None and out_type not in OUTPUT_TYPES:
@@ -306,6 +313,7 @@ def parse_spec(doc: dict, *, source: Path | None = None, builtin: bool = True) -
         tags=[str(t) for t in (doc.get("tags") or [])],
         description=str(doc.get("description") or ""),
         timeout=int(doc["timeout"]) if doc.get("timeout") is not None else None,
+        backend=backend,
         source=source,
         builtin=builtin,
     )
@@ -441,9 +449,18 @@ class Registry:
                 wf[t.node]["inputs"][t.field] = value
         return wf
 
-    def validate(self, spec: WorkflowSpec, *, object_info: dict | None = None) -> list[str]:
-        """Problems for one spec: template, contract, and (online) node classes + model files."""
+    def validate(
+        self, spec: WorkflowSpec, *, object_info: dict | None = None,
+        backends: dict[str, Any] | None = None,
+    ) -> list[str]:
+        """Problems for one spec: template, contract, its backend being configured
+        (when ``backends`` is given), and (online) node classes + model files —
+        ``object_info`` must be **that backend's**."""
         problems = check_template(spec) + _contract_problems(spec)
+        if backends is not None and spec.backend not in backends:
+            problems.append(
+                f"backend {spec.backend!r} is not configured (add it to {config.BACKENDS_FILE})"
+            )
         if object_info is not None and not problems:
             for cls in sorted(spec.requires_nodes):
                 if cls not in object_info:

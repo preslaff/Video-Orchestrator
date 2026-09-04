@@ -52,8 +52,8 @@ def test_run_step_writes_sidecar(monkeypatch, tmp_path):
     out.write_bytes(b"vid")
 
     monkeypatch.setattr(steps.registry.Registry, "apply", lambda self, step, wf=None, **p: {"wf": True})
-    monkeypatch.setattr(comfy, "run", lambda wf, timeout=None: [{"filename": out.name}])
-    monkeypatch.setattr(comfy, "output_path", lambda d: out)
+    monkeypatch.setattr(comfy, "run", lambda wf, timeout=None, **kw: [{"filename": out.name}])
+    monkeypatch.setattr(comfy, "output_path", lambda d, backend=None: out)
 
     paths = steps.run_step("animate", positive="slow pan", seed=99, length=49)
     assert paths == [out]

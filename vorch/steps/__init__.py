@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .. import provenance, registry
+from .. import backends, provenance, registry
 from ..clients import comfy
 
 log = logging.getLogger("vorch.steps")
@@ -20,18 +20,22 @@ def run_step(step: str, *, timeout: int | None = None, **params) -> list[Path]:
 
     Params the workflow does not declare are dropped (with a warning) when the
     kind contract lists them as optional, so a leaner user-installed workflow
-    still runs. Writes a provenance manifest beside each output.
+    still runs. The run goes to the workflow's declared backend; a remote
+    backend's outputs are downloaded into the local output layout. Writes a
+    provenance manifest (incl. ``backend``) beside each output.
     """
     reg = registry.load_registry()
     spec = reg.get(step)
     wf = reg.apply(step, strict=False, **params)
     if timeout is None:
         timeout = spec.timeout
-    descriptors = _select_outputs(spec, comfy.run(wf, timeout=timeout))
+    backend = backends.for_spec(spec)
+    descriptors = _select_outputs(spec, comfy.run(wf, timeout=timeout, backend=backend))
     if not descriptors:
-        raise comfy.ComfyError(f"Step {step!r} produced no output files")
-    paths = [comfy.output_path(d) for d in descriptors]
-    extra = {"workflow": spec.name, "kind": spec.kind, "template": spec.template.name}
+        raise comfy.ComfyError(f"Step {step!r} produced no output files on {backend.name}")
+    paths = [comfy.output_path(d, backend) for d in descriptors]
+    extra = {"workflow": spec.name, "kind": spec.kind, "template": spec.template.name,
+             "backend": backend.name, "gpu": backend.gpu}
     for p in paths:
         provenance.write_manifest(p, step, params, extra)
     return paths

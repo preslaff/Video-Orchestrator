@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, formats, vram
+from . import backends, config, formats, vram
 from .clients import comfy
 from .evaluator import Verdict, evaluate_image
 from .genparams import DEFAULT, GenParams
@@ -65,12 +65,14 @@ def stage_references(
 ) -> list[str]:
     """Fit each reference to the keyframe size (cover + crop) and stage it in ComfyUI input/.
 
-    Returns the staged names in order. ``cache`` (path -> name) lets a job upload
-    each reference once across scenes.
+    Returns the staged names in order. ``cache`` ((backend, path) -> name) lets
+    a job upload each reference once across scenes. References go to the edit
+    workflow's backend (the workflow that reads them).
     """
+    backend = backends.for_workflow(params.edit_workflow)
     names: list[str] = []
     for raw in paths:
-        key = str(raw)
+        key = (backend.name, str(raw))
         if cache is not None and key in cache:
             names.append(cache[key])
             continue
@@ -78,19 +80,25 @@ def stage_references(
         if not src.is_file():
             raise FileNotFoundError(f"reference image not found: {src}")
         staged = fit_image(src, *params.keyframe_size) if fit else src
-        name = comfy.upload_image(staged)
+        name = comfy.upload_image(staged, backend=backend)
         if cache is not None:
             cache[key] = name
         names.append(name)
     return names
 
 
+def upload_master(master_face: str | Path, params: GenParams = DEFAULT) -> str:
+    """Stage the master face on the face-swap workflow's backend; return its name."""
+    return comfy.upload_image(master_face, backend=backends.for_workflow(params.faceswap_workflow))
+
+
 def swap_master_onto(
     frame_path: Path, master_name: str, *, label: str = "faceswap", params: GenParams = DEFAULT,
     filename_prefix: str | None = None,
 ) -> Path:
-    """Stage ``frame_path`` and impose the (already-staged) master face onto it."""
-    frame_name = comfy.upload_image(frame_path)
+    """Stage ``frame_path`` (on the face-swap workflow's backend) and impose the
+    already-staged master face onto it."""
+    frame_name = comfy.upload_image(frame_path, backend=backends.for_workflow(params.faceswap_workflow))
     log.info("%s: imposing master face", label)
     swapped = faceswap(frame_name, master_name, filename_prefix=filename_prefix, **params.faceswap_kwargs())
     log.info("%s: %s", label, swapped)
@@ -109,12 +117,15 @@ def animate_frame(
     """Stage ``frame_path``, reclaim VRAM, and animate it into a clip.
 
     Wan (dual-model) is the heaviest step, so reclaim ComfyUI VRAM at this phase
-    boundary and confirm headroom before dispatching (NOTES.md §4). Size, length
-    and fps come from ``params`` (the job's profile).
+    boundary and confirm headroom before dispatching (NOTES.md §4) — unless the
+    animate workflow runs on a remote backend, which has its own GPU. Size,
+    length and fps come from ``params`` (the job's profile).
     """
-    frame_name = comfy.upload_image(frame_path)
-    vram.reclaim()  # Klein/ReActor -> Wan boundary: free everything first
-    vram.log_state("before Wan")
+    backend = backends.for_workflow(params.animate_workflow)
+    frame_name = comfy.upload_image(frame_path, backend=backend)
+    vram.reclaim(backend=backend)  # Klein/ReActor -> Wan boundary: free everything first
+    if backend.is_local:
+        vram.log_state("before Wan")
     kw = params.animate_kwargs()
     if negative is not None:
         kw["negative"] = negative
@@ -252,7 +263,7 @@ def run_scene(
         master_face = Path(master_face).expanduser()
         if not master_face.is_file():
             raise FileNotFoundError(f"master face not found: {master_face}")
-        master_name = comfy.upload_image(master_face)
+        master_name = upload_master(master_face, params)
 
     if evaluate:
         kf_path, verdict = generate_keyframe_evaluated(
@@ -306,7 +317,7 @@ def run_sequence(
         master_face = Path(master_face).expanduser()
         if not master_face.is_file():
             raise FileNotFoundError(f"master face not found: {master_face}")
-        master_name = comfy.upload_image(master_face)
+        master_name = upload_master(master_face, params)
     relock = relock_identity and face_swap
     ref_cache: dict = {}
 

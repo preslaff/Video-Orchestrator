@@ -22,7 +22,7 @@ def capture(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "COMFY_OUTPUT", out_dir)
     counter = {"n": 0}
 
-    def fake_run(wf, timeout=None):
+    def fake_run(wf, timeout=None, **kw):
         posted.append({"wf": wf, "timeout": timeout})
         counter["n"] += 1
         is_video = any(n.get("class_type") == "SaveVideo" for n in wf.values())
@@ -32,7 +32,7 @@ def capture(monkeypatch, tmp_path):
         return [{"filename": name, "subfolder": sub, "node_id": "13" if is_video else "9"}]
 
     monkeypatch.setattr(comfy, "run", fake_run)
-    monkeypatch.setattr(comfy, "upload_image", lambda p: str(p))
+    monkeypatch.setattr(comfy, "upload_image", lambda p, **kw: str(p))
     monkeypatch.setattr(vram, "reclaim", lambda *a, **k: None)
     monkeypatch.setattr(vram, "log_state", lambda *a, **k: None)
     return posted

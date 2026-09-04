@@ -5,7 +5,8 @@ still) the orchestrator feeds the file through them: stage the current file
 into ComfyUI ``input/``, fill ``fps``/``seed`` from the run when the workflow
 declares them, run, and hand the output to the next step. Steps whose input
 type does not match the media are skipped (an interpolator on a still), and
-VRAM is reclaimed whenever the workflow changes (different models).
+VRAM is reclaimed whenever the workflow changes (different models). Each step
+stages its input on, and runs on, its own workflow's backend.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import logging
 from collections.abc import Sequence
 from pathlib import Path
 
-from .. import registry, vram
+from .. import backends, registry, vram
 from ..clients import comfy
 from . import run_step
 
@@ -49,10 +50,12 @@ def run_chain(
         if not inputs:
             log.info("post %s: skipped (no %s input)", step.workflow, "video" if is_video else "image")
             continue
+        backend = backends.for_spec(spec)
         if step.workflow != prev_workflow:
-            vram.reclaim()
-            vram.log_state(f"before {step.workflow}")
-        name = comfy.upload_image(current)  # /upload/image stages any file
+            vram.reclaim(backend=backend)
+            if backend.is_local:
+                vram.log_state(f"before {step.workflow}")
+        name = comfy.upload_image(current, backend=backend)  # /upload/image stages any file
         values: dict = {inputs[0]: name}
         auto = {"fps": fps, "seed": seed}
         for key in AUTO_FILL:

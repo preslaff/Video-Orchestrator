@@ -45,7 +45,7 @@ def recorder(monkeypatch):
         calls["last_frame"].append(str(video_path))
         return f"{video_path}_last.png"
 
-    def fake_upload(path):
+    def fake_upload(path, **kw):
         calls["upload"].append(str(path))
         return str(path)
 
