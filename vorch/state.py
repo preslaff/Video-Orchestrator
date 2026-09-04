@@ -127,6 +127,7 @@ class Job:
     profile: dict | None = None            # frozen OutputProfile snapshot at submit
     kind: str = "video"                      # video | stills (copy of profile.kind)
     export: dict | None = None             # ExportRecord (handoff folder) once exported
+    assembly: dict | None = None           # AssemblyRecord (clips joined with transitions)
     status: JobStatus = JobStatus.PENDING
     scenes: list[Scene] = field(default_factory=list)
     created_at: str = ""
@@ -298,6 +299,7 @@ def job_to_dict(job: Job) -> dict:
         "profile": job.profile,
         "kind": job.kind,
         "export": job.export,
+        "assembly": job.assembly,
         "status": job.status.value,
         "scenes": [_scene_to_dict(s) for s in job.scenes],
         "created_at": job.created_at,
@@ -324,6 +326,7 @@ def job_from_dict(d: dict) -> Job:
         profile=d.get("profile"),
         kind=d.get("kind", "video"),
         export=d.get("export"),
+        assembly=d.get("assembly"),
         status=JobStatus(d.get("status", "pending")),
         scenes=[_scene_from_dict(s) for s in d.get("scenes", [])],
         created_at=d.get("created_at", ""),

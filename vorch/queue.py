@@ -16,6 +16,7 @@ import logging
 from collections import deque
 from collections.abc import Callable
 
+from . import assembly as assembly_mod
 from . import export as export_mod
 from . import projects as projects_mod
 from .orchestrator import Orchestrator
@@ -276,16 +277,64 @@ class JobManager:
         fresh = self.store.load_job(job.id)
         if fresh is None or fresh.status is not JobStatus.DONE or fresh.export:
             return
-        project = projects_mod.load(self.store, fresh.project_id) if fresh.project_id else None
+        await self._reexport(loop, fresh)
+        job.export = fresh.export
+
+    async def _reexport(self, loop, job: Job) -> None:
+        """(Re)build the handoff folder for ``job`` in the executor; warnings only."""
+        project = projects_mod.load(self.store, job.project_id) if job.project_id else None
         try:
-            rec = await loop.run_in_executor(None, export_mod.export_job, self.store, fresh, project)
+            rec = await loop.run_in_executor(None, export_mod.export_job, self.store, job, project)
         except Exception as e:  # noqa: BLE001 - export must never fail a finished job
             log.warning("job %s: export failed: %s", job.id, e)
             return
-        fresh.export = rec.to_dict()
-        self.store.save_job(fresh)
-        job.export = fresh.export
+        job.export = rec.to_dict()
+        self.store.save_job(job)
         self.broker.publish(job.id, {"type": "export", "path": rec.path, "files": rec.files, "ok": rec.ok})
+
+    # -- assembly (ffmpeg, no GPU) --
+
+    async def assemble(self, job_id: str, spec: dict | None = None, *, force: bool = False) -> Job:
+        """Join selected clips into one video as a background task.
+
+        Refused while a segment is active or (unless ``force``) when the job is not
+        done. The job's status does not change; the result (or the error) lands in
+        ``job.assembly``. Raises KeyError / RuntimeError / ValueError (bad spec).
+        """
+        if job_id in self._active:
+            raise RuntimeError(f"job {job_id} is running; wait for the current segment")
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job.status is not JobStatus.DONE and not force:
+            raise RuntimeError(f"job is {job.status.value}, not done (use force to assemble anyway)")
+        resolved, paths = assembly_mod.resolve(job, spec)
+        self._active.add(job.id)
+        self._spawn(self._assemble_task(job, resolved, paths))
+        return job
+
+    async def _assemble_task(self, job: Job, spec, paths) -> None:
+        loop = asyncio.get_running_loop()
+        emit = lambda ev, jid=job.id: loop.call_soon_threadsafe(self.broker.publish, jid, ev)  # noqa: E731
+        try:
+            rec = await loop.run_in_executor(None, lambda: assembly_mod.run(job, spec, paths, emit=emit))
+            fresh = self.store.load_job(job.id) or job
+            fresh.assembly = rec.to_dict()
+            self.store.save_job(fresh)
+            self.broker.publish(job.id, {"type": "assembly", "path": rec.path, "duration": rec.duration,
+                                         "n_clips": rec.n_clips, "ok": rec.ok, "error": rec.error})
+            if rec.ok and (fresh.export or fresh.status is JobStatus.DONE):
+                await self._reexport(loop, fresh)
+        except Exception as e:  # noqa: BLE001 - never crash the loop; record the failure
+            log.exception("job %s: assembly task failed", job.id)
+            fresh = self.store.load_job(job.id) or job
+            fresh.assembly = {"path": str(assembly_mod.output_path(job)), "created_at": "", "ok": False,
+                              "error": str(e), "spec": spec.to_dict(), "n_clips": len(paths)}
+            self.store.save_job(fresh)
+            self.broker.publish(job.id, {"type": "error", "error": f"assembly: {e}"})
+        finally:
+            self._active.discard(job.id)
+            self.broker.publish(job.id, {"job_id": job.id, "type": "end"})
 
     def _spawn(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)

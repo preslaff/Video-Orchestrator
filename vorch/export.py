@@ -10,6 +10,7 @@ Layout::
         s01_swapped.png            (when the master face was imposed)
         s01_clip.mp4               (video jobs; the final post-processed clip)
         s01_clip_raw.mp4           (only when post-steps changed the clip)
+        assembly.mp4               (optional: selected clips joined with xfade transitions)
         provenance/<file>.json     copied sidecar manifests
 
 Idempotent: existing identical files are skipped; hardlinks when possible,
@@ -90,6 +91,9 @@ def plan(job: Job) -> list[tuple[str, str | None]]:
             items.append((f"s{n:02d}_clip{_ext(s.video_path, '.mp4')}", s.video_path))
             if s.raw_video_path and s.raw_video_path != s.video_path:
                 items.append((f"s{n:02d}_clip_raw{_ext(s.raw_video_path, '.mp4')}", s.raw_video_path))
+    asm = job.assembly or {}
+    if asm.get("ok") and asm.get("path"):
+        items.append(("assembly.mp4", asm["path"]))
     return items
 
 
@@ -168,6 +172,7 @@ def build_manifest(job: Job, project: Any | None, store: Store | None, files: di
         "created_at": job.created_at,
         "exported_at": _now(),
         "scenes": scenes,
+        "assembly": job.assembly if (job.assembly or {}).get("ok") else None,
         "decisions": len(store.decisions(job.id)) if store is not None else None,
     }
 
@@ -187,7 +192,16 @@ def build_readme(job: Job, manifest: dict, files: list[str]) -> str:
             f"clips: {video.get('width')}x{video.get('height')} @ {video.get('fps')} fps, "
             f"{video.get('length')} frames (~{secs}s each), h264 mp4",
         ]
-    lines += [f"stills: {kf.get('width')}x{kf.get('height')} png", ""]
+    lines += [f"stills: {kf.get('width')}x{kf.get('height')} png"]
+    asm = manifest.get("assembly") or {}
+    if asm.get("ok"):
+        cuts = ", ".join(
+            c["transition"] if c["transition"] == "none" else f"{c['transition']} {c['duration']:g}s"
+            for c in (asm.get("spec") or {}).get("cuts", [])
+        )
+        lines.append(f"assembly.mp4: {asm.get('n_clips')} clip(s), {asm.get('duration')}s"
+                     + (f", cuts: {cuts}" if cuts else "") + " (xfade transitions, re-assemble from the job page)")
+    lines.append("")
     lines.append("scene order:")
     for s in manifest["scenes"]:
         lines.append(f"  {s['index'] + 1:02d}. {s['description'] or s['keyframe_prompt'][:70]}")
@@ -197,7 +211,8 @@ def build_readme(job: Job, manifest: dict, files: list[str]) -> str:
         "Shotcut: File > Open (or drag the folder) — clips are named in scene order;",
         f"set the project Video Mode to match ({video.get('width', kf.get('width'))}x"
         f"{video.get('height', kf.get('height'))}, {video.get('fps', 25)} fps) before adding to the timeline.",
-        "Audio, titles, transitions and colour are done in the NLE; regenerate a scene in vorch if needed.",
+        "Audio, titles and colour are done in the NLE; assembly.mp4 (when present) is a ready cut with",
+        "the chosen transitions. Regenerate a scene or re-assemble from the job page if needed.",
         "manifest.json / provenance/ hold the prompts + seeds that made every file.",
     ]
     return "\n".join(lines) + "\n"

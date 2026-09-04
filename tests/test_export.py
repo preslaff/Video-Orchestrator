@@ -124,3 +124,29 @@ def test_status_and_stale(tmp_path):
     assert st["exported"] and st["path"] == rec.path and st["stale"] is False and st["exists"]
     job.updated_at = "2999-01-01T00:00:00+00:00"
     assert export.status(job)["stale"] is True
+
+
+def test_assembly_listed_in_plan_manifest_and_readme(store, tmp_path):
+    job = _video_job(tmp_path)
+    asm = _media(tmp_path, "vorch/abc/assembly.mp4")
+    provenance.write_manifest(asm, "assemble", {"spec": {"cuts": []}}, {"kind": "assembly"})
+    job.assembly = {"path": asm, "ok": True, "n_clips": 2, "duration": 5.62,
+                    "spec": {"cuts": [{"transition": "fade", "duration": 0.5}, {"transition": "none", "duration": 0.5}]}}
+    rec = export.export_job(store, job, None)
+    assert "assembly.mp4" in rec.files
+    dest = next((tmp_path / "export" / "_unassigned").glob("*"))
+    assert (dest / "assembly.mp4").read_bytes() == b"vorch/abc/assembly.mp4"
+    assert (dest / "provenance" / "assembly.mp4.json").is_file()
+    m = json.loads((dest / "manifest.json").read_text())
+    assert m["assembly"]["n_clips"] == 2
+    readme = (dest / "README.txt").read_text()
+    assert "assembly.mp4: 2 clip(s), 5.62s, cuts: fade 0.5s, none" in readme and "ready cut" in readme
+
+
+def test_failed_assembly_not_exported(tmp_path):
+    job = _video_job(tmp_path)
+    job.assembly = {"path": str(tmp_path / "nope.mp4"), "ok": False, "error": "boom"}
+    rec = export.export_job(None, job, None)
+    assert "assembly.mp4" not in rec.files and not any(m.startswith("assembly") for m in rec.missing)
+    dest = next((tmp_path / "export" / "_unassigned").glob("*"))
+    assert json.loads((dest / "manifest.json").read_text())["assembly"] is None

@@ -393,3 +393,107 @@ def test_segment_is_marked_running_before_the_worker_starts(tmp_path, make_store
     assert ret is JobStatus.RUNNING and persisted is JobStatus.RUNNING
     assert (ev_type, ev_status) == ("status", "running")
     assert final is JobStatus.DONE
+
+
+# --- assembly task --------------------------------------------------------------------
+
+
+def _done_job_with_clips(store, tmp_path, n=2):
+    from vorch.state import Scene, new_job
+
+    job = new_job(idea="asm", kind="video")
+    job.status = JobStatus.DONE
+    scenes = []
+    for i in range(n):
+        p = tmp_path / f"c{i}.mp4"
+        p.write_bytes(b"v")
+        scenes.append(Scene(index=i, keyframe_path=f"/k{i}.png", video_path=str(p)))
+    job.scenes = scenes
+    store.save_job(job)
+    return job
+
+
+@pytest.fixture
+def fake_assembly(monkeypatch):
+    from vorch import assembly as asm
+    from vorch.media import Cut
+
+    def resolve(job, spec):
+        s = asm.AssemblySpec(items=[asm.AssemblyItem(x.index) for x in job.scenes], cuts=[Cut() for _ in job.scenes[1:]])
+        return s, [x.video_path for x in job.scenes]
+
+    calls = {"run": 0}
+
+    def run(job, spec, paths, *, emit=None):
+        calls["run"] += 1
+        if emit:
+            emit({"job_id": job.id, "type": "step", "step": "assemble", "n_clips": len(paths), "seconds": 5.6})
+        ok = calls.get("fail") is None
+        return asm.AssemblyRecord(path="/out/assembly.mp4", created_at="t", duration=5.6, n_clips=len(paths),
+                                  spec=spec.to_dict(), ok=ok, error="" if ok else "ffmpeg died")
+
+    monkeypatch.setattr(asm, "resolve", resolve)
+    monkeypatch.setattr(asm, "run", run)
+    return calls
+
+
+def test_assemble_task_emits_step_assembly_end_and_records(tmp_path, make_store, fake_assembly, monkeypatch):
+    from vorch import export as export_mod
+
+    monkeypatch.setattr(export_mod, "export_job", lambda store, job, project: export_mod.ExportRecord("/exp", "t", files=["assembly.mp4"]))
+
+    async def go():
+        store = make_store()
+        job = _done_job_with_clips(store, tmp_path)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+        q = mgr.events(job.id)
+        await mgr.assemble(job.id, {"cuts": [{"transition": "fade", "duration": 0.5}]})
+        assert mgr.is_active(job.id) and store.load_job(job.id).status is JobStatus.DONE  # status untouched
+        events = await _drain(q)
+        return [e["type"] for e in events], store.load_job(job.id)
+
+    types, job = asyncio.run(go())
+    assert types == ["step", "assembly", "export", "end"]
+    assert job.assembly["ok"] and job.assembly["duration"] == 5.6 and job.status is JobStatus.DONE
+    assert job.export["files"] == ["assembly.mp4"]
+
+
+def test_assemble_refused_while_active_and_when_not_done(tmp_path, make_store, fake_assembly):
+    async def go():
+        store = make_store()
+        job = _done_job_with_clips(store, tmp_path)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j), auto_export=False)
+        mgr._active.add(job.id)
+        with pytest.raises(RuntimeError, match="running"):
+            await mgr.assemble(job.id)
+        mgr._active.discard(job.id)
+        job.status = JobStatus.NEEDS_APPROVAL
+        store.save_job(job)
+        with pytest.raises(RuntimeError, match="not done"):
+            await mgr.assemble(job.id)
+        await mgr.assemble(job.id, force=True)  # allowed
+        await asyncio.gather(*list(mgr._tasks))
+        with pytest.raises(KeyError):
+            await mgr.assemble("nope")
+        return store.load_job(job.id)
+
+    job = asyncio.run(go())
+    assert job.assembly["ok"] and job.status is JobStatus.NEEDS_APPROVAL
+
+
+def test_assemble_failure_recorded_without_failed_status(tmp_path, make_store, fake_assembly):
+    fake_assembly["fail"] = True
+
+    async def go():
+        store = make_store()
+        job = _done_job_with_clips(store, tmp_path)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j), auto_export=False)
+        q = mgr.events(job.id)
+        await mgr.assemble(job.id)
+        events = await _drain(q)
+        return events, store.load_job(job.id), mgr.is_active(job.id)
+
+    events, job, active = asyncio.run(go())
+    assert [e["type"] for e in events] == ["step", "assembly", "end"]
+    assert events[1]["ok"] is False and "ffmpeg died" in events[1]["error"]
+    assert job.status is JobStatus.DONE and job.assembly["ok"] is False and not active

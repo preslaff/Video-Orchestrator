@@ -284,8 +284,10 @@ def test_job_setup_fields_and_variants_roundtrip(store):
         Variant(path="/v2.png", seed=12, swapped_path="/v2s.png", post_paths=["/v2p.png"]),
     ], raw_video_path=None, post_paths=[])]
     job.export = {"path": "/exp", "ok": True}
+    job.assembly = {"path": "/exp/assembly.mp4", "ok": True, "n_clips": 2}
     store.save_job(job)
     got = store.load_job(job.id)
+    assert got.assembly["n_clips"] == 2
     assert got.profile_id == "social_9x16" and got.profile["kind"] == "stills" and got.kind == "stills"
     assert got.export == {"path": "/exp", "ok": True}
     v = got.scenes[0].variants
