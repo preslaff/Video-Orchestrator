@@ -491,6 +491,48 @@ def _cmd_export(args) -> int:
         store.close()
 
 
+def _cmd_assemble(args) -> int:
+    """Join a finished job's clips into one video with transitions (ffmpeg xfade)."""
+    from . import assembly, export, projects
+
+    store = _open_store()
+    try:
+        job = store.load_job(args.job_id)
+        if job is None:
+            raise ValueError(f"no job with id {args.job_id}")
+        if job.status is not JobStatus.DONE and not args.force:
+            raise ValueError(f"job is {job.status.value}, not done (use --force)")
+        if args.spec:
+            with open(args.spec, encoding="utf-8") as f:
+                spec_dict = json.load(f)
+        else:
+            n = len(assembly.clips_of(job))
+            spec_dict = {"cuts": [{"transition": args.transition, "duration": args.duration} for _ in range(max(0, n - 1))]}
+        if args.encoder:
+            spec_dict["encoder"] = args.encoder
+        if args.fps:
+            spec_dict["fps"] = args.fps
+        spec, paths = assembly.resolve(job, spec_dict)
+        print(f"assembling {len(paths)} clip(s): " + ", ".join(
+            c.transition if c.transition == "none" else f"{c.transition} {c.duration:g}s" for c in spec.cuts))
+        rec = assembly.run(job, spec, paths)
+        job.assembly = rec.to_dict()
+        store.save_job(job)
+        if not rec.ok:
+            print(f"error: {rec.error}", file=sys.stderr)
+            return 1
+        print(f"{rec.path}  ({rec.duration}s, {rec.width}x{rec.height} @ {rec.fps:g} fps)")
+        if job.export or job.status is JobStatus.DONE:
+            project = projects.load(store, job.project_id) if job.project_id else None
+            er = export.export_job(store, job, project)
+            job.export = er.to_dict()
+            store.save_job(job)
+            print(f"exported -> {er.path}")
+        return 0
+    finally:
+        store.close()
+
+
 def _cmd_registry(args) -> int:
     import yaml
 
@@ -727,6 +769,16 @@ def build_parser() -> argparse.ArgumentParser:
     psh = prs.add_parser("show")
     psh.add_argument("slug")
     pr.set_defaults(func=_cmd_project)
+
+    asm = sub.add_parser("assemble", help="join a job's clips into one video with xfade transitions")
+    asm.add_argument("job_id")
+    asm.add_argument("--transition", default="fade", help="transition for every cut (or 'none'); see `ffmpeg -h filter=xfade`")
+    asm.add_argument("--duration", type=float, default=0.5, help="transition seconds")
+    asm.add_argument("--spec", default=None, help="JSON file with {items, cuts, fps, ...} (overrides --transition/--duration)")
+    asm.add_argument("--fps", type=int, default=None)
+    asm.add_argument("--encoder", default=None, choices=["libx264", "h264_nvenc"])
+    asm.add_argument("--force", action="store_true", help="assemble even if the job is not done")
+    asm.set_defaults(func=_cmd_assemble)
 
     ex = sub.add_parser("export", help="write the Shotcut handoff folder for a finished job")
     ex.add_argument("job_id")

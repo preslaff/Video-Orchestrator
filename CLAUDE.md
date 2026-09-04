@@ -24,7 +24,8 @@ the build order actually followed. Key facts a new session must not re-derive:
 - **Product scope (Sept 2026):** a multipurpose *raw-material* generator for cinematic and
   marketing use — video 16:9 / 9:16 / 1:1, stills-only jobs with variants, longer clips,
   reference-locked edits, post-process chains. Final editing happens in Shotcut, out of scope;
-  the app ends with a per-job **export folder** (`vorch/export.py`).
+  the app ends with a per-job **export folder** (`vorch/export.py`), optionally with `assembly.mp4`
+  (selected clips joined with ffmpeg `xfade` transitions: `vorch/assembly.py`, `media.assemble`).
 - **Setup phase:** output **profiles** (`vorch/profiles.py`, built-ins in `profiles_builtin/`),
   **projects** with assets (`projects.py`), **environment check** (`envcheck.py`, blocks submit on
   fail), **submission** resolution (`submission.py`). Jobs snapshot their profile (`Job.profile`).

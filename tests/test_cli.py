@@ -151,3 +151,39 @@ def test_profiles_projects_and_export_commands(cli_store, tmp_path, capsys):
     job.status = JobStatus.DONE
     cli_store.save_job(job)
     assert cli.main(["export", job.id]) == 0
+
+
+def test_assemble_command(cli_store, tmp_path, monkeypatch, capsys):
+    from vorch import assembly, export
+    from vorch.state import JobStatus, Scene, new_job
+
+    job = new_job(idea="cut", kind="video")
+    job.status = JobStatus.DONE
+    clips = []
+    for i in range(2):
+        p = tmp_path / f"c{i}.mp4"
+        p.write_bytes(b"v")
+        clips.append(p)
+    job.scenes = [Scene(index=i, keyframe_path=f"/k{i}.png", video_path=str(c)) for i, c in enumerate(clips)]
+    cli_store.save_job(job)
+    seen = {}
+
+    def fake_resolve(j, spec_dict):
+        seen["spec"] = spec_dict
+        return assembly.AssemblySpec(items=[assembly.AssemblyItem(0), assembly.AssemblyItem(1)],
+                                     cuts=[assembly.Cut(spec_dict["cuts"][0]["transition"], spec_dict["cuts"][0]["duration"])]), clips
+
+    monkeypatch.setattr(assembly, "resolve", fake_resolve)
+    monkeypatch.setattr(assembly, "run", lambda j, s, p: assembly.AssemblyRecord(
+        path="/out/assembly.mp4", created_at="t", duration=5.6, n_clips=2, spec=s.to_dict(), fps=16, width=832, height=480))
+    monkeypatch.setattr(export, "export_job", lambda store, j, project: export.ExportRecord("/exp", "t", files=["assembly.mp4"]))
+    assert cli.main(["assemble", job.id, "--transition", "wipeleft", "--duration", "0.3"]) == 0
+    out = capsys.readouterr().out
+    assert "wipeleft 0.3s" in out and "/out/assembly.mp4" in out and "exported -> /exp" in out
+    assert seen["spec"]["cuts"] == [{"transition": "wipeleft", "duration": 0.3}]
+    saved = cli_store.load_job(job.id)
+    assert saved.assembly["ok"] and saved.export["files"] == ["assembly.mp4"]
+
+    job.status = JobStatus.NEEDS_APPROVAL
+    cli_store.save_job(job)
+    assert cli.main(["assemble", job.id]) == 1  # not done, no --force

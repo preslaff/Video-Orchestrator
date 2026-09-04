@@ -212,6 +212,22 @@ change (a pytest snapshot test fails until you do). Frontend tests: `cd frontend
 If proxied SSE ever buffers, set `NEXT_PUBLIC_API_ORIGIN=http://127.0.0.1:8000` to have the
 browser talk to FastAPI directly (CORS is enabled for the Next origin).
 
+### Assembling clips (first cut with transitions)
+
+On the job page the **Assemble** panel joins selected clips of a job into one video: tick and
+order the scenes, choose a transition for every cut (any ffmpeg `xfade` transition — fades,
+wipes, slides, shapes — or a hard cut) with its length, optionally change the fps, and press
+Assemble. ffmpeg renders it once (h264, same size as the clips, no audio) to
+`assembly.mp4` next to the clips, served in the player and hardlinked into the export folder
+(listed in `manifest.json` / `README.txt`). The same from the CLI:
+
+```bash
+python -m vorch assemble <job_id> --transition fade --duration 0.5      # every cut
+python -m vorch assemble <job_id> --spec cuts.json                         # per-cut spec
+```
+
+Audio, titles and colour still happen in Shotcut; the assembly is a ready first cut.
+
 ### Reproducibility
 
 Every generated image/video gets a sidecar manifest next to it — `<output>.json` — recording the
