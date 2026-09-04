@@ -47,6 +47,15 @@ Then run a one-scene job on the imported profile (UI or `vorch run`). Expect: th
 face swap locally, then `comfy modal-l40s: ready after …s` in the log, the clip downloaded as
 `COMFY_OUTPUT/vorch/<job8>/s00_clip_00001_.modal-l40s.mp4`, and `backend`/`gpu` in its manifest.
 
+## Verified (2026-09-05)
+
+Workspace `preslaff`: `modal deploy` 125 s (image build) then 5 s; `wan22_fp8` download ≈ 6 min on
+Modal's side; `vorch setup check --profile <cloud profile>` probed `comfy:modal-l40s` and validated
+`animate_wan22_fp8` online; job `86c7ff2e` (social 9:16, 81 frames) rendered the Wan phase on the
+L40S in 6 min 9 s from face swap to downloaded `s00_clip_00001_.modal-l40s.mp4` (≈ $0.20 of GPU
+time + the 10-minute idle tail). Gotcha fixed on the way: a Volume cannot be mounted over
+ComfyUI's stock `models/` folder, so the image removes it.
+
 ## Cost hygiene
 
 - `scaledown_window` is 10 minutes: a container costs its GPU rate for 10 idle minutes after the

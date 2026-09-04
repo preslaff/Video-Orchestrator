@@ -1,6 +1,6 @@
 # Modal cloud backend — design
 
-> **Status (2026-09-05):** designed; Phase A (the code seam) is implemented and verified; Phase B's files are in `modal/` awaiting deployment on Georgi's account; Phases C–E
+> **Status (2026-09-05):** designed; Phase A (the code seam) implemented and verified; Phase B deployed on workspace `preslaff` (app `vorch-comfy`, Volume with the `wan22_fp8` set) and verified with a real job on the L40S; the `wan22_fp16` set and the H100 path are not yet exercised; Phases C–E
 > are planned. Facts about Modal and the models were researched in September 2026 and carry
 > dates; re-verify prices and model availability before Phase B.
 
@@ -250,11 +250,12 @@ free and simpler.
 ## 8. Cost model
 
 Assumptions: Modal prices of Sept 2026, cold start ≈ 90 s billed, `scaledown_window` 600 s, and
-**per-clip timings that must be benchmarked** (no clean public A100/H100 numbers for Wan fp16).
+**per-clip timings that must be benchmarked** (no clean public A100/H100 numbers for Wan fp16). First measured point: Wan 2.2 fp8 on the L40S renders 81 vertical 480p frames in about 6 minutes end to end, roughly twice as fast as the local GGUF Q5 on the RTX 5070 Ti (13 min for 81 frames).
 
 | Scenario | GPU time | compute | cold start | idle tail | total |
 |---|---|---|---|---|---|
 | 5 scenes, Wan 2.2 fp16 480p × 49, A100-80 ($2.50/h), 3 min per clip | 15 min | $0.63 | $0.06 | $0.42 | **≈ $1.10** |
+| **measured 2026-09-05:** 1 scene, Wan 2.2 fp8 480×832 × 81 frames, L40S ($1.95/h) — 6 min 9 s from face swap to downloaded clip (upload, readiness, generation, download) | 6.2 min | $0.20 | — | $0.33 | **≈ $0.53** |
 | 5 scenes, Wan fp16 720p × 81, H100 ($3.95/h), 6 min per clip | 30 min | $1.98 | $0.10 | $0.66 | **≈ $2.75** |
 | 10 Klein 4B keyframes on L4 ($0.80/h), ~6 s each | 1 min | $0.01 | $0.02 | $0.13 | ≈ $0.16, dominated by the idle tail: keep Klein local |
 | one regenerated scene on H100 | 6 min | $0.40 | $0.10 | $0.66 | ≈ $1.15 (the tail dominates; use `scaledown_window=120` when regenerating a lot) |
@@ -294,7 +295,7 @@ Media transfer is 5–20 MB per clip; Modal does not itemise egress today (verif
 | E — UI polish | backend badges, grouped env page, profile chips with cost hints, "on modal (H100)" in the step line | 2 |
 | **Total** | | **21.5 (18.5 without D)** |
 
-## 11. Live checklist (Phase B)
+## 11. Live checklist (Phase B) — items 1–5 done on 2026-09-05 with the fp8/L40S path (job 86c7ff2e); 6–8 pending
 
 1. `pip install modal && modal setup`; create a proxy token; `modal secret create huggingface HF_TOKEN=…`.
 2. `modal run modal/download_models.py --only wan22` (watch the Volume size), then `modal deploy modal/vorch_comfy.py`.
