@@ -67,8 +67,32 @@ describe('AssemblePanel', () => {
     await user.click(screen.getAllByLabelText('move down')[0])              // scene 1 below scene 2
     await user.click(screen.getByTestId('assemble'))
     await waitFor(() => expect(posts).toHaveLength(1))
-    expect(posts[0]).toMatchObject({ items: [{ scene_index: 1, source: 'final' }, { scene_index: 0, source: 'final' }], cuts: [{ transition: 'none' }], encoder: 'libx264', fps: null })
+    expect(posts[0]).toMatchObject({ items: [{ scene_index: 1, source: 'final', target_seconds: null }, { scene_index: 0, source: 'final', target_seconds: null }], cuts: [{ transition: 'none' }], encoder: 'libx264', fps: null, smooth: false })
     await waitFor(() => expect(onStarted).toHaveBeenCalled())
     expect(within(screen.getByTestId('assemble')).getByText('Assembling…')).toBeInTheDocument()
+  })
+})
+
+
+describe('AssemblePanel speed', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('a target duration retimes the clip, updates the total and the chip, and is posted with the smooth flag', async () => {
+    const posts = mockFetch()
+    renderPanel()
+    const user = userEvent.setup()
+    await screen.findByText('Scene 1')
+    const field = screen.getByLabelText('scene 1 seconds')
+    await user.clear(field)
+    await user.type(field, '6.124')
+    expect(screen.getByTestId('speed-0')).toHaveTextContent('0.5×')
+    expect(screen.getByTestId('total')).toHaveTextContent('11.24s')   // 6.12 (clamped/rounded) + 2×3.062 − 2×0.5
+    await user.click(screen.getByLabelText('smooth slow motion'))
+    await user.click(screen.getByTestId('assemble'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toMatchObject({ items: [{ scene_index: 0, target_seconds: 6.12 }, { scene_index: 1, target_seconds: null }, { scene_index: 2, target_seconds: null }], smooth: true })
+    await user.click(screen.getByText('natural'))
+    expect(screen.getByTestId('total')).toHaveTextContent('8.19s')
+    expect(screen.getByTestId('speed-0')).toHaveTextContent('1×')
   })
 })

@@ -515,6 +515,11 @@ export interface components {
              * @enum {string}
              */
             source: "final" | "raw";
+            /**
+             * Target Seconds
+             * @description play the clip in N seconds (0.25x–4x of its length); omit for natural speed
+             */
+            target_seconds?: number | null;
         };
         /** AssemblyRecordOut */
         AssemblyRecordOut: {
@@ -607,6 +612,11 @@ export interface components {
              * @enum {string}
              */
             encoder: "libx264" | "h264_nvenc";
+            /**
+             * Smooth
+             * @default false
+             */
+            smooth: boolean;
         };
         /** AssemblyStatus */
         AssemblyStatus: {

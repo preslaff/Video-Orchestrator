@@ -68,3 +68,31 @@ export function fmtBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
+
+// --- per-clip speed (target duration) -------------------------------------------
+
+export const MIN_SPEED = 0.25
+export const MAX_SPEED = 4
+
+export const round2 = (x: number) => Math.round(x * 100) / 100
+
+/** speed factor for playing `source` seconds in `target` seconds (null = natural). */
+export function speedFor(source: number, target: number | null | undefined): number {
+  if (!target || !source) return 1
+  return source / target
+}
+
+/** Keep a target within 0.25x–4x of the source length (rounded to 0.01 s, clamped after rounding). */
+export function clampTarget(source: number, target: number): number {
+  const lo = round2(source / MAX_SPEED)
+  const hi = round2(source * MAX_SPEED)
+  return Math.min(hi, Math.max(lo, round2(target)))
+}
+
+export function retimed(durations: number[], targets: (number | null | undefined)[]): number[] {
+  return durations.map((d, i) => targets[i] ?? d)
+}
+
+export function fmtSpeed(speed: number): string {
+  return `${round2(speed)}×`
+}

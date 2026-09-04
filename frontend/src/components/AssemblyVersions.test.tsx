@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AssemblyVersions, describeCuts } from './AssemblyVersions'
+import { AssemblyVersions, describeCuts, describeSpeeds } from './AssemblyVersions'
 import type { AssemblyVersion } from '@/api/types'
 
 const versions: AssemblyVersion[] = [
@@ -16,6 +16,8 @@ describe('AssemblyVersions', () => {
   it('describes cuts', () => {
     expect(describeCuts({ cuts: [{ transition: 'fade', duration: 0.5 }, { transition: 'none', duration: 1 }] })).toBe('fade 0.5s · cut')
     expect(describeCuts({ cuts: [] })).toBe('single clip')
+    expect(describeSpeeds({ items: [{ scene_index: 0, target_seconds: 6.125, speed: 0.5 }, { scene_index: 1 }], smooth: true })).toBe('s01 0.5× · smooth')
+    expect(describeSpeeds({ items: [{ scene_index: 1 }] })).toBe('')
   })
 
   it('lists newest first, marks the current one, selects and deletes through the API', async () => {

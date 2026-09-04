@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampCut, defaultCuts, groupTransitions, maxTransition, totalDuration } from './assembly'
+import { clampCut, clampTarget, defaultCuts, fmtSpeed, groupTransitions, maxTransition, retimed, speedFor, totalDuration } from './assembly'
 
 describe('assembly helpers', () => {
   it('totalDuration ignores hard cuts', () => {
@@ -20,6 +20,15 @@ describe('assembly helpers', () => {
     const g = groupTransitions(['none', 'fade', 'wipeleft', 'zzz', 'aaa'])
     expect(g.map((x) => x.label)).toEqual(['cut', 'fades', 'wipes', 'other'])
     expect(g[3].names).toEqual(['zzz', 'aaa'])
+  })
+  it('speed helpers', () => {
+    expect(speedFor(3.0625, 6.125)).toBe(0.5)
+    expect(speedFor(3.0625, null)).toBe(1)
+    expect(clampTarget(3.0625, 20)).toBe(12.25)
+    expect(clampTarget(3.0625, 0.1)).toBe(0.77)
+    expect(clampTarget(3.0625, 4.123456)).toBe(4.12)
+    expect(retimed([2, 2], [4, null])).toEqual([4, 2])
+    expect(fmtSpeed(1 / 3)).toBe('0.33×')
   })
   it('defaultCuts', () => {
     expect(defaultCuts(3)).toHaveLength(2)

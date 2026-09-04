@@ -55,7 +55,7 @@ export function describeStep(e: JobEvent): string {
     case 'post':
       return `Post-processing ${scene}${variant}: ${Array.isArray(e.chain) ? e.chain.join(' → ') : ''}`
     case 'assemble':
-      return `Assembling ${String(e.n_clips)} clip(s) into one video (~${String(e.seconds)}s @ ${String(e.fps)} fps) with ffmpeg`
+      return `Assembling ${String(e.n_clips)} clip(s) into one video (~${String(e.seconds)}s @ ${String(e.fps)} fps) with ffmpeg${Number(e.retimed) > 0 ? ` · ${String(e.retimed)} retimed` : ''}${e.smooth ? ' · smooth slow motion (slower)' : ''}`
     default:
       return String(e.step ?? 'working')
   }

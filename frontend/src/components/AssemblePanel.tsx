@@ -9,35 +9,35 @@ import { useAssembly, useRunAssembly } from '@/hooks/useJobs'
 import { MediaThumb } from '@/components/MediaThumb'
 import { AssemblyVersions } from '@/components/AssemblyVersions'
 import { Button, Empty, ErrorBox, fmtTime } from '@/components/ui'
-import { clampCut, defaultCuts, fmtBytes, fmtSeconds, groupTransitions, maxTransition, totalDuration, type CutDraft } from '@/lib/assembly'
+import { clampCut, clampTarget, defaultCuts, fmtBytes, fmtSeconds, fmtSpeed, groupTransitions, maxTransition, retimed, round2, speedFor, totalDuration, MAX_SPEED, type CutDraft } from '@/lib/assembly'
 
-type Row = { scene_index: number; selected: boolean; source: 'final' | 'raw' }
+type Row = { scene_index: number; selected: boolean; source: 'final' | 'raw'; target: string | null }  // raw field text; null = natural
 
 function clipSize(job: JobPublic): [number, number] | null {
   const v = (job.profile as { video?: { width?: number; height?: number } } | null)?.video
   return v?.width && v.height ? [v.width, v.height] : null
 }
 
-type Draft = { rows: Row[]; cuts: CutDraft[]; fps: number | '' }
+type Draft = { rows: Row[]; cuts: CutDraft[]; fps: number | ''; smooth: boolean }
 
 /** Initial editor state from the last assembly spec (if any) or all clips in order. */
 function seedDraft(status: AssemblyStatusT | undefined): Draft {
-  if (!status) return { rows: [], cuts: [], fps: '' }
+  if (!status) return { rows: [], cuts: [], fps: '', smooth: false }
   const clips = status.clips
   const known = new Set(clips.map((c) => c.scene_index))
-  const spec = status.record?.spec as { items?: { scene_index: number; source: 'final' | 'raw' }[]; cuts?: CutDraft[]; fps?: number | null } | undefined
+  const spec = status.record?.spec as { items?: { scene_index: number; source: 'final' | 'raw'; target_seconds?: number | null }[]; cuts?: CutDraft[]; fps?: number | null; smooth?: boolean } | undefined
   const rows: Row[] = []
   const used = new Set<number>()
   for (const it of spec?.items ?? []) {
     if (known.has(it.scene_index) && !used.has(it.scene_index)) {
-      rows.push({ scene_index: it.scene_index, selected: true, source: it.source ?? 'final' })
+      rows.push({ scene_index: it.scene_index, selected: true, source: it.source ?? 'final', target: it.target_seconds != null ? String(it.target_seconds) : null })
       used.add(it.scene_index)
     }
   }
-  for (const c of clips) if (!used.has(c.scene_index)) rows.push({ scene_index: c.scene_index, selected: !spec, source: 'final' })
+  for (const c of clips) if (!used.has(c.scene_index)) rows.push({ scene_index: c.scene_index, selected: !spec, source: 'final', target: null })
   const n = rows.filter((r) => r.selected).length
   const cuts = defaultCuts(n).map((d, i) => spec?.cuts?.[i] ?? d)
-  return { rows, cuts, fps: spec?.fps ?? '' }
+  return { rows, cuts, fps: spec?.fps ?? '', smooth: !!spec?.smooth }
 }
 
 export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; events: JobEvent[]; onStarted?: () => void }) {
@@ -51,15 +51,24 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
   const rows = seeded.rows
   const cuts = seeded.cuts          // cut i sits between selected clip i and i+1 (position-keyed, survives reordering)
   const fps = seeded.fps
+  const smooth = seeded.smooth
   const update = (patch: Partial<Draft>) => setDraft({ ...seeded, ...patch })
   const [encoder, setEncoder] = useState<'libx264' | 'h264_nvenc'>('libx264')
 
   const selected = rows.filter((r) => r.selected)
   const targetFps = fps || status.data?.profile_fps || clips[0]?.fps || 16
-  const durations = selected.map((r) => byIndex.get(r.scene_index)?.duration ?? 0)
+  const sources = selected.map((r) => byIndex.get(r.scene_index)?.duration ?? 0)
+  const parseTarget = (raw: string | null): number | null => {
+    if (raw == null) return null
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
+  const targets = selected.map((r, i) => { const t = parseTarget(r.target); return t == null ? null : clampTarget(sources[i], t) })
+  const durations = retimed(sources, targets)   // retimed lengths drive cuts, limits and the total
   const cutList: CutDraft[] = selected.slice(1).map((_, i) =>
     clampCut(cuts[i] ?? defaultCuts(2)[0], durations[i], durations[i + 1], targetFps))
   const total = totalDuration(durations, cutList)
+  const anySlow = targets.some((t, i) => t != null && speedFor(sources[i], t) < 1)
   const groups = groupTransitions(status.data?.transitions ?? ['none', 'fade'])
   const active = !!status.data?.active
   const busy = active || run.isPending || job.status === 'running'
@@ -82,16 +91,18 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
     update({ cuts: next })
   }
   const setFps = (v: number | '') => update({ fps: v })
+  const setTarget = (i: number, target: string | null) => update({ rows: rows.map((x, k) => (k === i ? { ...x, target } : x)) })
 
   const submit = () => {
     const spec: AssemblySpecIn = {
-      items: selected.map((r) => ({ scene_index: r.scene_index, source: r.source })),
+      items: selected.map((r, i) => ({ scene_index: r.scene_index, source: r.source, target_seconds: targets[i] })),
       cuts: cutList,
       fps: fps || null,
       width: null,
       height: null,
       crf: 18,
       encoder,
+      smooth,
     }
     run.mutate({ spec, force: job.status !== 'done' }, { onSuccess: () => onStarted?.() })
   }
@@ -139,6 +150,24 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
                 </div>
                 <div className="flex-1 text-sm">
                   <div className="font-medium">Scene {r.scene_index + 1} <span className="text-xs font-normal text-neutral-500">{fmtSeconds(clip?.duration)} · {clip?.width}×{clip?.height} @ {clip?.fps} fps</span></div>
+                  {r.selected && clip?.duration != null && (() => {
+                    const src = clip.duration!
+                    const parsed = parseTarget(r.target)
+                    const eff = parsed == null ? src : clampTarget(src, parsed)
+                    const spd = speedFor(src, parsed == null ? null : eff)
+                    return (
+                      <label className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-600">
+                        play in
+                        <input type="number" aria-label={`scene ${r.scene_index + 1} seconds`} min={round2(src / MAX_SPEED)} max={round2(src * MAX_SPEED)} step={0.1}
+                          value={r.target ?? String(round2(src))} onChange={(e) => setTarget(i, e.target.value)}
+                          onBlur={() => { if (r.target != null && parseTarget(r.target) == null) setTarget(i, null) }}
+                          className="w-20 rounded border border-neutral-300 px-2 py-0.5 text-sm" />
+                        s
+                        <span data-testid={`speed-${r.scene_index}`} className={`rounded px-1.5 py-0.5 ${spd === 1 ? 'bg-neutral-100' : spd < 1 ? 'bg-blue-100 text-blue-900' : 'bg-amber-100 text-amber-900'}`}>{fmtSpeed(spd)}</span>
+                        {r.target != null && <button type="button" onClick={() => setTarget(i, null)} className="text-neutral-500 underline">natural</button>}
+                      </label>
+                    )
+                  })()}
                   {clip?.has_raw && (
                     <label className="text-xs text-neutral-600">source
                       <select value={r.source} onChange={(e) => setSource(i, e.target.value as 'final' | 'raw')} className="ml-1 rounded border border-neutral-300 bg-white px-1 py-0.5">
@@ -166,6 +195,10 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
             <option value="">clips ({status.data.profile_fps ?? clips[0]?.fps ?? '?'})</option>
             {[24, 25, 30].map((f) => <option key={f} value={f}>{f}</option>)}
           </select>
+        </label>
+        <label className="flex items-center gap-1 text-neutral-600" title="motion-compensated interpolation (ffmpeg minterpolate) for clips slower than 1×; several seconds per clip">
+          <input type="checkbox" aria-label="smooth slow motion" checked={smooth} onChange={(e) => update({ smooth: e.target.checked })} />
+          smooth slow motion{anySlow && !smooth ? <span className="text-xs text-amber-700">(off: frames are repeated)</span> : <span className="text-xs text-neutral-400">(slower render)</span>}
         </label>
         <label className="flex items-center gap-1 text-neutral-600">encoder
           <select value={encoder} onChange={(e) => setEncoder(e.target.value as 'libx264' | 'h264_nvenc')} className="rounded border border-neutral-300 bg-white px-2 py-1">
