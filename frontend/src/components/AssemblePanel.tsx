@@ -7,6 +7,7 @@ import { describeStep, type JobEvent } from '@/api/events'
 import type { AssemblyClip, AssemblySpecIn, AssemblyStatus as AssemblyStatusT, JobPublic } from '@/api/types'
 import { useAssembly, useRunAssembly } from '@/hooks/useJobs'
 import { MediaThumb } from '@/components/MediaThumb'
+import { AssemblyVersions } from '@/components/AssemblyVersions'
 import { Button, Empty, ErrorBox, fmtTime } from '@/components/ui'
 import { clampCut, defaultCuts, fmtBytes, fmtSeconds, groupTransitions, maxTransition, totalDuration, type CutDraft } from '@/lib/assembly'
 
@@ -190,7 +191,7 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
           <div className="grid gap-3 md:grid-cols-[minmax(0,28rem)_1fr]">
             <MediaThumb key={rec.url ?? rec.created_at} url={rec.url} video width={rec.width ?? size?.[0]} height={rec.height ?? size?.[1]} />
             <div className="space-y-1 text-sm">
-              <div className="font-medium">assembly.mp4 {rec.exported ? <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-800">exported</span> : <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs">not exported yet</span>}</div>
+              <div className="font-medium">assembly.mp4 <span className="font-mono text-xs text-neutral-500">v{rec.version}</span> {rec.exported ? <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-800">exported</span> : <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs">not exported yet</span>}</div>
               <div className="text-neutral-600">{rec.n_clips} clip(s) · {fmtSeconds(rec.duration)} · {rec.width}×{rec.height} @ {rec.fps} fps · {fmtBytes(rec.size_bytes)}</div>
               <div className="text-xs text-neutral-500">{fmtTime(rec.created_at)}</div>
               <code className="block break-all rounded bg-neutral-100 px-2 py-1 text-xs">{rec.path}</code>
@@ -200,6 +201,10 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
         ) : (
           <ErrorBox message={`Last assembly failed: ${rec.error}`} />
         )
+      )}
+
+      {!active && (status.data.versions?.length ?? 0) > 0 && (
+        <AssemblyVersions jobId={job.id} versions={status.data.versions} size={size} disabled={busy} />
       )}
     </div>
   )

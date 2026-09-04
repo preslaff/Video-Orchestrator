@@ -198,6 +198,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/assemble/versions/{version}/select": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select Version */
+        post: operations["select_version_api_jobs__job_id__assemble_versions__version__select_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/assemble/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Version */
+        delete: operations["delete_version_api_jobs__job_id__assemble_versions__version__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/setup/env": {
         parameters: {
             query?: never;
@@ -541,6 +575,11 @@ export interface components {
              * @default false
              */
             exported: boolean;
+            /**
+             * Version
+             * @default 0
+             */
+            version: number;
         };
         /**
          * AssemblySpecIn
@@ -586,6 +625,63 @@ export interface components {
             /** Profile Fps */
             profile_fps?: number | null;
             record?: components["schemas"]["AssemblyRecordOut"] | null;
+            /**
+             * Versions
+             * @default []
+             */
+            versions: components["schemas"]["AssemblyVersionOut"][];
+        };
+        /** AssemblyVersionOut */
+        AssemblyVersionOut: {
+            /** Version */
+            version: number;
+            /** Path */
+            path: string;
+            /** Url */
+            url?: string | null;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /**
+             * Duration
+             * @default 0
+             */
+            duration: number;
+            /**
+             * N Clips
+             * @default 0
+             */
+            n_clips: number;
+            /**
+             * Spec
+             * @default {}
+             */
+            spec: {
+                [key: string]: unknown;
+            };
+            /**
+             * Size Bytes
+             * @default 0
+             */
+            size_bytes: number;
+            /** Fps */
+            fps?: number | null;
+            /** Width */
+            width?: number | null;
+            /** Height */
+            height?: number | null;
+            /**
+             * Exists
+             * @default false
+             */
+            exists: boolean;
+            /**
+             * Current
+             * @default false
+             */
+            current: boolean;
         };
         /** AssetOut */
         AssetOut: {
@@ -1843,6 +1939,70 @@ export interface operations {
                 "application/json": components["schemas"]["AssemblySpecIn"] | null;
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssemblyStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_version_api_jobs__job_id__assemble_versions__version__select_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssemblyStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_version_api_jobs__job_id__assemble_versions__version__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

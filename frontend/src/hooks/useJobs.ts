@@ -185,3 +185,39 @@ export function useRunAssembly(id: string) {
     },
   })
 }
+
+export function useSelectAssemblyVersion(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (version: number) => {
+      const { data, error } = await api.POST('/api/jobs/{job_id}/assemble/versions/{version}/select', {
+        params: { path: { job_id: id, version } },
+      })
+      if (error) throw error
+      return data as AssemblyStatus
+    },
+    onSuccess: (data) => {
+      qc.setQueryData(keys.assembly(id), data)
+      void qc.invalidateQueries({ queryKey: keys.job(id) })
+      void qc.invalidateQueries({ queryKey: keys.exportStatus(id) })
+    },
+  })
+}
+
+export function useDeleteAssemblyVersion(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (version: number) => {
+      const { data, error } = await api.DELETE('/api/jobs/{job_id}/assemble/versions/{version}', {
+        params: { path: { job_id: id, version } },
+      })
+      if (error) throw error
+      return data as AssemblyStatus
+    },
+    onSuccess: (data) => {
+      qc.setQueryData(keys.assembly(id), data)
+      void qc.invalidateQueries({ queryKey: keys.job(id) })
+      void qc.invalidateQueries({ queryKey: keys.exportStatus(id) })
+    },
+  })
+}
