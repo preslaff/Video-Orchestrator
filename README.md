@@ -48,6 +48,7 @@ auditable.
 | Stills jobs | Storyboard → N keyframe variants per scene, best chosen by verdict, face swap per variant, no video phase. |
 | Post-processing | Any registered `postprocess` workflow (interpolation, upscale, …) runs after each clip or still, in order. |
 | Pluggable workflows | Register a newly exported ComfyUI graph with a YAML sidecar, no Python: `vorch registry inspect` → `add` → `validate --online`. |
+| Cloud backends (optional) | Any workflow can declare `backend: modal-h100`; its runs go to a remote ComfyUI (e.g. on Modal) and the outputs are downloaded into the local layout. Design, cost model and phases in [`docs/modal-backend.md`](docs/modal-backend.md). |
 | Deliverables | A per-job **export folder** for Shotcut (numbered stills/clips, manifest, storyboard, README). **Assemble** selected clips into one video with per-cut ffmpeg `xfade` transitions, per-clip speed, kept as versions. |
 | Live control | Next.js UI with live progress (phase stepper, current step, elapsed time), server-sent events with replay, decision log, provenance (seed + prompt per file). |
 | Operations | Environment check (database, ComfyUI, Gemma + vision probe, ffmpeg, GPU headroom, every workflow's node classes and model files), VRAM guard between heavy models, PostgreSQL state, CLI for everything. |
@@ -369,6 +370,8 @@ Environment variables (see `vorch/config.py`):
 | `VORCH_COMFY_ROOT` | `~/comfy/ComfyUI` | its `input/` and `output/` dirs |
 | `VORCH_DATABASE_URL` / `VORCH_TEST_DATABASE_URL` | `postgresql:///vorch` / `…/vorch_test` | state |
 | `VORCH_WORKFLOW_DIR` / `VORCH_USER_WORKFLOW_DIR` | `workflows/` / `~/vorch/workflows` | registry |
+| `VORCH_BACKENDS_FILE` | `~/vorch/backends.yaml` | remote ComfyUI backends (e.g. Modal); see `docs/modal-backend.md` |
+| `VORCH_COMFY_REQUEST_TIMEOUT` / `VORCH_COMFY_POLL_INTERVAL` / `VORCH_COMFY_COLD_START_GRACE` | 30 s / 2 s / 240 s | ComfyUI client: per-call timeout, history polling, cold-start tolerance for remote backends |
 | `VORCH_PROJECTS_ROOT` / `VORCH_EXPORT_ROOT` | `~/vorch/projects` / `~/vorch/export` | files |
 | `VORCH_RUN_TIMEOUT` / `VORCH_ASSEMBLE_TIMEOUT` | 600 s | per ComfyUI workflow / ffmpeg assembly |
 | `VORCH_VRAM_GUARD_MB` / `VORCH_VRAM_SETTLE_SEC` | 10000 / 3 | VRAM guard |
@@ -398,6 +401,7 @@ make frontend && make start            # production UI build
 Documentation map: [`NOTES.md`](NOTES.md) (the original spec: endpoints, node ids, VRAM
 strategy, decisions), [`DESIGN.md`](DESIGN.md) (architecture, stack, build order),
 [`docs/workflows.md`](docs/workflows.md) (registering workflows),
+[`docs/modal-backend.md`](docs/modal-backend.md) (optional Modal cloud backend),
 [`docs/sequential-continuity-plan.md`](docs/sequential-continuity-plan.md),
 [`SKILL.md`](SKILL.md) + `skills/` (operational how-tos), [`CLAUDE.md`](CLAUDE.md) (working
 rules for coding sessions).

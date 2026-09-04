@@ -51,6 +51,7 @@ Reference the workflow from an **output profile**: `keyframe.workflow`, `video.w
 ```yaml
 name: gimm_interp                  # default: file stem
 kind: postprocess                  # keyframe | animate | faceswap | edit | postprocess | custom
+backend: local                     # or a name from ~/vorch/backends.yaml (e.g. modal-h100)
 template: gimm_interp.json         # relative to this YAML, or absolute
 description: GIMM-VFI 2x frame interpolation
 tags: [interpolation, video]
@@ -65,6 +66,10 @@ params:
   filename_prefix: {node: "12", field: filename_prefix, type: str}
 requires: {nodes: [GIMMVFI_interpolate, VHS_LoadVideo, VHS_VideoCombine]}   # optional
 ```
+
+`backend:` (optional, default `local`) names the ComfyUI that runs this workflow — an entry of
+`~/vorch/backends.yaml` (see `docs/modal-backend.md`). Outputs of remote backends are downloaded
+into the local output layout with the backend name in the file name.
 
 Param fields: `node` + `field` (or `targets: [{node, field}, …]` to write several nodes),
 `type` (`int|float|str|bool|enum|any`), `required`, `min`/`max`, `constraint`

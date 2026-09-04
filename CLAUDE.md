@@ -45,6 +45,7 @@ Working rules: keep changes surgical, keep `pytest -q` green, regenerate `fronte
 - **`NOTES.md`** — the spec. Endpoints, start commands, exact node-IDs to replace per workflow (§3), VRAM strategy (§4), pipeline phasing (§5), evaluation criteria (§6), finalized decisions (§7), dev phasing (§9). **Read first; everything assumes it as context.**
 - **`DESIGN.md`** — the orchestrator architecture: module layout, the workflow registry, data model, YAML job spec, control flow with semi-auto gates, and build order (§9, incl. Phase 3). Also §11–12: the stack — **deterministic Python core (no agent framework); Gemma via llama.cpp json_schema + Pydantic; FastAPI + SSE + asyncio on PostgreSQL; Next.js frontend (proxying /api); two local processes.** Don't re-litigate these.
 - **`docs/workflows.md`** — how to register a newly installed ComfyUI workflow (YAML sidecar, kinds, contracts, post-process chains).
+- **`docs/modal-backend.md`** — the optional per-workflow cloud backend (Modal): `backends.yaml`, the download seam in the ComfyUI client, deployment, model comparison, cost and risks. Local stays the default.
 - **`SKILL.md`** — router skill + architectural invariants. Points to:
   - `skills/comfyui-api.md` — load template, replace params, POST `/prompt`, poll `/history`, extract outputs
   - `skills/gemma-evaluate.md` — vision evaluation, image + video (frame extraction), JSON verdict parsing
