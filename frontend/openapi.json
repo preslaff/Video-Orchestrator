@@ -736,6 +736,108 @@
         }
       }
     },
+    "/api/jobs/{job_id}/assemble/versions/{version}/select": {
+      "post": {
+        "tags": [
+          "assembly"
+        ],
+        "summary": "Select Version",
+        "operationId": "select_version_api_jobs__job_id__assemble_versions__version__select_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssemblyStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/assemble/versions/{version}": {
+      "delete": {
+        "tags": [
+          "assembly"
+        ],
+        "summary": "Delete Version",
+        "operationId": "delete_version_api_jobs__job_id__assemble_versions__version__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssemblyStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/setup/env": {
       "get": {
         "tags": [
@@ -1804,6 +1906,11 @@
             "type": "boolean",
             "title": "Exported",
             "default": false
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 0
           }
         },
         "type": "object",
@@ -1943,6 +2050,14 @@
                 "type": "null"
               }
             ]
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblyVersionOut"
+            },
+            "type": "array",
+            "title": "Versions",
+            "default": []
           }
         },
         "type": "object",
@@ -1954,6 +2069,104 @@
           "clips"
         ],
         "title": "AssemblyStatus"
+      },
+      "AssemblyVersionOut": {
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          },
+          "duration": {
+            "type": "number",
+            "title": "Duration",
+            "default": 0.0
+          },
+          "n_clips": {
+            "type": "integer",
+            "title": "N Clips",
+            "default": 0
+          },
+          "spec": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Spec",
+            "default": {}
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes",
+            "default": 0
+          },
+          "fps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fps"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "exists": {
+            "type": "boolean",
+            "title": "Exists",
+            "default": false
+          },
+          "current": {
+            "type": "boolean",
+            "title": "Current",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "path"
+        ],
+        "title": "AssemblyVersionOut"
       },
       "AssetOut": {
         "properties": {

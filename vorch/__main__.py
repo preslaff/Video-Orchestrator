@@ -500,6 +500,22 @@ def _cmd_assemble(args) -> int:
         job = store.load_job(args.job_id)
         if job is None:
             raise ValueError(f"no job with id {args.job_id}")
+        if args.list:
+            cur = int((job.assembly or {}).get("version", 0) or 0)
+            for v in assembly.versions_of(job):
+                cuts = ", ".join(c["transition"] if c["transition"] == "none" else f"{c['transition']} {c['duration']:g}s"
+                                 for c in (v.get("spec") or {}).get("cuts", []))
+                mark = "*" if int(v.get("version", 0)) == cur else " "
+                print(f"{mark} v{v['version']:<3} {v.get('duration')}s  {v.get('n_clips')} clip(s)  {cuts or 'single clip'}  {v.get('path')}")
+            if not assembly.versions_of(job):
+                print("no assemblies yet")
+            return 0
+        if args.select:
+            assembly.select_version(job, args.select)
+            store.save_job(job)
+            print(f"v{args.select} is now current: {job.assembly['path']}")
+            _export_if_done(store, job, enabled=True) if not job.export else None
+            return 0
         if job.status is not JobStatus.DONE and not args.force:
             raise ValueError(f"job is {job.status.value}, not done (use --force)")
         if args.spec:
@@ -516,12 +532,12 @@ def _cmd_assemble(args) -> int:
         print(f"assembling {len(paths)} clip(s): " + ", ".join(
             c.transition if c.transition == "none" else f"{c.transition} {c.duration:g}s" for c in spec.cuts))
         rec = assembly.run(job, spec, paths)
-        job.assembly = rec.to_dict()
+        assembly.register_version(job, rec)
         store.save_job(job)
         if not rec.ok:
             print(f"error: {rec.error}", file=sys.stderr)
             return 1
-        print(f"{rec.path}  ({rec.duration}s, {rec.width}x{rec.height} @ {rec.fps:g} fps)")
+        print(f"v{rec.version}: {rec.path}  ({rec.duration}s, {rec.width}x{rec.height} @ {rec.fps:g} fps)")
         if job.export or job.status is JobStatus.DONE:
             project = projects.load(store, job.project_id) if job.project_id else None
             er = export.export_job(store, job, project)
@@ -778,6 +794,8 @@ def build_parser() -> argparse.ArgumentParser:
     asm.add_argument("--fps", type=int, default=None)
     asm.add_argument("--encoder", default=None, choices=["libx264", "h264_nvenc"])
     asm.add_argument("--force", action="store_true", help="assemble even if the job is not done")
+    asm.add_argument("--list", action="store_true", help="list the job's assembly versions (* = current)")
+    asm.add_argument("--select", type=int, default=None, metavar="N", help="make version N the current assembly")
     asm.set_defaults(func=_cmd_assemble)
 
     ex = sub.add_parser("export", help="write the Shotcut handoff folder for a finished job")

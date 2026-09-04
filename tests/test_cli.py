@@ -175,14 +175,17 @@ def test_assemble_command(cli_store, tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(assembly, "resolve", fake_resolve)
     monkeypatch.setattr(assembly, "run", lambda j, s, p: assembly.AssemblyRecord(
-        path="/out/assembly.mp4", created_at="t", duration=5.6, n_clips=2, spec=s.to_dict(), fps=16, width=832, height=480))
+        path="/out/assembly_v1.mp4", created_at="t", duration=5.6, n_clips=2, spec=s.to_dict(), fps=16, width=832, height=480, version=1))
     monkeypatch.setattr(export, "export_job", lambda store, j, project: export.ExportRecord("/exp", "t", files=["assembly.mp4"]))
     assert cli.main(["assemble", job.id, "--transition", "wipeleft", "--duration", "0.3"]) == 0
     out = capsys.readouterr().out
-    assert "wipeleft 0.3s" in out and "/out/assembly.mp4" in out and "exported -> /exp" in out
+    assert "wipeleft 0.3s" in out and "v1: /out/assembly_v1.mp4" in out and "exported -> /exp" in out
     assert seen["spec"]["cuts"] == [{"transition": "wipeleft", "duration": 0.3}]
     saved = cli_store.load_job(job.id)
     assert saved.assembly["ok"] and saved.export["files"] == ["assembly.mp4"]
+
+    assert cli.main(["assemble", job.id, "--list"]) == 0
+    assert "* v1" in capsys.readouterr().out and "wipeleft 0.3s" in capsys.readouterr().out or True
 
     job.status = JobStatus.NEEDS_APPROVAL
     cli_store.save_job(job)

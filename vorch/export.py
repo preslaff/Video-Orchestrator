@@ -172,7 +172,9 @@ def build_manifest(job: Job, project: Any | None, store: Store | None, files: di
         "created_at": job.created_at,
         "exported_at": _now(),
         "scenes": scenes,
-        "assembly": job.assembly if (job.assembly or {}).get("ok") else None,
+        "assembly": ({k: v for k, v in job.assembly.items() if k != "versions"}
+                     if (job.assembly or {}).get("ok") else None),
+        "assembly_versions": list((job.assembly or {}).get("versions") or []),
         "decisions": len(store.decisions(job.id)) if store is not None else None,
     }
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from vorch import assembly, config, media
@@ -102,14 +104,16 @@ def test_run_success_records_and_writes_sidecar(tmp_path, monkeypatch):
 
     monkeypatch.setattr(media, "assemble", fake_assemble)
     rec = assembly.run(job, spec, paths)
-    assert rec.ok and rec.path.endswith("/assembly.mp4") and rec.size_bytes == 3 and rec.n_clips == 3
+    assert rec.ok and rec.path.endswith("/assembly_v1.mp4") and rec.version == 1 and rec.size_bytes == 3 and rec.n_clips == 3
+    assert assembly.output_path(job).read_bytes() == b"mp4"  # current = hardlink of v1
     assert seen["cuts"] == [Cut("none", 0.5), Cut("wipeleft", 0.3)] and seen["kw"]["size"] == (832, 480) and seen["kw"]["fps"] == 16.0
     from vorch import provenance
     m = provenance.read_manifest(rec.path)
     assert m["kind"] == "assembly" and m["params"]["spec"]["cuts"][1]["transition"] == "wipeleft"
-    job.assembly = rec.to_dict()
+    assembly.register_version(job, rec)
     st = assembly.status(job, active=False)
     assert st["record"]["exists"] is True and st["record"]["exported"] is False
+    assert [v["version"] for v in st["versions"]] == [1] and st["versions"][0]["current"] is True
 
 
 def test_record_and_spec_roundtrip():
@@ -119,3 +123,65 @@ def test_record_and_spec_roundtrip():
     rec = assembly.AssemblyRecord(path="/a.mp4", created_at="t", duration=5.2, n_clips=2, spec=spec.to_dict())
     assert assembly.AssemblyRecord.from_dict(rec.to_dict()) == rec
     assert assembly.AssemblyRecord.from_dict({"path": "/x", "ok": False, "error": "e"}).error == "e"
+
+
+def _fake_assemble_factory(monkeypatch):
+    calls = {"n": 0}
+
+    def fake_assemble(clips, cuts, dest, **kw):
+        calls["n"] += 1
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(f"v{calls['n']}:{cuts[0].transition}".encode())
+        return dest
+
+    monkeypatch.setattr(media, "assemble", fake_assemble)
+    return calls
+
+
+def test_versions_accumulate_select_and_delete(tmp_path, monkeypatch):
+    job = _job(tmp_path)
+    _fake_assemble_factory(monkeypatch)
+    for tr in ("fade", "wipeleft", "none"):
+        spec, paths = assembly.resolve(job, {"cuts": [{"transition": tr, "duration": 0.5}, {"transition": "fade", "duration": 0.5}]})
+        rec = assembly.run(job, spec, paths)
+        assembly.register_version(job, rec)
+    versions = assembly.versions_of(job)
+    assert [v["version"] for v in versions] == [1, 2, 3]
+    assert job.assembly["version"] == 3 and job.assembly["path"].endswith("assembly_v3.mp4")
+    assert assembly.output_path(job).read_bytes() == b"v3:none"
+    assert all(pathlib.Path(v["path"]).is_file() for v in versions)  # every version keeps its file
+
+    # Select v1 -> current file + record switch, versions list intact.
+    assembly.select_version(job, 1)
+    assert job.assembly["version"] == 1 and assembly.output_path(job).read_bytes() == b"v1:fade"
+    assert [v["version"] for v in assembly.versions_of(job)] == [1, 2, 3]
+    st = assembly.status(job)
+    assert [v["current"] for v in st["versions"]] == [True, False, False]
+    with pytest.raises(KeyError):
+        assembly.select_version(job, 9)
+
+    # Delete a non-current version: file gone, current untouched.
+    assembly.delete_version(job, 2)
+    assert not (tmp_path / "out" / "vorch" / job.id[:8] / "assembly_v2.mp4").exists()
+    assert job.assembly["version"] == 1 and [v["version"] for v in assembly.versions_of(job)] == [1, 3]
+    # Delete the current one: newest remaining (3) becomes current.
+    assembly.delete_version(job, 1)
+    assert job.assembly["version"] == 3 and assembly.output_path(job).read_bytes() == b"v3:none"
+    # Delete the last: nothing left.
+    assembly.delete_version(job, 3)
+    assert job.assembly is None and not assembly.output_path(job).exists()
+    with pytest.raises(KeyError):
+        assembly.delete_version(job, 3)
+
+
+def test_failed_run_does_not_become_a_version(tmp_path, monkeypatch):
+    job = _job(tmp_path)
+    _fake_assemble_factory(monkeypatch)
+    spec, paths = assembly.resolve(job, None)
+    assembly.register_version(job, assembly.run(job, spec, paths))
+    monkeypatch.setattr(media, "assemble", lambda *a, **k: (_ for _ in ()).throw(media.MediaError("boom")))
+    bad = assembly.run(job, spec, paths)
+    assembly.register_version(job, bad)
+    assert job.assembly["ok"] is False and job.assembly["version"] == 2
+    assert [v["version"] for v in assembly.versions_of(job)] == [1]   # failures are not kept as versions
+    assert assembly.next_version(job) == 2                             # the number is reused

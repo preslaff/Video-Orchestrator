@@ -253,6 +253,23 @@ class AssemblyRecordOut(BaseModel):
     height: int | None = None
     exists: bool = False
     exported: bool = False
+    version: int = 0
+
+
+class AssemblyVersionOut(BaseModel):
+    version: int
+    path: str
+    url: str | None = None
+    created_at: str = ""
+    duration: float = 0.0
+    n_clips: int = 0
+    spec: dict = {}
+    size_bytes: int = 0
+    fps: float | None = None
+    width: int | None = None
+    height: int | None = None
+    exists: bool = False
+    current: bool = False
 
 
 class AssemblyStatus(BaseModel):
@@ -263,3 +280,4 @@ class AssemblyStatus(BaseModel):
     clips: list[AssemblyClipOut]
     profile_fps: int | None = None
     record: AssemblyRecordOut | None = None
+    versions: list[AssemblyVersionOut] = []

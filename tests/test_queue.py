@@ -429,8 +429,8 @@ def fake_assembly(monkeypatch):
         if emit:
             emit({"job_id": job.id, "type": "step", "step": "assemble", "n_clips": len(paths), "seconds": 5.6})
         ok = calls.get("fail") is None
-        return asm.AssemblyRecord(path="/out/assembly.mp4", created_at="t", duration=5.6, n_clips=len(paths),
-                                  spec=spec.to_dict(), ok=ok, error="" if ok else "ffmpeg died")
+        return asm.AssemblyRecord(path="/out/assembly_v1.mp4", created_at="t", duration=5.6, n_clips=len(paths),
+                                  spec=spec.to_dict(), ok=ok, error="" if ok else "ffmpeg died", version=1)
 
     monkeypatch.setattr(asm, "resolve", resolve)
     monkeypatch.setattr(asm, "run", run)
@@ -455,6 +455,7 @@ def test_assemble_task_emits_step_assembly_end_and_records(tmp_path, make_store,
     types, job = asyncio.run(go())
     assert types == ["step", "assembly", "export", "end"]
     assert job.assembly["ok"] and job.assembly["duration"] == 5.6 and job.status is JobStatus.DONE
+    assert [v["version"] for v in job.assembly["versions"]] == [1]
     assert job.export["files"] == ["assembly.mp4"]
 
 

@@ -313,23 +313,61 @@ class JobManager:
         self._spawn(self._assemble_task(job, resolved, paths))
         return job
 
+    def select_assembly_version(self, job_id: str, version: int) -> Job:
+        """Make an earlier assembly version the current one (and re-export)."""
+        job = self._assembly_job(job_id)
+        assembly_mod.select_version(job, version)
+        self.store.save_job(job)
+        self._reexport_sync(job)
+        return job
+
+    def delete_assembly_version(self, job_id: str, version: int) -> Job:
+        job = self._assembly_job(job_id)
+        assembly_mod.delete_version(job, version)
+        self.store.save_job(job)
+        self._reexport_sync(job)
+        return job
+
+    def _assembly_job(self, job_id: str) -> Job:
+        if job_id in self._active:
+            raise RuntimeError(f"job {job_id} is running; wait for the current segment")
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return job
+
+    def _reexport_sync(self, job: Job) -> None:
+        if not (job.export or job.status is JobStatus.DONE):
+            return
+        project = projects_mod.load(self.store, job.project_id) if job.project_id else None
+        try:
+            rec = export_mod.export_job(self.store, job, project)
+        except Exception as e:  # noqa: BLE001
+            log.warning("job %s: export failed: %s", job.id, e)
+            return
+        job.export = rec.to_dict()
+        self.store.save_job(job)
+        self.broker.publish(job.id, {"type": "export", "path": rec.path, "files": rec.files, "ok": rec.ok})
+
     async def _assemble_task(self, job: Job, spec, paths) -> None:
         loop = asyncio.get_running_loop()
         emit = lambda ev, jid=job.id: loop.call_soon_threadsafe(self.broker.publish, jid, ev)  # noqa: E731
         try:
             rec = await loop.run_in_executor(None, lambda: assembly_mod.run(job, spec, paths, emit=emit))
             fresh = self.store.load_job(job.id) or job
-            fresh.assembly = rec.to_dict()
+            assembly_mod.register_version(fresh, rec)
             self.store.save_job(fresh)
             self.broker.publish(job.id, {"type": "assembly", "path": rec.path, "duration": rec.duration,
-                                         "n_clips": rec.n_clips, "ok": rec.ok, "error": rec.error})
+                                         "n_clips": rec.n_clips, "ok": rec.ok, "error": rec.error,
+                                         "version": rec.version})
             if rec.ok and (fresh.export or fresh.status is JobStatus.DONE):
                 await self._reexport(loop, fresh)
         except Exception as e:  # noqa: BLE001 - never crash the loop; record the failure
             log.exception("job %s: assembly task failed", job.id)
             fresh = self.store.load_job(job.id) or job
-            fresh.assembly = {"path": str(assembly_mod.output_path(job)), "created_at": "", "ok": False,
-                              "error": str(e), "spec": spec.to_dict(), "n_clips": len(paths)}
+            assembly_mod.register_version(fresh, assembly_mod.AssemblyRecord(
+                path=str(assembly_mod.output_path(job)), created_at="", ok=False, error=str(e),
+                spec=spec.to_dict(), n_clips=len(paths)))
             self.store.save_job(fresh)
             self.broker.publish(job.id, {"type": "error", "error": f"assembly: {e}"})
         finally:

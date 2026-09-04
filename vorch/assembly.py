@@ -80,6 +80,7 @@ class AssemblyRecord:
     fps: float | None = None
     width: int | None = None
     height: int | None = None
+    version: int = 0                 # 1-based; versions keep their own file assembly_v<N>.mp4
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -108,8 +109,113 @@ def default_spec(job: Job) -> AssemblySpec:
     )
 
 
+def output_dir(job: Job) -> Path:
+    return config.COMFY_OUTPUT / "vorch" / job.id[:8]
+
+
 def output_path(job: Job) -> Path:
-    return config.COMFY_OUTPUT / "vorch" / job.id[:8] / "assembly.mp4"
+    """The *current* assembly (what the export folder ships as assembly.mp4)."""
+    return output_dir(job) / "assembly.mp4"
+
+
+def version_path(job: Job, version: int) -> Path:
+    return output_dir(job) / f"assembly_v{version}.mp4"
+
+
+# --- versions ---------------------------------------------------------------------------
+#
+# ``job.assembly`` is the current record (consumers: export, API, UI). It carries
+# ``versions``: every successful assembly, each with its own file, so different
+# transition choices can be compared and any of them made current again.
+
+
+def versions_of(job: Job) -> list[dict]:
+    return list((job.assembly or {}).get("versions") or [])
+
+
+def next_version(job: Job) -> int:
+    return max((int(v.get("version", 0)) for v in versions_of(job)), default=0) + 1
+
+
+def _strip(rec: dict) -> dict:
+    return {k: v for k, v in rec.items() if k != "versions"}
+
+
+def register_version(job: Job, rec: AssemblyRecord) -> dict:
+    """Store ``rec`` as the current assembly and (when ok) append it to the versions list.
+
+    Returns the new ``job.assembly`` dict (not saved).
+    """
+    versions = versions_of(job)
+    current = rec.to_dict()
+    if rec.ok:
+        versions = [v for v in versions if int(v.get("version", 0)) != rec.version] + [_strip(current)]
+        versions.sort(key=lambda v: int(v.get("version", 0)))
+    current["versions"] = versions
+    job.assembly = current
+    return current
+
+
+def select_version(job: Job, version: int) -> dict:
+    """Make an earlier version current: copy its file over assembly.mp4 (hardlink) and its record."""
+    match = next((v for v in versions_of(job) if int(v.get("version", 0)) == version), None)
+    if match is None:
+        raise KeyError(f"no assembly version {version}")
+    src = Path(match["path"])
+    if not src.is_file():
+        raise FileNotFoundError(f"assembly version {version} is no longer on disk ({src.name})")
+    dest = output_path(job)
+    _link_replace(src, dest)
+    side = provenance.manifest_path(src)
+    if side.is_file():
+        _link_replace(side, provenance.manifest_path(dest))
+    current = dict(match)
+    current["versions"] = versions_of(job)
+    job.assembly = current
+    return current
+
+
+def delete_version(job: Job, version: int) -> dict:
+    """Remove a version's file + sidecar; if it was current, the newest remaining becomes current."""
+    versions = versions_of(job)
+    match = next((v for v in versions if int(v.get("version", 0)) == version), None)
+    if match is None:
+        raise KeyError(f"no assembly version {version}")
+    for f in (Path(match["path"]), provenance.manifest_path(match["path"])):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    remaining = [v for v in versions if int(v.get("version", 0)) != version]
+    current = dict(job.assembly or {})
+    if int(current.get("version", 0)) == version:
+        if remaining:
+            job.assembly = {**remaining[-1], "versions": remaining}
+            select_version(job, int(remaining[-1]["version"]))
+            return job.assembly
+        for f in (output_path(job), provenance.manifest_path(output_path(job))):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        job.assembly = None
+        return {}
+    current["versions"] = remaining
+    job.assembly = current
+    return current
+
+
+def _link_replace(src: Path, dest: Path) -> None:
+    import os
+    import shutil
+
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    try:
+        os.link(src, tmp)
+    except OSError:
+        shutil.copy2(src, tmp)
+    os.replace(tmp, dest)
 
 
 def _clip_path(scene: Scene, source: str) -> str | None:
@@ -213,8 +319,13 @@ def target_format(job: Job, spec: AssemblySpec, first: media.MediaInfo) -> tuple
 
 
 def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict], None] | None = None) -> AssemblyRecord:
-    """Render the assembly; never raises (failures are recorded in the returned record)."""
-    dest = output_path(job)
+    """Render a new assembly version; never raises (failures are recorded in the returned record).
+
+    The file is ``assembly_v<N>.mp4``; ``assembly.mp4`` (the current one) is
+    updated to point at it. Register the result with :func:`register_version`.
+    """
+    version = next_version(job)
+    dest = version_path(job, version)
     created = _now()
     try:
         first = media.probe(paths[0])
@@ -229,17 +340,21 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
         rec = AssemblyRecord(
             path=str(dest), created_at=created, duration=round(info.frame_duration, 3), n_clips=len(paths),
             spec=spec.to_dict(), ok=True, size_bytes=dest.stat().st_size, fps=info.fps,
-            width=info.width, height=info.height,
+            width=info.width, height=info.height, version=version,
         )
         provenance.write_manifest(dest, "assemble", {
             "spec": spec.to_dict(), "clips": [str(p) for p in paths], "fps": fps, "width": width,
-            "height": height, "crf": spec.crf, "encoder": spec.encoder,
+            "height": height, "crf": spec.crf, "encoder": spec.encoder, "version": version,
         }, {"kind": "assembly", "job_id": job.id})
+        _link_replace(dest, output_path(job))
+        side = provenance.manifest_path(dest)
+        if side.is_file():
+            _link_replace(side, provenance.manifest_path(output_path(job)))
         return rec
     except (media.MediaError, ValueError, FileNotFoundError, OSError) as e:
         log.warning("job %s: assembly failed: %s", job.id, e)
         return AssemblyRecord(path=str(dest), created_at=created, n_clips=len(paths), spec=spec.to_dict(),
-                              ok=False, error=str(e))
+                              ok=False, error=str(e), version=version)
 
 
 def status(job: Job, *, active: bool = False) -> dict:
@@ -250,6 +365,11 @@ def status(job: Job, *, active: bool = False) -> dict:
     rec_out = None
     if record is not None:
         rec_out = {**record.to_dict(), "exists": Path(record.path).is_file(), "exported": exported}
+    current_version = int((job.assembly or {}).get("version", 0) or 0)
+    versions = [
+        {**v, "exists": Path(v.get("path", "")).is_file(), "current": int(v.get("version", 0)) == current_version}
+        for v in versions_of(job)
+    ]
     pv = profile_video(job)
     return {
         "available": job.kind == "video" and bool(scenes),
@@ -259,4 +379,5 @@ def status(job: Job, *, active: bool = False) -> dict:
         "clips": clip_infos(job),
         "profile_fps": pv.get("fps"),
         "record": rec_out,
+        "versions": versions,
     }

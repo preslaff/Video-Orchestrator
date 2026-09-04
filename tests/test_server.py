@@ -528,11 +528,12 @@ def test_assembly_post_200_runs_and_records(client, stub_media, monkeypatch):
     from vorch import assembly as asm
 
     def fake_run(job, spec, paths, *, emit=None):
-        out = client.media / "vorch" / job.id[:8] / "assembly.mp4"
+        v = asm.next_version(job)
+        out = client.media / "vorch" / job.id[:8] / f"assembly_v{v}.mp4"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"mp4")
         return asm.AssemblyRecord(path=str(out), created_at="t", duration=5.62, n_clips=len(paths), spec=spec.to_dict(),
-                                  ok=True, size_bytes=3)
+                                  ok=True, size_bytes=3, version=v)
 
     monkeypatch.setattr(asm, "run", fake_run)
     job = _done_video_job(client)
@@ -544,7 +545,8 @@ def test_assembly_post_200_runs_and_records(client, stub_media, monkeypatch):
             break
         time.sleep(0.02)
     assert st["record"]["ok"] and st["record"]["duration"] == 5.62 and st["record"]["exists"] is True
-    assert st["record"]["url"].startswith(f"/media/vorch/{job.id[:8]}/assembly.mp4?v=")  # cache-busted per assembly
+    assert st["record"]["url"].startswith(f"/media/vorch/{job.id[:8]}/assembly_v1.mp4?v=")  # cache-busted per assembly
+    assert [v["version"] for v in st["versions"]] == [1] and st["versions"][0]["current"]
     assert st["record"]["spec"]["cuts"][0]["transition"] == "wipeleft"
     assert client.get(f"/api/jobs/{job.id}").json()["assembly"]["ok"] is True
 
@@ -555,3 +557,32 @@ def test_media_is_served_with_no_cache(client):
     assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
     r = client.get("/media/k.png", headers={"Range": "bytes=0-1"})
     assert r.status_code == 206 and r.headers["cache-control"] == "no-cache"
+
+
+def test_assembly_versions_select_and_delete_routes(client, stub_media, tmp_path):
+    from vorch import assembly as asm
+
+    job = _done_video_job(client)
+    for n in (1, 2):
+        f = client.media / "vorch" / job.id[:8] / f"assembly_v{n}.mp4"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(f"v{n}".encode())
+        asm.register_version(job, asm.AssemblyRecord(path=str(f), created_at=f"2026-09-0{n}T00:00:00+00:00",
+                                                     duration=5.0 + n, n_clips=2, version=n))
+    client.store.save_job(job)
+    st = client.get(f"/api/jobs/{job.id}/assemble").json()
+    assert [v["version"] for v in st["versions"]] == [1, 2] and st["record"]["version"] == 2
+    assert st["versions"][0]["url"].startswith(f"/media/vorch/{job.id[:8]}/assembly_v1.mp4?v=")
+
+    r = client.post(f"/api/jobs/{job.id}/assemble/versions/1/select")
+    assert r.status_code == 200 and r.json()["record"]["version"] == 1 and r.json()["versions"][0]["current"]
+    assert (client.media / "vorch" / job.id[:8] / "assembly.mp4").read_bytes() == b"v1"
+    assert client.post(f"/api/jobs/{job.id}/assemble/versions/9/select").status_code == 404
+
+    r = client.delete(f"/api/jobs/{job.id}/assemble/versions/2")
+    assert r.status_code == 200 and [v["version"] for v in r.json()["versions"]] == [1]
+    client.app.state.manager._active.add(job.id)
+    assert client.delete(f"/api/jobs/{job.id}/assemble/versions/1").status_code == 409
+    client.app.state.manager._active.discard(job.id)
+    assert client.delete(f"/api/jobs/{job.id}/assemble/versions/1").status_code == 200
+    assert client.get(f"/api/jobs/{job.id}/assemble").json()["record"] is None
