@@ -97,10 +97,12 @@ def _request(
 # --- status --------------------------------------------------------------------------
 
 
-def system_stats(backend: ComfyBackend | str | None = None, *, retry_for: float = 0.0) -> dict:
+def system_stats(
+    backend: ComfyBackend | str | None = None, *, retry_for: float = 0.0, timeout: float | None = None
+) -> dict:
     """``GET /system_stats`` (ComfyUI version, devices)."""
     b = _resolve(backend)
-    resp = _request(b, "GET", "/system_stats", retry_for=retry_for)
+    resp = _request(b, "GET", "/system_stats", retry_for=retry_for, timeout=timeout)
     if resp.status_code != 200:
         raise ComfyError(f"{b.name}: /system_stats returned {resp.status_code}")
     return resp.json()

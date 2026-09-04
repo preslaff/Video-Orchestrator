@@ -48,7 +48,7 @@ export function useConfig() {
 // --- workflows -------------------------------------------------------------------------
 
 export interface WorkflowParam { targets: { node: string; field: string }[]; type: string; default: unknown; required: boolean; constraint: string | null; min: number | null; max: number | null; enum_from: { class_type: string; input: string } | null }
-export interface WorkflowInfo { name: string; kind: string; template: string; description: string; tags: string[]; timeout: number | null; builtin: boolean; source: string | null; inputs: Record<string, string>; outputs: { type: string | null; nodes: string[] }; params: Record<string, WorkflowParam>; requires: { nodes: string[]; models: { node: string; class_type: string; field: string; value: string }[] }; problems?: string[] }
+export interface WorkflowInfo { name: string; kind: string; template: string; description: string; tags: string[]; timeout: number | null; backend: string; builtin: boolean; source: string | null; inputs: Record<string, string>; outputs: { type: string | null; nodes: string[] }; params: Record<string, WorkflowParam>; requires: { nodes: string[]; models: { node: string; class_type: string; field: string; value: string }[] }; problems?: string[] }
 
 export function useWorkflows(kind?: string) {
   return useQuery({

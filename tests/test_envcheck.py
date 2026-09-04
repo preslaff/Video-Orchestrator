@@ -44,14 +44,15 @@ def healthy(monkeypatch, tmp_path):
     info = _object_info_for_builtins()
 
     def fake_get(url, timeout=None):
-        if url.endswith("/system_stats"):
-            return _Resp({"system": {"comfyui_version": "0.34.0"}, "devices": [{"name": "RTX", "vram_total": 16 * 2**30}]})
         if url.endswith("/v1/models"):
             return _Resp({"data": [{"id": "gemma-4"}]})
         raise AssertionError(url)
 
+    stats = {"system": {"comfyui_version": "0.34.0"}, "devices": [{"name": "RTX", "vram_total": 16 * 2**30}]}
     monkeypatch.setattr(envcheck.requests, "get", fake_get)
-    monkeypatch.setattr(comfy, "object_info", lambda refresh=False: info)
+    monkeypatch.setattr(comfy, "system_stats", lambda backend=None, **kw: stats)
+    monkeypatch.setattr(comfy, "wait_ready", lambda backend=None, **kw: stats)
+    monkeypatch.setattr(comfy, "object_info", lambda refresh=False, backend=None: info)
     monkeypatch.setattr(vram, "snapshot", lambda: {"used": 500, "free": 15000, "total": 16000})
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     for name in ("COMFY_INPUT", "COMFY_OUTPUT"):
@@ -75,8 +76,11 @@ def test_all_ok_when_services_up(healthy, store):
     by = _by_name(rep)
     assert rep.ok and rep.status == "ok", [c for c in rep.checks if c.status != "ok"]
     assert by["database"].data["version"] >= 2
-    assert by["comfy"].data["version"] == "0.34.0"
+    assert by["comfy:local"].data["version"] == "0.34.0" and by["comfy:local"].data["probed"] is True
+    assert by["backends"].detail.startswith("local only")
+    assert [c.name for c in rep.checks if c.name.startswith("comfy:")] == ["comfy:local"]
     assert by["workflow:animate"].data["used"] is True and by["workflow:kv_edit"].data["used"] is False
+    assert by["workflow:animate"].data["backend"] == "local"
     assert by["profile"].detail.startswith("cinematic_16x9")
     d = rep.to_dict()
     assert d["ok"] and d["checks"][0]["name"] == "database"
@@ -84,19 +88,17 @@ def test_all_ok_when_services_up(healthy, store):
 
 
 def test_comfy_down_is_fail_and_workflows_go_offline(healthy, store, monkeypatch):
-    def down(url, timeout=None):
-        if url.endswith("/system_stats"):
-            raise requests.ConnectionError("refused")
-        return _Resp({"data": []})
+    def down(backend=None, **kw):
+        raise comfy.ComfyError("local: GET /system_stats failed (refused)")
 
-    monkeypatch.setattr(envcheck.requests, "get", down)
+    monkeypatch.setattr(comfy, "system_stats", down)
     rep = envcheck.run_checks(profile=profiles.default_profile(), store=store, force=True)
     by = _by_name(rep)
-    assert not rep.ok and by["comfy"].status == "fail"
+    assert not rep.ok and by["comfy:local"].status == "fail"
     assert by["workflow:keyframe"].status == "ok" and "offline" in by["workflow:keyframe"].detail
     with pytest.raises(envcheck.EnvironmentNotReady) as ei:
         envcheck.gate(profiles.default_profile(), store=store)
-    assert "comfy" in str(ei.value)
+    assert "comfy:local" in str(ei.value)
 
 
 def test_missing_model_file_fails_only_for_profile_workflows(healthy, store):
@@ -119,9 +121,7 @@ def test_ffmpeg_missing_gpu_low_and_gemma_down(healthy, store, monkeypatch):
     monkeypatch.setattr(vram, "snapshot", lambda: {"used": 15000, "free": 800, "total": 16000})
 
     def gemma_down(url, timeout=None):
-        if url.endswith("/v1/models"):
-            raise requests.ConnectionError("refused")
-        return _Resp({"system": {"comfyui_version": "0.34.0"}, "devices": []})
+        raise requests.ConnectionError("refused")
 
     monkeypatch.setattr(envcheck.requests, "get", gemma_down)
     rep = envcheck.run_checks(store=store, force=True)
@@ -155,9 +155,9 @@ def test_cache_ttl_and_force(healthy, store, monkeypatch):
     calls = {"n": 0}
     real = envcheck._check_comfy
 
-    def counting():
+    def counting(backend, **kw):
         calls["n"] += 1
-        return real()
+        return real(backend, **kw)
 
     monkeypatch.setattr(envcheck, "_check_comfy", counting)
     envcheck.run_checks(store=store, force=True)
@@ -189,3 +189,125 @@ def test_probe_png_is_truecolor_and_decodable(tmp_path):
         out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "stream=width,height,pix_fmt",
                                        "-of", "csv=p=0", str(f)]).decode().strip()
         assert out == "64,64,rgb24"
+
+
+# --- backends (docs/modal-backend.md §3) --------------------------------------------------
+
+
+def _remote_backend(tmp_path, monkeypatch, name="box", **extra):
+    import yaml
+
+    from vorch import backends
+
+    doc = {"backends": {name: {"url": "http://box:8188", "cold_start_grace": 0, "gpu": "H100", **extra}}}
+    (tmp_path / "backends.yaml").write_text(yaml.safe_dump(doc))
+    monkeypatch.setattr(config, "BACKENDS_FILE", tmp_path / "backends.yaml")
+    backends.reset_cache()
+
+
+def _remote_animate(tmp_path, monkeypatch, backend="box"):
+    import yaml
+
+    doc = yaml.safe_load((config.WORKFLOW_DIR / "animate.yaml").read_text())
+    doc.update(name="animate_remote", template=str(config.WORKFLOW_DIR / doc["template"]), backend=backend)
+    config.USER_WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+    (config.USER_WORKFLOW_DIR / "animate_remote.yaml").write_text(yaml.safe_dump(doc))
+    registry.reset_cache()
+    return profiles.apply_overrides(profiles.default_profile(), {"video": {"workflow": "animate_remote"}})
+
+
+def test_remote_backend_not_probed_unless_used_or_deep(healthy, store, tmp_path, monkeypatch):
+    _remote_backend(tmp_path, monkeypatch)
+    probed: list[str] = []
+    stats = {"system": {"comfyui_version": "0.35.0"}, "devices": [{"name": "H100", "vram_total": 80 * 2**30}]}
+    monkeypatch.setattr(comfy, "wait_ready", lambda backend=None, **kw: probed.append(backend.name) or stats)
+    infos: list[str] = []
+    monkeypatch.setattr(comfy, "object_info", lambda refresh=False, backend=None: infos.append(backend.name) or healthy)
+
+    # local profile: the remote row exists but is not contacted, and no object_info is fetched from it
+    rep = envcheck.run_checks(profile=profiles.default_profile(), store=store, force=True)
+    by = _by_name(rep)
+    assert rep.ok and by["backends"].detail == "local + box"
+    assert by["comfy:box"].status == "ok" and by["comfy:box"].data["probed"] is False and "not probed" in by["comfy:box"].detail
+    assert probed == [] and infos == ["local"]
+
+    # a profile using a remote workflow probes it (the job follows right away) and validates against its object_info
+    prof = _remote_animate(tmp_path, monkeypatch)
+    probed.clear(); infos.clear()
+    rep = envcheck.run_checks(profile=prof, store=store, force=True)
+    by = _by_name(rep)
+    assert probed == ["box"] and sorted(infos) == ["box", "local"]
+    assert by["comfy:box"].detail == "ComfyUI 0.35.0 on H100" and by["comfy:box"].data["probed"] is True
+    assert by["workflow:animate_remote"].status == "ok" and by["workflow:animate_remote"].data == {"used": True, "backend": "box"}
+    assert "@box" in by["workflow:animate_remote"].detail and "offline" not in by["workflow:animate_remote"].detail
+    assert by["workflow:animate"].data["used"] is False
+
+    # deep probes everything
+    probed.clear()
+    envcheck.run_checks(profile=profiles.default_profile(), store=store, deep=True, force=True)
+    assert probed == ["box"]
+
+
+def test_remote_workflow_is_checked_against_its_own_object_info(healthy, store, tmp_path, monkeypatch):
+    _remote_backend(tmp_path, monkeypatch)
+    prof = _remote_animate(tmp_path, monkeypatch)
+    monkeypatch.setattr(comfy, "wait_ready", lambda backend=None, **kw: {"system": {}, "devices": []})
+    monkeypatch.setattr(comfy, "object_info", lambda refresh=False, backend=None: healthy if backend.is_local else {})
+    rep = envcheck.run_checks(profile=prof, store=store, force=True)
+    by = _by_name(rep)
+    assert by["workflow:animate"].status == "ok"                # local ComfyUI has everything
+    assert by["workflow:animate_remote"].status == "fail" and not rep.ok  # the remote box has no nodes
+    assert "UnetLoaderGGUF" in by["workflow:animate_remote"].detail
+
+
+def test_remote_backend_down_fails_and_unconfigured_backend_is_flagged(healthy, store, tmp_path, monkeypatch):
+    _remote_backend(tmp_path, monkeypatch)
+    prof = _remote_animate(tmp_path, monkeypatch)
+
+    def down(backend=None, **kw):
+        raise comfy.ComfyError("box: GET /system_stats failed (ConnectionError)")
+
+    monkeypatch.setattr(comfy, "wait_ready", down)
+    rep = envcheck.run_checks(profile=prof, store=store, force=True)
+    by = _by_name(rep)
+    assert by["comfy:box"].status == "fail" and "remote ComfyUI unreachable" in by["comfy:box"].detail
+    assert by["workflow:animate_remote"].status == "ok" and "offline" in by["workflow:animate_remote"].detail
+
+    _remote_animate(tmp_path, monkeypatch, backend="ghost")
+    rep = envcheck.run_checks(profile=prof, store=store, force=True)
+    c = _by_name(rep)["workflow:animate_remote"]
+    assert c.status == "fail" and "backend 'ghost' is not configured" in c.detail
+
+
+def test_comfy_dirs_relaxed_when_only_remote_workflows_are_used(healthy, store, tmp_path, monkeypatch):
+    _remote_backend(tmp_path, monkeypatch)
+    prof = _remote_animate(tmp_path, monkeypatch)
+    monkeypatch.setattr(comfy, "wait_ready", lambda backend=None, **kw: {"system": {}, "devices": []})
+    monkeypatch.setattr(config, "COMFY_INPUT", tmp_path / "nope_in")
+    monkeypatch.setattr(config, "COMFY_OUTPUT", tmp_path / "nope_out")
+    # the default profile still uses local keyframe/faceswap workflows -> hard fail
+    rep = envcheck.run_checks(profile=prof, store=store, force=True)
+    assert _by_name(rep)["comfy_dirs"].status == "fail"
+    # a profile whose every workflow is remote: output dir created, input dir only a warning
+    remote_only = profiles.apply_overrides(prof, {"keyframe": {"workflow": "animate_remote"}, "face_swap": {"enabled": False}})
+    rep = envcheck.run_checks(profile=remote_only, store=store, force=True)
+    c = _by_name(rep)["comfy_dirs"]
+    assert c.status == "warn" and "input dir missing" in c.detail and (tmp_path / "nope_out").is_dir()
+    # no profile at all: the local install is assumed
+    rep = envcheck.run_checks(store=store, force=True)
+    assert _by_name(rep)["comfy_dirs"].status == "fail"
+
+
+def test_backends_file_error_is_a_fail_and_local_still_checked(healthy, store, tmp_path, monkeypatch):
+    from vorch import backends
+
+    monkeypatch.delenv("VORCH_TEST_MISSING_KEY", raising=False)
+    (tmp_path / "backends.yaml").write_text(
+        "backends:\n  m:\n    url: https://x\n    auth: modal-proxy\n    key_env: VORCH_TEST_MISSING_KEY\n    secret_env: VORCH_TEST_MISSING_KEY\n"
+    )
+    monkeypatch.setattr(config, "BACKENDS_FILE", tmp_path / "backends.yaml")
+    backends.reset_cache()
+    rep = envcheck.run_checks(store=store, force=True)
+    by = _by_name(rep)
+    assert by["backends"].status == "fail" and "VORCH_TEST_MISSING_KEY" in by["backends"].detail
+    assert by["comfy:local"].status == "ok" and "comfy:m" not in by and not rep.ok

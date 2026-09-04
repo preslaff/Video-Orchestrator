@@ -568,11 +568,21 @@ def _cmd_registry(args) -> int:
             print(f"{name:<16} INVALID      {err.splitlines()[0]}")
         return 0
     if args.registry_command == "validate":
-        info = comfy.object_info() if args.online else None
+        from . import backends
+
+        known = backends.load(force=True)
         specs = [reg.get(args.name)] if args.name else reg.list()
         bad = 0
+        infos: dict[str, dict | None] = {}
         for spec in specs:
-            problems = reg.validate(spec, object_info=info)
+            info = None
+            if args.online:
+                # each workflow is checked against *its* backend (or --backend)
+                bname = args.backend or spec.backend
+                if bname not in infos:
+                    infos[bname] = comfy.object_info(backend=bname)
+                info = infos[bname]
+            problems = reg.validate(spec, object_info=info, backends=known)
             status = "ok" if not problems else "PROBLEMS"
             print(f"{spec.name:<16} {status}")
             for pr in problems:
@@ -587,7 +597,7 @@ def _cmd_registry(args) -> int:
         print("error: this is a UI export; use 'Export (API)' in ComfyUI", file=sys.stderr)
         return 1
     if args.registry_command == "inspect":
-        info = comfy.object_info() if args.online else None
+        info = comfy.object_info(backend=args.backend) if args.online else None
         print(f"guessed kind: {registry_tools.guess_kind(wf)}")
         print(registry_tools.format_inspect(registry_tools.inspect_template(wf, info)))
         return 0
@@ -814,9 +824,11 @@ def build_parser() -> argparse.ArgumentParser:
     rv = rgs.add_parser("validate", help="check YAML vs template; --online also checks ComfyUI")
     rv.add_argument("name", nargs="?", default=None)
     rv.add_argument("--online", action="store_true")
+    rv.add_argument("--backend", default=None, help="check against this backend's ComfyUI instead of each workflow's own")
     ri = rgs.add_parser("inspect", help="list a template's nodes + literal inputs with role guesses")
     ri.add_argument("file")
     ri.add_argument("--online", action="store_true", help="show installed options per loader")
+    ri.add_argument("--backend", default=None, help="backend whose ComfyUI to ask (default local)")
     ra = rgs.add_parser("add", help="scaffold a registry YAML for a new template into the user dir")
     ra.add_argument("file")
     ra.add_argument("--name", default=None)

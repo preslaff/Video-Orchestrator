@@ -2,11 +2,15 @@
 
 A structured report (ok / warn / fail per check) the UI shows on the Setup
 page and the job submit consults: **fail** blocks a submit (unless forced),
-**warn** does not. Checks: database + migrations, ComfyUI (+ its input/output
-dirs), Gemma (+ an optional vision probe for the ``--mmproj`` mistake), ffmpeg,
-GPU headroom, every registered workflow (YAML vs template, and — when ComfyUI
+**warn** does not. Checks: database + migrations, the backends file, every
+ComfyUI backend (``comfy:<name>``; + the local input/output dirs), Gemma (+ an
+optional vision probe for the ``--mmproj`` mistake), ffmpeg, GPU headroom,
+every registered workflow (YAML vs template, and — when *its* backend
 answers — node classes and model files actually installed), the profile
 itself, and the export / projects roots.
+
+Remote backends are probed only when the selected profile uses a workflow on
+them, or with ``deep=True``: probing wakes a billed GPU container.
 """
 
 from __future__ import annotations
@@ -26,7 +30,8 @@ from typing import Any, Literal
 import psycopg
 import requests
 
-from . import config, db, registry, vram
+from . import backends, config, db, registry, vram
+from .backends import ComfyBackend
 from .clients import comfy, gemma
 
 log = logging.getLogger("vorch.envcheck")
@@ -132,32 +137,67 @@ def _check_database(store: Any | None) -> CheckResult:
     return CheckResult("database", "ok", f"schema version {version}", {"version": version})
 
 
-def _check_comfy() -> CheckResult:
+def _check_backends() -> tuple[CheckResult, dict[str, ComfyBackend]]:
+    """The backends file loads and its auth env vars exist. Always returns a
+    usable mapping (local only on failure)."""
     try:
-        r = requests.get(f"{config.COMFY_URL}/system_stats", timeout=3)
-        r.raise_for_status()
-        stats = r.json()
-    except (requests.RequestException, ValueError) as e:
-        return CheckResult("comfy", "fail", f"ComfyUI unreachable at {config.COMFY_URL}: {e}")
+        known = backends.load(force=True)
+    except backends.BackendError as e:
+        return CheckResult("backends", "fail", str(e), {"file": str(config.BACKENDS_FILE)}), {backends.LOCAL: backends.local()}
+    remote = [b.name for b in known.values() if b.remote]
+    detail = "local only" if not remote else "local + " + ", ".join(remote)
+    if not config.BACKENDS_FILE.is_file():
+        detail += f" (no {config.BACKENDS_FILE})"
+    return CheckResult("backends", "ok", detail, {
+        "file": str(config.BACKENDS_FILE), "backends": [b.to_dict() for b in known.values()],
+    }), known
+
+
+def _check_comfy(backend: ComfyBackend, *, probe: bool = True) -> CheckResult:
+    """``comfy:<name>``: is this ComfyUI reachable? ``probe=False`` records a
+    remote backend without contacting it (a probe wakes a billed container)."""
+    name = f"comfy:{backend.name}"
+    base = {"url": backend.url, "remote": backend.remote, "gpu": backend.gpu, "probed": probe}
+    if not probe:
+        return CheckResult(name, "ok", "not probed (remote GPU; probed when a selected profile uses it, or deep)", base)
+    try:
+        if backend.remote:
+            stats = comfy.wait_ready(backend)  # tolerate a cold start
+        else:
+            stats = comfy.system_stats(backend, timeout=3)
+    except (comfy.ComfyError, ValueError) as e:
+        where = "remote " if backend.remote else ""
+        return CheckResult(name, "fail", f"{where}ComfyUI unreachable at {backend.url}: {e}", base)
     sysinfo = stats.get("system", {})
     devices = stats.get("devices", [])
     data = {
-        "url": config.COMFY_URL,
+        **base,
         "version": sysinfo.get("comfyui_version"),
         "devices": [{"name": d.get("name"), "vram_total_mb": int(d.get("vram_total", 0) / 2**20)} for d in devices],
     }
-    return CheckResult("comfy", "ok", f"ComfyUI {data['version'] or '?'}", data)
+    gpu = f" on {devices[0].get('name')}" if devices and devices[0].get("name") else ""
+    return CheckResult(name, "ok", f"ComfyUI {data['version'] or '?'}{gpu}", data)
 
 
-def _check_comfy_dirs() -> CheckResult:
+def _check_comfy_dirs(local_used: bool = True) -> CheckResult:
+    """The local ComfyUI input/output dirs. A hard fail only when a local
+    workflow is in use; with remote-only workflows the output dir is merely
+    created (downloads land there) and a missing input dir is a warning."""
     problems = []
     for label, p in (("input", config.COMFY_INPUT), ("output", config.COMFY_OUTPUT)):
         if not p.is_dir():
+            if label == "output" and not local_used:
+                try:
+                    p.mkdir(parents=True, exist_ok=True)
+                    continue
+                except OSError as e:
+                    problems.append(f"output dir cannot be created: {p} ({e})")
+                    continue
             problems.append(f"{label} dir missing: {p}")
         elif not os.access(p, os.W_OK):
             problems.append(f"{label} dir not writable: {p}")
     if problems:
-        return CheckResult("comfy_dirs", "fail", "; ".join(problems))
+        return CheckResult("comfy_dirs", "fail" if local_used else "warn", "; ".join(problems))
     return CheckResult("comfy_dirs", "ok", f"{config.COMFY_INPUT} / {config.COMFY_OUTPUT}")
 
 
@@ -214,28 +254,35 @@ def _check_gpu() -> CheckResult:
     return CheckResult("gpu", "ok", f"{snap['free']} / {snap['total']} MB free", snap)
 
 
-def _object_info(comfy_ok: bool, force: bool) -> dict | None:
-    if not comfy_ok:
+def _object_info(backend: ComfyBackend, reachable: bool, force: bool) -> dict | None:
+    if not reachable:
         return None
     try:
-        return comfy.object_info(refresh=force)
+        return comfy.object_info(refresh=force, backend=backend)
     except Exception as e:  # noqa: BLE001
-        log.warning("envcheck: /object_info failed: %s", e)
+        log.warning("envcheck: %s /object_info failed: %s", backend.name, e)
         return None
 
 
-def _check_workflows(reg: registry.Registry, used: set[str], object_info: dict | None) -> list[CheckResult]:
+def _check_workflows(
+    reg: registry.Registry, used: set[str], infos: dict[str, dict | None],
+    known: dict[str, ComfyBackend] | None = None,
+) -> list[CheckResult]:
+    """One row per workflow, validated against **its own** backend's object_info."""
     out: list[CheckResult] = []
     for spec in reg.list():
-        problems = reg.validate(spec, object_info=object_info)
+        object_info = infos.get(spec.backend)
+        problems = reg.validate(spec, object_info=object_info, backends=known)
         in_use = spec.name in used
+        data = {"used": in_use, "backend": spec.backend}
+        tag = "" if spec.backend == backends.LOCAL else f" @{spec.backend}"
         if not problems:
-            detail = spec.template.name + ("" if object_info is not None else " (offline check)")
-            out.append(CheckResult(f"workflow:{spec.name}", "ok", detail, {"used": in_use}))
+            detail = spec.template.name + tag + ("" if object_info is not None else " (offline check)")
+            out.append(CheckResult(f"workflow:{spec.name}", "ok", detail, data))
             continue
         out.append(CheckResult(
             f"workflow:{spec.name}", "fail" if in_use else "warn", "; ".join(problems),
-            {"used": in_use, "problems": problems},
+            {**data, "problems": problems},
         ))
     for name, err in reg.errors.items():
         out.append(CheckResult(f"workflow:{name}", "warn", f"invalid user workflow: {err.splitlines()[0]}"))
@@ -293,18 +340,34 @@ def run_checks(
 
     t0 = time.monotonic()
     checks: list[CheckResult] = [_check_database(store)]
-    comfy_res = _check_comfy()
-    checks += [comfy_res, _check_comfy_dirs()]
+    backends_res, known = _check_backends()
+    checks.append(backends_res)
+
+    reg = registry.load_registry(force=force)
+    used = set(profile.workflows_used()) if profile is not None else set()
+    used_backends = {reg.get(w).backend for w in used if w in reg}
+    # No profile -> assume the local ComfyUI matters (the default install).
+    local_used = profile is None or not used_backends or any(
+        known[b].is_local for b in used_backends if b in known
+    )
+
+    comfy_res: dict[str, CheckResult] = {}
+    for b in known.values():
+        probe = b.is_local or deep or b.name in used_backends
+        comfy_res[b.name] = _check_comfy(b, probe=probe)
+    checks += list(comfy_res.values())
+    checks.append(_check_comfy_dirs(local_used))
     gemma_res = _check_gemma()
     checks.append(gemma_res)
     if deep and gemma_res.status == "ok":
         checks.append(_check_gemma_vision())
     checks += [_check_tool("ffmpeg"), _check_tool("ffprobe"), _check_gpu()]
 
-    reg = registry.load_registry(force=force)
-    used = set(profile.workflows_used()) if profile is not None else set()
-    info = _object_info(comfy_res.status == "ok", force)
-    checks += _check_workflows(reg, used, info)
+    infos = {
+        name: _object_info(known[name], res.status == "ok" and bool(res.data.get("probed")), force)
+        for name, res in comfy_res.items()
+    }
+    checks += _check_workflows(reg, used, infos, known)
     checks.append(_check_profile(profile, reg))
     checks.append(_check_dir("export_root", projects_mod.export_root(project)))
     checks.append(_check_dir("projects_root", config.PROJECTS_ROOT))

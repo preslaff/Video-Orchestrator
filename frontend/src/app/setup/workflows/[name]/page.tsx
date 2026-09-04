@@ -45,6 +45,7 @@ export default function WorkflowPage({ params }: { params: Promise<{ name: strin
               <div><dt className="text-xs text-neutral-500">file</dt><dd className="font-mono text-xs">{w.template}</dd></div>
               <div><dt className="text-xs text-neutral-500">output</dt><dd>{w.outputs.type ?? '?'} from node(s) {w.outputs.nodes.join(', ') || 'any'}</dd></div>
               <div><dt className="text-xs text-neutral-500">timeout</dt><dd>{w.timeout ? `${w.timeout}s` : 'default'}</dd></div>
+              <div><dt className="text-xs text-neutral-500">backend</dt><dd>{w.backend}{w.backend !== 'local' && <span className="ml-1 text-xs text-neutral-500">(remote ComfyUI; outputs downloaded)</span>}</dd></div>
               {w.tags.length > 0 && <div><dt className="text-xs text-neutral-500">tags</dt><dd>{w.tags.join(', ')}</dd></div>}
             </dl>
           </Card>

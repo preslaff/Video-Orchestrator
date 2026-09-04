@@ -5,6 +5,17 @@ import { errorMessage } from '@/api/client'
 import { useConfig, useEnv, useProfiles, useRecheckEnv } from '@/hooks/useSetup'
 import { Button, Card, Empty, ErrorBox, fmtTime } from '@/components/ui'
 
+/** Config values are scalars, except `backends` (a list of ComfyUI endpoints, never with secrets). */
+function describeConfig(v: unknown): string {
+  if (Array.isArray(v)) {
+    return v.map((b) => {
+      const o = b as { name?: string; url?: string; gpu?: string | null; remote?: boolean }
+      return o && typeof o === 'object' && o.name ? `${o.name}${o.remote ? ` (${o.gpu ?? 'remote'}) ${o.url ?? ''}` : ` ${o.url ?? ''}`}` : String(b)
+    }).join(' · ')
+  }
+  return v == null ? '—' : String(v)
+}
+
 const STYLE: Record<string, string> = { ok: 'bg-green-100 text-green-800', warn: 'bg-amber-100 text-amber-900', fail: 'bg-red-100 text-red-800' }
 
 export default function EnvironmentPage() {
@@ -42,7 +53,7 @@ export default function EnvironmentPage() {
                 {report.checks.map((c) => (
                   <tr key={c.name} className="border-t border-neutral-100 align-top">
                     <td className="py-1 pr-3"><span className={`rounded px-2 py-0.5 text-xs font-medium ${STYLE[c.status]}`}>{c.status}</span></td>
-                    <td className="py-1 pr-3 font-medium whitespace-nowrap">{c.name}{c.data?.used === true ? <span className="ml-1 text-xs font-normal text-neutral-500">(used)</span> : null}</td>
+                    <td className="py-1 pr-3 font-medium whitespace-nowrap">{c.name}{c.data?.used === true ? <span className="ml-1 text-xs font-normal text-neutral-500">(used)</span> : null}{typeof c.data?.backend === 'string' && c.data.backend !== 'local' ? <span className="ml-1 rounded bg-sky-100 px-1 text-xs font-normal text-sky-800">{c.data.backend}</span> : null}</td>
                     <td className="py-1 text-neutral-700">{c.detail}{Array.isArray(c.data?.problems) && (
                       <ul className="mt-1 list-inside list-disc text-xs text-neutral-600">{(c.data.problems as string[]).map((p) => <li key={p}>{p}</li>)}</ul>
                     )}</td>
@@ -57,7 +68,7 @@ export default function EnvironmentPage() {
         {cfg.data ? (
           <dl className="space-y-1 text-xs">
             {Object.entries(cfg.data).map(([k, v]) => (
-              <div key={k} className="grid grid-cols-[9rem_1fr] gap-2"><dt className="text-neutral-500">{k}</dt><dd className="break-all font-mono">{String(v)}</dd></div>
+              <div key={k} className="grid grid-cols-[9rem_1fr] gap-2"><dt className="text-neutral-500">{k}</dt><dd className="break-all font-mono">{describeConfig(v)}</dd></div>
             ))}
           </dl>
         ) : <Empty>Loading…</Empty>}

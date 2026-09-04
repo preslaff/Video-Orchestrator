@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from .. import config, db, envcheck, profiles
+from .. import backends, config, db, envcheck, profiles
 from ..state import Store
 from .deps import get_store
 from .errors import ApiError
@@ -39,8 +39,16 @@ def _masked_dsn(dsn: str) -> str:
     return make_conninfo(**parts)
 
 
+def _backends() -> tuple[list[dict], str | None]:
+    try:
+        return [b.to_dict() for b in backends.load(force=True).values()], None
+    except backends.BackendError as e:
+        return [backends.local().to_dict()], str(e)
+
+
 @router.get("/config")
 async def effective_config(store: Store = Depends(get_store)) -> dict:
+    known, backends_error = _backends()
     return {
         "comfy_url": config.COMFY_URL,
         "gemma_url": config.GEMMA_URL,
@@ -55,4 +63,7 @@ async def effective_config(store: Store = Depends(get_store)) -> dict:
         "latest_schema_version": db.latest_version(),
         "ui_url": config.UI_URL,
         "vram_guard_mb": config.VRAM_GUARD_MB,
+        "backends_file": str(config.BACKENDS_FILE),
+        "backends": known,  # never carries auth headers
+        "backends_error": backends_error,
     }

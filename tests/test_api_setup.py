@@ -53,6 +53,8 @@ def test_env_and_config(client, monkeypatch):
     cfg = client.get("/api/setup/config").json()
     assert cfg["schema_version"] == cfg["latest_schema_version"] >= 2 and "password" not in cfg["database_url"]
     assert cfg["export_root"].endswith("export")
+    assert [b["name"] for b in cfg["backends"]] == ["local"] and cfg["backends_error"] is None
+    assert "headers" not in cfg["backends"][0] and cfg["backends_file"].endswith("backends.yaml")
 
 
 def test_workflows_listing_and_detail(client):
