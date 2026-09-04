@@ -48,6 +48,7 @@ REACTOR_RESTORE_MODEL = "GFPGANv1.4.pth"
 
 # --- Behaviour ---------------------------------------------------------------
 RUN_TIMEOUT = int(os.environ.get("VORCH_RUN_TIMEOUT", "600"))  # seconds to wait per workflow
+ASSEMBLE_TIMEOUT = int(os.environ.get("VORCH_ASSEMBLE_TIMEOUT", "600"))  # ffmpeg clip assembly
 
 # Seeds. 0 is our "pick a random one" sentinel — NOT sent to ComfyUI verbatim
 # (the API has no randomize step, so seed 0 would be deterministic). resolve_seed

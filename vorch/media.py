@@ -8,9 +8,16 @@ skills/gemma-evaluate.md.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import subprocess
+from dataclasses import dataclass
+from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path
+
+from . import config
 
 log = logging.getLogger("vorch.media")
 
@@ -120,3 +127,239 @@ def sample_frames(video_path: str | Path, n: int = 5, dest_dir: str | Path | Non
             raise MediaError(f"ffmpeg produced no frame {idx} for {video_path}")
         out.append(dest)
     return out
+
+
+# --- clip assembly (ffmpeg xfade) -----------------------------------------------
+
+# Fallback list (ffmpeg 6.1) used when `ffmpeg -h filter=xfade` cannot be parsed.
+_XFADE_FALLBACK = (
+    "fade", "wipeleft", "wiperight", "wipeup", "wipedown", "slideleft", "slideright", "slideup",
+    "slidedown", "circlecrop", "rectcrop", "distance", "fadeblack", "fadewhite", "radial",
+    "smoothleft", "smoothright", "smoothup", "smoothdown", "circleopen", "circleclose",
+    "vertopen", "vertclose", "horzopen", "horzclose", "dissolve", "pixelize", "diagtl", "diagtr",
+    "diagbl", "diagbr", "hlslice", "hrslice", "vuslice", "vdslice", "hblur", "fadegrays",
+    "wipetl", "wipetr", "wipebl", "wipebr", "squeezeh", "squeezev", "zoomin", "fadefast",
+    "fadeslow", "hlwind", "hrwind", "vuwind", "vdwind", "coverleft", "coverright", "coverup",
+    "coverdown", "revealleft", "revealright", "revealup", "revealdown",
+)
+ENCODERS = ("libx264", "h264_nvenc")
+VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv")
+
+
+@lru_cache(maxsize=1)
+def transitions() -> tuple[str, ...]:
+    """``("none", <xfade transitions of the installed ffmpeg>...)``; ``custom`` excluded."""
+    names: list[str] = []
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-h", "filter=xfade"], capture_output=True,
+                             text=True, timeout=10).stdout
+        block = out.split("transition", 1)[1] if "transition" in out else ""
+        for line in block.splitlines():
+            parts = line.split()
+            if not parts or not line.startswith(" "):
+                continue
+            name = parts[0]
+            if name in ("duration", "offset", "expr"):
+                break
+            if name.isidentifier() and name != "custom" and name not in names:
+                names.append(name)
+    except (OSError, subprocess.SubprocessError, IndexError):
+        names = []
+    if "fade" not in names:
+        names = list(_XFADE_FALLBACK)
+    return ("none", *names)
+
+
+@dataclass(frozen=True)
+class MediaInfo:
+    width: int
+    height: int
+    fps: float
+    duration: float
+    nb_frames: int | None
+    codec: str
+    has_audio: bool
+
+    @property
+    def frame_duration(self) -> float:
+        """Exact duration from the frame count when known (container durations are rounded)."""
+        if self.nb_frames and self.fps:
+            return self.nb_frames / self.fps
+        return self.duration
+
+
+@dataclass(frozen=True)
+class Cut:
+    """The transition between two consecutive clips; ``none`` is a hard cut."""
+
+    transition: str = "fade"
+    duration: float = 0.5
+
+
+def probe(path: str | Path) -> MediaInfo:
+    """One ffprobe call: size, fps, duration, frame count, codec, audio presence."""
+    path = Path(path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"media not found: {path}")
+    try:
+        out = subprocess.check_output(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "stream=codec_type,codec_name,width,height,r_frame_rate,nb_frames,duration",
+             "-show_entries", "format=duration", "-of", "json", str(path)],
+            stderr=subprocess.STDOUT, timeout=60,
+        )
+        data = json.loads(out.decode())
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
+        raise MediaError(f"ffprobe failed for {path}: {e}") from e
+    streams = data.get("streams", [])
+    video = next((s for s in streams if s.get("codec_type") == "video"), None)
+    if video is None:
+        raise MediaError(f"no video stream in {path}")
+    try:
+        fps = float(Fraction(video.get("r_frame_rate", "0/1")))
+    except (ValueError, ZeroDivisionError):
+        fps = 0.0
+    duration = float(video.get("duration") or data.get("format", {}).get("duration") or 0.0)
+    nb = video.get("nb_frames")
+    return MediaInfo(
+        width=int(video.get("width", 0)), height=int(video.get("height", 0)), fps=fps,
+        duration=duration, nb_frames=int(nb) if nb and str(nb).isdigit() else None,
+        codec=str(video.get("codec_name", "")),
+        has_audio=any(s.get("codec_type") == "audio" for s in streams),
+    )
+
+
+def total_duration(durations: list[float], cuts: list[Cut]) -> float:
+    return sum(durations) - sum(c.duration for c in cuts if c.transition != "none")
+
+
+def validate_cuts(durations: list[float], cuts: list[Cut], *, fps: float) -> None:
+    """Raise ValueError (naming the cut) when a cut cannot be rendered as asked."""
+    if not durations:
+        raise ValueError("at least one clip is required")
+    if len(cuts) != len(durations) - 1:
+        raise ValueError(f"{len(durations)} clip(s) need {len(durations) - 1} cut(s), got {len(cuts)}")
+    known = transitions()
+    frame = 1.0 / fps if fps else 0.0
+    for i, c in enumerate(cuts):
+        if c.transition not in known:
+            raise ValueError(f"cut {i + 1}: unknown transition {c.transition!r}")
+        if c.transition == "none":
+            continue
+        if c.duration < frame or c.duration <= 0:
+            raise ValueError(f"cut {i + 1}: duration {c.duration} s is shorter than one frame ({frame:.3f} s)")
+        limit = min(durations[i], durations[i + 1])
+        if c.duration >= limit:
+            raise ValueError(f"cut {i + 1}: transition {c.duration} s must be shorter than both clips (shortest {limit:.2f} s)")
+    # A clip must keep at least one frame of its own between its in- and out-transition.
+    for i, d in enumerate(durations):
+        t_in = cuts[i - 1].duration if i > 0 and cuts[i - 1].transition != "none" else 0.0
+        t_out = cuts[i].duration if i < len(cuts) and cuts[i].transition != "none" else 0.0
+        if t_in + t_out > d - frame:
+            raise ValueError(f"clip {i + 1}: transitions in ({t_in} s) + out ({t_out} s) exceed its {d:.2f} s")
+
+
+def _norm(width: int, height: int, fps: float) -> str:
+    fps_s = f"{fps:g}"
+    return (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps_s},format=yuv420p,"
+            f"settb=AVTB,setpts=PTS-STARTPTS")
+
+
+def build_filtergraph(durations: list[float], cuts: list[Cut], *, width: int, height: int, fps: float) -> tuple[str, str]:
+    """``(filter_complex, output_label)`` for ``xfade`` chains joined by ``concat`` at hard cuts.
+
+    Inside a chain the xfade offset is the duration of the chain so far minus the
+    transition; groups (split at every ``none``) are concatenated.
+    """
+    n = len(durations)
+    parts = [f"[{i}:v]{_norm(width, height, fps)}[v{i}]" for i in range(n)]
+    groups: list[list[int]] = [[0]]
+    for i, c in enumerate(cuts):
+        if c.transition == "none":
+            groups.append([i + 1])
+        else:
+            groups[-1].append(i + 1)
+    group_labels: list[str] = []
+    for g, members in enumerate(groups):
+        if len(members) == 1:
+            group_labels.append(f"[v{members[0]}]")
+            continue
+        current = f"[v{members[0]}]"
+        elapsed = durations[members[0]]
+        for k, idx in enumerate(members[1:]):
+            c = cuts[idx - 1]
+            offset = elapsed - c.duration
+            last = k == len(members) - 2
+            label = f"[g{g}]" if last else f"[x{g}_{k}]"
+            parts.append(f"{current}[v{idx}]xfade=transition={c.transition}:duration={c.duration:g}:offset={offset:.4f}{label}")
+            current = label
+            elapsed = offset + durations[idx]
+        group_labels.append(current)
+    if len(group_labels) == 1:
+        out = group_labels[0]
+        if out == "[v0]":
+            return ";".join(parts), "[v0]"
+        return ";".join(parts), out
+    parts.append("".join(group_labels) + f"concat=n={len(group_labels)}:v=1:a=0,format=yuv420p[out]")
+    return ";".join(parts), "[out]"
+
+
+def assemble(
+    clips: list[str | Path],
+    cuts: list[Cut],
+    dest: str | Path,
+    *,
+    fps: float | None = None,
+    size: tuple[int, int] | None = None,
+    crf: int = 18,
+    preset: str = "medium",
+    encoder: str = "libx264",
+    timeout: float | None = None,
+) -> Path:
+    """Join ``clips`` into one h264 mp4 (no audio) with per-cut xfade transitions.
+
+    Size and fps default to the first clip. Written atomically (``.part`` then
+    rename). Raises ValueError for a bad spec, MediaError when ffmpeg fails.
+    """
+    paths = [Path(c).expanduser() for c in clips]
+    for p in paths:
+        if not p.is_file():
+            raise FileNotFoundError(f"clip not found: {p}")
+    if encoder not in ENCODERS:
+        raise ValueError(f"encoder must be one of {ENCODERS}, got {encoder!r}")
+    infos = [probe(p) for p in paths]
+    fps = float(fps or infos[0].fps or config.WAN_FPS)
+    width, height = size or (infos[0].width, infos[0].height)
+    durations = [i.frame_duration for i in infos]
+    validate_cuts(durations, cuts, fps=fps)
+    graph, out = build_filtergraph(durations, cuts, width=width, height=height, fps=fps)
+
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+    for p in paths:
+        cmd += ["-i", str(p)]
+    cmd += ["-filter_complex", graph, "-map", out, "-an"]
+    if encoder == "h264_nvenc":
+        cmd += ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
+    else:
+        cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+    cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", str(part)]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                       timeout=timeout or config.ASSEMBLE_TIMEOUT)
+    except subprocess.CalledProcessError as e:
+        part.unlink(missing_ok=True)
+        tail = (e.stderr or b"").decode(errors="replace")[-2000:].strip()
+        raise MediaError(f"ffmpeg assembly failed: {tail or e}") from e
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        part.unlink(missing_ok=True)
+        raise MediaError(f"ffmpeg assembly failed: {e}") from e
+    if not part.is_file() or part.stat().st_size == 0:
+        part.unlink(missing_ok=True)
+        raise MediaError("ffmpeg produced no output")
+    os.replace(part, dest)
+    log.info("assembled %d clip(s) -> %s (%.2fs)", len(paths), dest, total_duration(durations, cuts))
+    return dest
