@@ -138,6 +138,29 @@ if needed. Global client defaults: `VORCH_COMFY_REQUEST_TIMEOUT` (30 s), `VORCH_
   (downloads land there) and merely warns about a missing input dir.
 - `/api/setup/config` lists the backends (no secrets); the Workflows page shows a backend column.
 
+### Dry run without Modal (verified 2026-09-05)
+
+The whole seam can be exercised against the local ComfyUI by declaring it a second, "remote"
+backend — no cloud account needed:
+
+```yaml
+# a scratch backends file (VORCH_BACKENDS_FILE=…/backends.yaml)
+backends:
+  loopback:
+    url: http://localhost:8188
+    remote: true          # readiness wait, /view download, no local VRAM reclaim
+    cold_start_grace: 10
+    gpu: RTX 5070 Ti (loopback)
+```
+
+With a copy of `workflows/keyframe.yaml` as `keyframe_remote` (`backend: loopback`) in a
+scratch `VORCH_USER_WORKFLOW_DIR`: `vorch setup check` lists `comfy:loopback` as *not probed*
+and the workflow row as `@loopback (offline check)`; `--deep` probes it and validates the
+workflow against its `/object_info`; `vorch keyframe … --workflow keyframe_remote` waits for
+readiness, submits, polls, and downloads the result as
+`COMFY_OUTPUT/Flux2-Klein_00057_.loopback.png` (8 s end to end at 512², 8 steps) with a manifest
+recording `backend: loopback` and the GPU label. Nothing in the local default path changes.
+
 ## 4. Modal deployment (Phase B)
 
 Install once: `pip install modal && modal setup` (browser login). Create a proxy auth token in
@@ -317,6 +340,6 @@ Media transfer is 5–20 MB per clip; Modal does not itemise egress today (verif
 5. Run a 1-scene job on `cloud_cinematic_16x9` (480p); confirm the download name
    `s00_clip_00001_.modal-h100.mp4`, the manifest's `backend`/`gpu`, the media URL, export and
    assembly.
-6. Regenerate the scene: the new clip gets the `-2` suffix, nothing is overwritten.
+6. Regenerate the scene: a same-named remote file gets the `-1` suffix (`<stem>.<backend>-1<ext>`), nothing is overwritten.
 7. Benchmark per-clip time at 480p and 720p; update §8; set `scaledown_window` for your rhythm.
 8. Read the Modal usage page after the day and compare with §8.
