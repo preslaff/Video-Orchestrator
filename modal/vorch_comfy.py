@@ -60,6 +60,9 @@ image = (
         f"pip install -r {COMFY_DIR}/requirements.txt",
         *_node_commands(),
     )
+    # Modal can only mount a Volume on an empty path; the clone ships `models/`
+    # with placeholder files and subfolders, so drop it (separate layer: cheap rebuild).
+    .run_commands(f"rm -rf {COMFY_DIR}/models")
 )
 
 models = modal.Volume.from_name("vorch-models", create_if_missing=True)
