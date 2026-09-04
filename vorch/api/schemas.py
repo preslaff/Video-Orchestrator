@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 T = TypeVar("T")
 
@@ -206,6 +206,9 @@ class ErrorEnvelope(BaseModel):
 class AssemblyItemIn(BaseModel):
     scene_index: int
     source: Literal["final", "raw"] = "final"
+    target_seconds: float | None = Field(
+        None, gt=0, description="play the clip in N seconds (0.25x–4x of its length); omit for natural speed"
+    )
 
 
 class AssemblyCutIn(BaseModel):
@@ -223,6 +226,7 @@ class AssemblySpecIn(BaseModel):
     height: int | None = None
     crf: int = 18
     encoder: Literal["libx264", "h264_nvenc"] = "libx264"
+    smooth: bool = False   # motion-interpolated slow motion for clips slower than 1x (much slower render)
 
 
 class AssemblyClipOut(BaseModel):

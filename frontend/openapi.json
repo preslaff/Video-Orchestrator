@@ -1803,6 +1803,19 @@
             ],
             "title": "Source",
             "default": "final"
+          },
+          "target_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Seconds",
+            "description": "play the clip in N seconds (0.25x–4x of its length); omit for natural speed"
           }
         },
         "type": "object",
@@ -1995,6 +2008,11 @@
             ],
             "title": "Encoder",
             "default": "libx264"
+          },
+          "smooth": {
+            "type": "boolean",
+            "title": "Smooth",
+            "default": false
           }
         },
         "type": "object",

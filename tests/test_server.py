@@ -586,3 +586,12 @@ def test_assembly_versions_select_and_delete_routes(client, stub_media, tmp_path
     client.app.state.manager._active.discard(job.id)
     assert client.delete(f"/api/jobs/{job.id}/assemble/versions/1").status_code == 200
     assert client.get(f"/api/jobs/{job.id}/assemble").json()["record"] is None
+
+
+def test_assembly_speed_validation_routes(client, stub_media):
+    job = _done_video_job(client)
+    r = client.post(f"/api/jobs/{job.id}/assemble", json={"items": [{"scene_index": 0, "target_seconds": 99}, {"scene_index": 1}]})
+    assert r.status_code == 400 and "outside" in r.json()["error"]["message"]
+    assert client.post(f"/api/jobs/{job.id}/assemble", json={"items": [{"scene_index": 0, "target_seconds": -1}]}).status_code == 422
+    st = client.get(f"/api/jobs/{job.id}/assemble").json()
+    assert st["default_spec"]["items"][0]["target_seconds"] is None and st["default_spec"]["smooth"] is False

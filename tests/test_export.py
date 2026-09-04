@@ -131,7 +131,9 @@ def test_assembly_listed_in_plan_manifest_and_readme(store, tmp_path):
     asm = _media(tmp_path, "vorch/abc/assembly.mp4")
     provenance.write_manifest(asm, "assemble", {"spec": {"cuts": []}}, {"kind": "assembly"})
     job.assembly = {"path": asm, "ok": True, "n_clips": 2, "duration": 5.62,
-                    "spec": {"cuts": [{"transition": "fade", "duration": 0.5}, {"transition": "none", "duration": 0.5}]}}
+                    "spec": {"cuts": [{"transition": "fade", "duration": 0.5}, {"transition": "none", "duration": 0.5}],
+                             "items": [{"scene_index": 0, "target_seconds": 6.125, "speed": 0.5}, {"scene_index": 1}],
+                             "smooth": True}}
     rec = export.export_job(store, job, None)
     assert "assembly.mp4" in rec.files
     dest = next((tmp_path / "export" / "_unassigned").glob("*"))
@@ -140,7 +142,8 @@ def test_assembly_listed_in_plan_manifest_and_readme(store, tmp_path):
     m = json.loads((dest / "manifest.json").read_text())
     assert m["assembly"]["n_clips"] == 2
     readme = (dest / "README.txt").read_text()
-    assert "assembly.mp4: 2 clip(s), 5.62s, cuts: fade 0.5s, none" in readme and "ready cut" in readme
+    assert "assembly.mp4: 2 clip(s), 5.62s, cuts: fade 0.5s, none, speed: s01 0.5× (smooth slow motion)" in readme
+    assert "ready cut" in readme
 
 
 def test_failed_assembly_not_exported(tmp_path):

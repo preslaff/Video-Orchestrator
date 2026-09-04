@@ -185,3 +185,47 @@ def test_failed_run_does_not_become_a_version(tmp_path, monkeypatch):
     assert job.assembly["ok"] is False and job.assembly["version"] == 2
     assert [v["version"] for v in assembly.versions_of(job)] == [1]   # failures are not kept as versions
     assert assembly.next_version(job) == 2                             # the number is reused
+
+
+def test_resolve_derives_speed_from_target_and_validates(tmp_path):
+    job = _job(tmp_path)
+    spec, paths = assembly.resolve(job, {
+        "items": [{"scene_index": 0, "target_seconds": 6.125}, {"scene_index": 1}, {"scene_index": 2, "target_seconds": 1.53125}],
+        "cuts": [{"transition": "fade"}, {"transition": "fade"}], "smooth": True,
+    })
+    assert spec.items[0].speed == pytest.approx(0.5) and spec.items[1].speed == 1.0 and spec.items[1].target_seconds is None
+    assert spec.items[2].speed == pytest.approx(2.0) and spec.smooth is True
+    assert spec.speeds == pytest.approx([0.5, 1.0, 2.0])
+    for bad, msg in [
+        ({"items": [{"scene_index": 0, "target_seconds": 20}]}, "outside 0.77–12.25 s"),
+        ({"items": [{"scene_index": 0, "target_seconds": 0}]}, "positive"),
+        # 2x speed leaves a 1.53 s clip: a 1.5 s fade must fail against the RETIMED length
+        ({"items": [{"scene_index": 0, "target_seconds": 1.53125}, {"scene_index": 1}],
+          "cuts": [{"transition": "fade", "duration": 1.5}]}, "exceed|shorter than both"),
+    ]:
+        with pytest.raises(ValueError, match=msg):
+            assembly.resolve(job, bad)
+
+
+def test_run_passes_speeds_and_reports_retimed_total(tmp_path, monkeypatch):
+    job = _job(tmp_path)
+    spec, paths = assembly.resolve(job, {
+        "items": [{"scene_index": 0, "target_seconds": 6.125}, {"scene_index": 1}, {"scene_index": 2}],
+        "cuts": [{"transition": "fade"}, {"transition": "none"}], "smooth": True,
+    })
+    seen, events = {}, []
+
+    def fake_assemble(clips, cuts, dest, **kw):
+        seen.update(kw)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"mp4")
+        return dest
+
+    monkeypatch.setattr(media, "assemble", fake_assemble)
+    rec = assembly.run(job, spec, paths, emit=events.append)
+    assert rec.ok and seen["speeds"] == pytest.approx([0.5, 1, 1]) and seen["smooth"] is True
+    assert events[0]["seconds"] == pytest.approx(6.125 + 3.0625 + 3.0625 - 0.5, abs=0.01)
+    assert events[0]["smooth"] is True and events[0]["retimed"] == 1
+    assert rec.spec["items"][0]["target_seconds"] == 6.125 and rec.spec["smooth"] is True
+    round_trip = assembly.AssemblySpec.from_dict(rec.spec)
+    assert round_trip.items[0].speed == pytest.approx(0.5) and round_trip.smooth is True

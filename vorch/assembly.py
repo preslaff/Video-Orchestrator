@@ -36,6 +36,8 @@ def _now() -> str:
 class AssemblyItem:
     scene_index: int
     source: str = "final"      # final = scene.video_path (post-processed), raw = scene.raw_video_path
+    target_seconds: float | None = None   # play the clip in N seconds; None = natural length
+    speed: float = 1.0                    # derived by resolve(): source duration / target_seconds
 
 
 @dataclass
@@ -47,24 +49,39 @@ class AssemblySpec:
     height: int | None = None
     crf: int = 18
     encoder: str = "libx264"
+    smooth: bool = False            # motion-interpolated slow motion (slow render)
+
+    @property
+    def speeds(self) -> list[float]:
+        return [i.speed for i in self.items]
 
     def to_dict(self) -> dict:
         return {
             "items": [asdict(i) for i in self.items],
             "cuts": [asdict(c) for c in self.cuts],
             "fps": self.fps, "width": self.width, "height": self.height,
-            "crf": self.crf, "encoder": self.encoder,
+            "crf": self.crf, "encoder": self.encoder, "smooth": self.smooth,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "AssemblySpec":
         return cls(
-            items=[AssemblyItem(int(i["scene_index"]), str(i.get("source", "final"))) for i in d.get("items", [])],
+            items=[_item_from_dict(i) for i in d.get("items", [])],
             cuts=[Cut(str(c.get("transition", DEFAULT_TRANSITION)), float(c.get("duration", DEFAULT_CUT_SECONDS)))
                   for c in d.get("cuts", [])],
             fps=d.get("fps"), width=d.get("width"), height=d.get("height"),
             crf=int(d.get("crf", 18)), encoder=str(d.get("encoder", "libx264")),
+            smooth=bool(d.get("smooth", False)),
         )
+
+
+def _item_from_dict(i: dict) -> AssemblyItem:
+    target = i.get("target_seconds")
+    return AssemblyItem(
+        int(i["scene_index"]), str(i.get("source", "final")),
+        target_seconds=float(target) if target is not None else None,
+        speed=float(i.get("speed", 1.0) or 1.0),
+    )
 
 
 @dataclass
@@ -240,8 +257,11 @@ def resolve(job: Job, spec: dict | None) -> tuple[AssemblySpec, list[Path]]:
     if not base.items:
         raise ValueError("the job has no clips yet")
     d = dict(spec or {})
-    items = [AssemblyItem(int(i["scene_index"]), str(i.get("source", "final"))) for i in d["items"]] \
-        if d.get("items") is not None else base.items
+    items = [_item_from_dict(i) for i in d["items"]] if d.get("items") is not None else base.items
+    for it in items:
+        it.speed = 1.0  # derived below from the probed source length
+        if it.target_seconds is not None and it.target_seconds <= 0:
+            raise ValueError(f"scene {it.scene_index + 1}: target_seconds must be positive")
     if not items:
         raise ValueError("select at least one clip")
     by_index = {s.index: s for s in job.scenes}
@@ -286,11 +306,23 @@ def resolve(job: Job, spec: dict | None) -> tuple[AssemblySpec, list[Path]]:
         if v is not None and (not isinstance(v, int) or v <= 0):
             raise ValueError(f"{key} must be a positive integer")
     resolved = AssemblySpec(items=items, cuts=cuts, fps=d.get("fps"), width=d.get("width"),
-                            height=d.get("height"), crf=crf, encoder=encoder)
-    # Transition lengths vs clip lengths (needs the real durations).
+                            height=d.get("height"), crf=crf, encoder=encoder, smooth=bool(d.get("smooth", False)))
+    # Speeds from target durations, then transition lengths vs the RETIMED clip lengths.
     infos = [media.probe(p) for p in paths]
+    for it, info in zip(items, infos):
+        if it.target_seconds is None:
+            continue
+        src = info.frame_duration
+        speed = src / it.target_seconds
+        if not media.MIN_SPEED <= speed <= media.MAX_SPEED:
+            raise ValueError(
+                f"scene {it.scene_index + 1}: target {it.target_seconds:g} s is outside "
+                f"{src / media.MAX_SPEED:.2f}–{src * media.MAX_SPEED:.2f} s "
+                f"({media.MIN_SPEED:g}×–{media.MAX_SPEED:g}× of its {src:.2f} s clip)"
+            )
+        it.speed = speed
     fps = float(resolved.fps or profile_video(job).get("fps") or infos[0].fps or config.WAN_FPS)
-    media.validate_cuts([i.frame_duration for i in infos], cuts, fps=fps)
+    media.validate_cuts(media.retimed([i.frame_duration for i in infos], resolved.speeds), cuts, fps=fps)
     return resolved, paths
 
 
@@ -331,11 +363,14 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
         first = media.probe(paths[0])
         fps, width, height = target_format(job, spec, first)
         durations = [media.probe(p).frame_duration for p in paths]
-        total = media.total_duration(durations, spec.cuts)
+        speeds = spec.speeds
+        total = media.total_duration(durations, spec.cuts, speeds)
         if emit:
             emit({"job_id": job.id, "type": "step", "step": "assemble", "n_clips": len(paths),
-                  "seconds": round(total, 2), "fps": fps, "width": width, "height": height})
-        media.assemble(paths, spec.cuts, dest, fps=fps, size=(width, height), crf=spec.crf, encoder=spec.encoder)
+                  "seconds": round(total, 2), "fps": fps, "width": width, "height": height,
+                  "smooth": spec.smooth, "retimed": sum(1 for sp in speeds if sp != 1.0)})
+        media.assemble(paths, spec.cuts, dest, fps=fps, size=(width, height), crf=spec.crf,
+                       encoder=spec.encoder, speeds=speeds, smooth=spec.smooth)
         info = media.probe(dest)
         rec = AssemblyRecord(
             path=str(dest), created_at=created, duration=round(info.frame_duration, 3), n_clips=len(paths),
@@ -345,6 +380,7 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
         provenance.write_manifest(dest, "assemble", {
             "spec": spec.to_dict(), "clips": [str(p) for p in paths], "fps": fps, "width": width,
             "height": height, "crf": spec.crf, "encoder": spec.encoder, "version": version,
+            "speeds": speeds, "smooth": spec.smooth,
         }, {"kind": "assembly", "job_id": job.id})
         _link_replace(dest, output_path(job))
         side = provenance.manifest_path(dest)

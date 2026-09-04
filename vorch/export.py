@@ -201,8 +201,15 @@ def build_readme(job: Job, manifest: dict, files: list[str]) -> str:
             c["transition"] if c["transition"] == "none" else f"{c['transition']} {c['duration']:g}s"
             for c in (asm.get("spec") or {}).get("cuts", [])
         )
+        spec = asm.get("spec") or {}
+        speeds = ", ".join(
+            f"s{i + 1:02d} {it.get('speed', 1):g}×" for i, it in enumerate(spec.get("items", []))
+            if it.get("target_seconds") is not None
+        )
         lines.append(f"assembly.mp4: {asm.get('n_clips')} clip(s), {asm.get('duration')}s"
-                     + (f", cuts: {cuts}" if cuts else "") + " (xfade transitions, re-assemble from the job page)")
+                     + (f", cuts: {cuts}" if cuts else "") + (f", speed: {speeds}" if speeds else "")
+                     + (" (smooth slow motion)" if spec.get("smooth") else "")
+                     + " (xfade transitions, re-assemble from the job page)")
     lines.append("")
     lines.append("scene order:")
     for s in manifest["scenes"]:
