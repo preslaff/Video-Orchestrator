@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, Query
 
 from .. import assembly as assembly_mod
@@ -23,7 +25,17 @@ def _status(store: Store, manager: JobManager, job_id: str) -> AssemblyStatus:
     for c in st["clips"]:
         c["url"] = media_url(c.get("path"))
     if st["record"]:
-        st["record"]["url"] = media_url(st["record"].get("path"))
+        url = media_url(st["record"].get("path"))
+        # Same path every time -> browsers would replay the previous assembly from
+        # cache; the creation time makes each assembly a distinct URL.
+        stamp = "".join(ch for ch in (st["record"].get("created_at") or "") if ch.isdigit())
+        if not stamp:
+            try:
+                info = Path(st["record"]["path"]).stat()
+                stamp = f"{int(info.st_mtime)}{info.st_size}"
+            except OSError:
+                stamp = ""
+        st["record"]["url"] = f"{url}?v={stamp}" if url and stamp else url
     return AssemblyStatus.model_validate(st)
 
 

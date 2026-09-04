@@ -188,7 +188,7 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
       {rec && !active && (
         rec.ok ? (
           <div className="grid gap-3 md:grid-cols-[minmax(0,28rem)_1fr]">
-            <MediaThumb url={rec.url} video width={rec.width ?? size?.[0]} height={rec.height ?? size?.[1]} />
+            <MediaThumb key={rec.url ?? rec.created_at} url={rec.url} video width={rec.width ?? size?.[0]} height={rec.height ?? size?.[1]} />
             <div className="space-y-1 text-sm">
               <div className="font-medium">assembly.mp4 {rec.exported ? <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-800">exported</span> : <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs">not exported yet</span>}</div>
               <div className="text-neutral-600">{rec.n_clips} clip(s) · {fmtSeconds(rec.duration)} · {rec.width}×{rec.height} @ {rec.fps} fps · {fmtBytes(rec.size_bytes)}</div>

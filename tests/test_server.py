@@ -544,6 +544,14 @@ def test_assembly_post_200_runs_and_records(client, stub_media, monkeypatch):
             break
         time.sleep(0.02)
     assert st["record"]["ok"] and st["record"]["duration"] == 5.62 and st["record"]["exists"] is True
-    assert st["record"]["url"] == f"/media/vorch/{job.id[:8]}/assembly.mp4"
+    assert st["record"]["url"].startswith(f"/media/vorch/{job.id[:8]}/assembly.mp4?v=")  # cache-busted per assembly
     assert st["record"]["spec"]["cuts"][0]["transition"] == "wipeleft"
     assert client.get(f"/api/jobs/{job.id}").json()["assembly"]["ok"] is True
+
+
+def test_media_is_served_with_no_cache(client):
+    (client.media / "k.png").write_bytes(b"\x89PNG")
+    r = client.get("/media/k.png")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+    r = client.get("/media/k.png", headers={"Range": "bytes=0-1"})
+    assert r.status_code == 206 and r.headers["cache-control"] == "no-cache"
