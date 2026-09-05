@@ -37,7 +37,7 @@ def user_registry(tmp_path):
         "params": {"input_image": {"node": "1", "field": "image", "type": "str", "required": True}},
     }))
     reg = registry.load_registry([config.WORKFLOW_DIR, user], force=True)
-    registry._cache[tuple(str(p) for p, _ in registry._default_dirs())] = reg
+    registry.install(reg)
     yield reg
     registry.reset_cache()
 
@@ -154,7 +154,7 @@ def test_video_step_gets_the_master_face_on_its_backend(user_registry, capture, 
                    "source_image": {"node": "2", "field": "image", "type": "str", "required": True}},
     }))
     reg = registry.load_registry([config.WORKFLOW_DIR, tmp_path / "wf"], force=True)
-    registry._cache[tuple(str(p) for p, _ in registry._default_dirs())] = reg
+    registry.install(reg)
     uploads: list = []
     monkeypatch.setattr(comfy, "upload_image", lambda p, **kw: uploads.append((Path(p).name, (kw.get("backend") or type("L", (), {"name": "local"})).name)) or f"staged:{Path(p).name}")
     posted, _ = capture
@@ -192,7 +192,7 @@ def test_generative_step_gets_the_scene_prompts(user_registry, capture, tmp_path
                    "motion": {"node": "11", "field": "text", "type": "str"}},
     }))
     reg = registry.load_registry([config.WORKFLOW_DIR, tmp_path / "wf"], force=True)
-    registry._cache[tuple(str(p) for p, _ in registry._default_dirs())] = reg
+    registry.install(reg)
     posted, _ = capture
     clip = tmp_path / "clip.mp4"
     clip.write_bytes(b"v")

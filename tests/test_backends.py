@@ -129,3 +129,13 @@ def test_bad_yaml_is_an_error(tmp_path):
     _write(tmp_path, "backends: [not, a, mapping]\n")
     with pytest.raises(backends.BackendError, match="mapping"):
         backends.load()
+
+
+def test_backends_reload_when_the_file_appears_or_changes(tmp_path):
+    assert backends.names() == ["local"]                        # cached: no file
+    _write(tmp_path, "backends:\n  box:\n    url: http://box:8188\n")
+    assert backends.names() == ["local", "box"]                 # file appeared -> reloaded
+    first = backends.load()
+    assert backends.load() is first                             # unchanged -> cached
+    _write(tmp_path, "backends:\n  box:\n    url: http://box:8188\n  other:\n    url: http://o:8188\n")
+    assert backends.names() == ["local", "box", "other"]

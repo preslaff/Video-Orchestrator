@@ -85,7 +85,7 @@ def test_workflow_override_uses_named_entry(capture, tmp_path):
     registry.load_registry([config.WORKFLOW_DIR, user], force=True)
     try:
         # Point the default lookup at the same dirs for this test.
-        registry._cache[tuple(str(p) for p, _ in registry._default_dirs())] = registry.load_registry([config.WORKFLOW_DIR, user])
+        registry.install(registry.load_registry([config.WORKFLOW_DIR, user]))
         p = DEFAULT.with_(keyframe_workflow="klein_alt", keyframe_negative="x")
         path, _ = pipeline._fresh_keyframe("p", seed=3, evaluate=False, max_attempts=1, params=p)
         wf = capture[-1]["wf"]

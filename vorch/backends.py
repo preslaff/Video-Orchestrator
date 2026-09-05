@@ -172,16 +172,28 @@ def parse(doc: Any) -> dict[str, ComfyBackend]:
     return out
 
 
-_cache: dict[str, dict[str, ComfyBackend]] = {}
+_cache: dict[str, tuple[tuple, dict[str, ComfyBackend]]] = {}  # path -> (file signature, backends)
+
+
+def _signature(p: Path) -> tuple:
+    try:
+        st = p.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return ("missing",)
 
 
 def load(path: str | Path | None = None, *, force: bool = False) -> dict[str, ComfyBackend]:
     """All backends by name: ``local`` plus the entries of ``path`` (default
-    ``config.BACKENDS_FILE``; a missing file means local only). Cached per path."""
+    ``config.BACKENDS_FILE``; a missing file means local only). Cached per path;
+    the cache is invalidated when the file appears or changes (env vars are read
+    at load time — a new token still needs a restart of the process)."""
     p = Path(path) if path is not None else Path(config.BACKENDS_FILE)
     key = str(p)
-    if not force and key in _cache:
-        return _cache[key]
+    sig = _signature(p)
+    hit = _cache.get(key)
+    if not force and hit is not None and hit[0] == sig:
+        return hit[1]
     if not p.is_file():
         result = {LOCAL: local()}
     else:
@@ -192,7 +204,7 @@ def load(path: str | Path | None = None, *, force: bool = False) -> dict[str, Co
             raise BackendError(f"backends file {p}: {e}") from None
         result = parse(doc)
         log.info("backends: %s (from %s)", ", ".join(result), p)
-    _cache[key] = result
+    _cache[key] = (sig, result)
     return result
 
 

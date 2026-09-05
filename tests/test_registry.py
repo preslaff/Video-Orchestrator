@@ -185,3 +185,25 @@ def test_run_step_selects_declared_output_node(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "COMFY_OUTPUT", tmp_path)
     paths = steps.run_step("animate", start_image="x.png", positive="m", length=49, seed=1)
     assert paths == [tmp_path / "video" / "Wan22_00001_.mp4"]
+
+
+def test_registry_reloads_when_a_workflow_file_is_dropped_in(tmp_path):
+    """A long-running server must see ~/vorch/workflows changes without a restart."""
+    import shutil
+    import time
+
+    import yaml
+
+    reg = registry.load_registry()
+    assert "late_arrival" not in reg
+    user = config.USER_WORKFLOW_DIR
+    shutil.copy(config.WORKFLOW_DIR / "wan22_i2v_gguf.json", user / "late.json")
+    doc = yaml.safe_load((config.WORKFLOW_DIR / "animate.yaml").read_text())
+    doc.update(name="late_arrival", template="late.json")
+    (user / "late_arrival.yaml").write_text(yaml.safe_dump(doc))
+    assert "late_arrival" in registry.load_registry()          # picked up: files changed
+    same = registry.load_registry()
+    assert registry.load_registry() is same                     # unchanged dirs: cached object
+    (user / "late_arrival.yaml").unlink()
+    time.sleep(0.01)
+    assert "late_arrival" not in registry.load_registry()       # removal noticed too

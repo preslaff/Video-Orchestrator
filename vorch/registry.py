@@ -30,6 +30,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -533,19 +534,47 @@ def load_dirs(dirs: Iterable[tuple[Path, bool]]) -> Registry:
     return Registry(specs, errors)
 
 
-_cache: dict[tuple, Registry] = {}
+_cache: dict[tuple, tuple[tuple, Registry]] = {}  # dirs -> (signature, registry)
+
+
+def _signature(pairs: Iterable[tuple[Path, bool]]) -> tuple:
+    """Cheap fingerprint of the workflow dirs (names + mtimes + sizes of YAML/JSON
+    files) so a long-running server notices a dropped-in workflow without a restart."""
+    sig = []
+    for d, _ in pairs:
+        try:
+            entries = sorted(
+                (e.name, e.stat().st_mtime_ns, e.stat().st_size)
+                for e in os.scandir(d) if e.is_file() and e.name.endswith((".yaml", ".yml", ".json"))
+            )
+        except OSError:
+            entries = []
+        sig.append((str(d), tuple(entries)))
+    return tuple(sig)
 
 
 def load_registry(dirs: Sequence[Path] | None = None, *, force: bool = False) -> Registry:
-    """Cached registry. ``dirs`` overrides the search path (first dir = built-ins)."""
+    """Cached registry. ``dirs`` overrides the search path (first dir = built-ins).
+    The cache is invalidated when a workflow file appears, changes or disappears."""
     if dirs is None:
         pairs = _default_dirs()
     else:
         pairs = [(Path(d), i == 0) for i, d in enumerate(dirs)]
     key = tuple(str(p) for p, _ in pairs)
-    if force or key not in _cache:
-        _cache[key] = load_dirs(pairs)
-    return _cache[key]
+    sig = _signature(pairs)
+    hit = _cache.get(key)
+    if force or hit is None or hit[0] != sig:
+        if hit is not None and hit[0] != sig:
+            log.info("registry: workflow files changed; reloading")
+        _cache[key] = (sig, load_dirs(pairs))
+    return _cache[key][1]
+
+
+def install(reg: Registry) -> None:
+    """Make ``reg`` the process-wide default registry (tests, tooling) until the
+    default workflow dirs change on disk."""
+    pairs = _default_dirs()
+    _cache[tuple(str(p) for p, _ in pairs)] = (_signature(pairs), reg)
 
 
 def reset_cache() -> None:
