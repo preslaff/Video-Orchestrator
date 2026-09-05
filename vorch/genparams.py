@@ -107,8 +107,9 @@ class GenParams:
         """Raise ValueError on hard errors; return soft warnings."""
         formats.validate_size(*self.keyframe_size)
         if self.kind == "video":
-            formats.validate_size(*self.wan_size, maximum=1280)
-            formats.validate_length(self.length)
+            rules = formats.workflow_rules(self.animate_workflow)
+            formats.validate_size(*self.wan_size, maximum=rules.size_max, multiple=rules.size_multiple)
+            formats.validate_length(self.length, rules.length_constraint)
             if self.fps < 1:
                 raise ValueError("fps must be >= 1")
             if not formats.aspects_match(self.keyframe_size, self.wan_size):
@@ -121,7 +122,7 @@ class GenParams:
         if not 1 <= self.variants_per_scene <= 8:
             raise ValueError("variants_per_scene must be 1..8")
         warnings: list[str] = []
-        if self.kind == "video":
+        if self.kind == "video" and not formats.workflow_rules(self.animate_workflow).remote:
             warnings += formats.vram_warnings(*self.wan_size, self.length)
         return warnings
 

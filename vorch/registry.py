@@ -63,9 +63,11 @@ class RegistryError(ValueError):
 # --- constraints ----------------------------------------------------------------
 
 
-def _c_4n1(v: Any) -> None:
-    if not isinstance(v, int) or v < 1 or v % 4 != 1:
-        raise ValueError(f"Wan length must be 4n+1 (49, 81, 121, ...), got {v!r}")
+def _c_kn1(k: int, example: str) -> Callable[[Any], None]:
+    def check(v: Any) -> None:
+        if not isinstance(v, int) or v < 1 or v % k != 1:
+            raise ValueError(f"length must be {k}n+1 ({example}), got {v!r}")
+    return check
 
 
 def _c_mult(n: int) -> Callable[[Any], None]:
@@ -81,11 +83,15 @@ def _c_positive(v: Any) -> None:
 
 
 CONSTRAINTS: dict[str, Callable[[Any], None]] = {
-    "4n+1": _c_4n1,
+    "4n+1": _c_kn1(4, "49, 81, 121, ..."),      # Wan
+    "8n+1": _c_kn1(8, "97, 121, 145, ..."),     # LTX-2.x
+    "multiple_of_32": _c_mult(32),              # LTX-2.x sizes
     "multiple_of_16": _c_mult(16),
     "multiple_of_8": _c_mult(8),
     "positive": _c_positive,
 }
+LENGTH_CONSTRAINTS = ("4n+1", "8n+1")
+SIZE_CONSTRAINTS = {"multiple_of_8": 8, "multiple_of_16": 16, "multiple_of_32": 32}
 
 
 @dataclass(frozen=True)

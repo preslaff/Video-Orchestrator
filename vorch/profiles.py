@@ -61,8 +61,9 @@ class VideoSettings(BaseModel):
 
     @model_validator(mode="after")
     def _size_and_length(self) -> "VideoSettings":
-        formats.validate_size(self.width, self.height, maximum=1280)
-        registry.CONSTRAINTS["4n+1"](self.length)
+        rules = formats.workflow_rules(self.workflow)  # Wan: 4n+1 / 16; LTX: 8n+1 / 32
+        formats.validate_size(self.width, self.height, maximum=rules.size_max, multiple=rules.size_multiple)
+        formats.validate_length(self.length, rules.length_constraint)
         return self
 
 
