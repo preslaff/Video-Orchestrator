@@ -20,7 +20,7 @@ from . import assembly as assembly_mod
 from . import export as export_mod
 from . import projects as projects_mod
 from .orchestrator import Orchestrator
-from .state import Job, JobStatus, Store
+from .state import Decision, Job, JobStatus, Store
 from .submission import resolve_submission
 
 log = logging.getLogger("vorch.queue")
@@ -191,6 +191,23 @@ class JobManager:
             return job
         self._start(job)
         self._spawn(self._execute(job, lambda o, j: o.approve(j, gate)))
+        return job
+
+    async def retry(self, job_id: str) -> Job:
+        """Resume a **failed** job from its persisted state (scenes already done are
+        kept; the failed segment runs again). No-op while a segment is in flight."""
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job_id in self._active:
+            log.info("job %s already running; ignoring duplicate retry", job_id)
+            return job
+        if job.status is not JobStatus.FAILED:
+            raise RuntimeError(f"job is {job.status.value}, not failed")
+        self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="job", attempt=1,
+                                         action="retry", reason="resumed after failure"))
+        self._start(job)
+        self._spawn(self._execute(job, lambda o, j: o.run(j)))
         return job
 
     async def regenerate(self, job_id: str, index: int, *, what: str = "keyframe",

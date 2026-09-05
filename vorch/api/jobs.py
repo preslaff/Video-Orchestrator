@@ -146,6 +146,23 @@ async def regenerate_scene(
     return job_to_public(job, store)
 
 
+@router.post("/{job_id}/retry", response_model=JobPublic)
+async def retry(
+    job_id: str,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Resume a failed job from where it stopped (e.g. after fixing the environment)."""
+    _load(store, job_id)
+    try:
+        job = await manager.retry(job_id)
+    except KeyError:
+        raise ApiError(404, "not_found", "no such job")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    return job_to_public(job, store)
+
+
 @router.post("/{job_id}/approve/{gate}", response_model=JobPublic)
 async def approve(
     job_id: str,

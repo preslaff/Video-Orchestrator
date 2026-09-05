@@ -131,7 +131,7 @@ export function GatePanel({ job, decisions = [], onStarted }: { job: JobPublic; 
                 {locked && (
                   <div className="flex gap-1">
                     <Button disabled={busy} onClick={() => regenerate(s.index, 'keyframe')} title="new keyframe (new seed, current prompts); swap + clip are redone after approval">Regenerate keyframe</Button>
-                    {video && s.video_path && <Button disabled={busy} onClick={() => regenerate(s.index, 'video')} title="keep the keyframe, render the clip again with the current animation prompt">Re-animate</Button>}
+                    {video && <Button disabled={busy} onClick={() => regenerate(s.index, 'video')} title={s.video_path ? 'keep the keyframe, render the clip again with the current animation prompt' : 'keep the keyframe, render the (missing) clip with the current animation prompt'}>{s.video_path ? 'Re-animate' : 'Animate'}</Button>}
                   </div>
                 )}
               </div>

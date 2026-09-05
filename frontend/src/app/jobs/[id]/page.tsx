@@ -3,7 +3,7 @@
 import { use } from 'react'
 import Link from 'next/link'
 import { errorMessage } from '@/api/client'
-import { useDecisions, useExportStatus, useJob, useProvenance, useRunExport } from '@/hooks/useJobs'
+import { useDecisions, useExportStatus, useJob, useProvenance, useRetry, useRunExport } from '@/hooks/useJobs'
 import { useJobEvents } from '@/hooks/useJobEvents'
 import { useProject } from '@/hooks/useSetup'
 import { Button, Card, Collapsible, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '@/components/ui'
@@ -18,6 +18,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   const { id } = use(params)
   const job = useJob(id)
   const decisions = useDecisions(id)
+  const retry = useRetry(id)
   const provenance = useProvenance(id)
   const exp = useExportStatus(id)
   const project = useProject(job.data?.project_id ?? undefined)
@@ -50,7 +51,14 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         )}
         <span className="text-xs text-neutral-500">{j.kind} · {j.profile_id ?? 'default profile'} · {profile?.aspect ?? '16:9'} · seed {j.seed || 'random'}</span>
         {j.pending_gate && <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900">waiting for approval: {j.pending_gate}</span>}
+        {j.status === 'failed' && (
+          <Button variant="primary" disabled={retry.isPending} title="resume from the persisted state: finished scenes are kept, the failed step runs again"
+            onClick={() => retry.mutate(undefined, { onSuccess: () => live.reconnect() })}>
+            {retry.isPending ? 'Resuming…' : 'Retry'}
+          </Button>
+        )}
       </div>
+      <ErrorBox message={retry.error ? errorMessage(retry.error) : null} />
 
       <ProgressPanel job={j} events={live.events} connected={live.connected} />
 

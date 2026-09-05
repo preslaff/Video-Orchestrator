@@ -100,6 +100,21 @@ export function useApprove(id: string) {
   })
 }
 
+export function useRetry(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data, error } = await api.POST('/api/jobs/{job_id}/retry', { params: { path: { job_id: id } } })
+      if (error) throw error
+      return data
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.job(id) })
+      void qc.invalidateQueries({ queryKey: ['jobs'] })
+    },
+  })
+}
+
 export function useUpdateScenes(id: string) {
   const qc = useQueryClient()
   return useMutation({

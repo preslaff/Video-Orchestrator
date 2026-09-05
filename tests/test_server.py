@@ -466,6 +466,30 @@ def test_regenerate_scene_route(client):
     assert client.post(f"/api/jobs/{job.id}/scenes/0/regenerate", json={"what": "audio"}).status_code == 422
 
 
+def test_retry_resumes_a_failed_job(client):
+    """A failed job (e.g. the API server lacked a workflow) is resumed from its state."""
+    import time
+
+    from vorch.state import Scene, new_job
+
+    job = new_job(idea="r")
+    job.status = JobStatus.FAILED
+    job.scenes = [Scene(index=0, keyframe_path="/k.png")]
+    client.store.save_job(job)
+    r = client.post(f"/api/jobs/{job.id}/retry")
+    assert r.status_code == 200 and r.json()["status"] in ("running", "done")
+    for _ in range(50):
+        if client.get(f"/api/jobs/{job.id}").json()["status"] == "done":
+            break
+        time.sleep(0.02)
+    assert client.get(f"/api/jobs/{job.id}").json()["status"] == "done"
+    actions = [d["action"] for d in client.get(f"/api/jobs/{job.id}/decisions").json()]
+    assert "retry" in actions
+    r = client.post(f"/api/jobs/{job.id}/retry")                       # not failed any more
+    assert r.status_code == 409 and r.json()["error"]["code"] == "conflict"
+    assert client.post("/api/jobs/nope/retry").status_code == 404
+
+
 # --- assembly routes -------------------------------------------------------------
 
 
