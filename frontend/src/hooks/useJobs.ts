@@ -8,6 +8,7 @@ import type { AssemblySpecIn, AssemblyStatus, JobSpec, JobStatus, SceneEdit, Sce
 export interface JobsFilter {
   status?: JobStatus
   project_id?: string
+  unassigned?: boolean
   limit?: number
   offset?: number
 }
@@ -17,7 +18,7 @@ export function useJobs(filter: JobsFilter = {}) {
     queryKey: keys.jobs(filter),
     queryFn: async () => {
       const { data, error } = await api.GET('/api/jobs', {
-        params: { query: { limit: filter.limit ?? 50, offset: filter.offset ?? 0, status: filter.status, project_id: filter.project_id } },
+        params: { query: { limit: filter.limit ?? 50, offset: filter.offset ?? 0, status: filter.status, project_id: filter.project_id, unassigned: filter.unassigned || undefined } },
       })
       if (error) throw error
       return data

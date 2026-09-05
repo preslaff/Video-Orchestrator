@@ -114,7 +114,7 @@ export function NewJobWizard() {
               )}
               <div className="text-sm text-neutral-600">
                 <p>default profile <b>{project.data.default_profile_id}</b></p>
-                <p>master face {masterAsset ? <b>{masterAsset.label || masterAsset.name}</b> : <span className="text-amber-700">none — add one under Setup → Projects, or paste a path in step 3</span>}</p>
+                <p>master face {masterAsset ? <b>{masterAsset.label || masterAsset.name}</b> : <span className="text-amber-700">none — add one under Projects, or paste a path in step 3</span>}</p>
                 <p>{refAssets.length} reference/product asset(s) for edit mode</p>
                 <p>export → <code className="text-xs">{project.data.export_root_effective}</code></p>
               </div>
@@ -168,7 +168,7 @@ export function NewJobWizard() {
                 <span className="font-medium">References (project assets)</span>
                 <span className="ml-2 text-xs text-neutral-500">{refIds.length} selected · order = click order; the first is the primary reference</span>
                 {!projectId && <p className="text-amber-700">Pick a project in step 1 to use its reference/product assets.</p>}
-                {projectId && refAssets.length === 0 && <p className="text-amber-700">The selected project has no reference/product assets — add some under Setup → Projects.</p>}
+                {projectId && refAssets.length === 0 && <p className="text-amber-700">The selected project has no reference/product assets — add some under Projects.</p>}
                 {refAssets.length > 0 && (
                   <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
                     {refAssets.map((a) => {

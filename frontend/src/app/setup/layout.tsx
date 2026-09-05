@@ -7,7 +7,6 @@ const tabs = [
   { href: '/setup/env', label: 'Environment' },
   { href: '/setup/workflows', label: 'Workflows' },
   { href: '/setup/profiles', label: 'Profiles' },
-  { href: '/setup/projects', label: 'Projects' },
 ]
 
 export default function SetupLayout({ children }: { children: React.ReactNode }) {

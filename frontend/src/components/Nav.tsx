@@ -2,10 +2,11 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Clapperboard, FolderKanban, Plus, Settings } from 'lucide-react'
+import { Clapperboard, FolderKanban, Folders, Plus, Settings } from 'lucide-react'
 
 const items = [
   { href: '/jobs', label: 'Jobs', icon: FolderKanban },
+  { href: '/projects', label: 'Projects', icon: Folders },
   { href: '/jobs/new', label: 'New job', icon: Plus },
   { href: '/setup', label: 'Setup', icon: Settings },
 ]

@@ -44,7 +44,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         <h1 className="text-xl font-semibold">{j.idea}</h1>
         <JobIdChip id={j.id} full />
         {j.project_id ? (
-          <Link href={`/setup/projects/${j.project_id}`} className="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-200" title="project">
+          <Link href={`/projects/${j.project_id}`} className="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-200" title="project">
             📁 {project.data?.name ?? 'project'}
           </Link>
         ) : (

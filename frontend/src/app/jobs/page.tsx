@@ -58,7 +58,7 @@ export default function JobsPage() {
                   <td className="py-2 pr-3"><Link href={`/jobs/${j.id}`} className="font-medium hover:underline">{j.idea || j.id}</Link></td>
                   <td className="py-2 pr-3">
                     {j.project_id ? (
-                      <Link href={`/setup/projects/${j.project_id}`} className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-700 hover:bg-neutral-200">
+                      <Link href={`/projects/${j.project_id}`} className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-700 hover:bg-neutral-200">
                         {projectName(j.project_id) ?? j.project_id.slice(0, 8)}
                       </Link>
                     ) : <span className="text-xs text-neutral-400">—</span>}
