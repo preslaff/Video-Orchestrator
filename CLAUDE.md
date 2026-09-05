@@ -59,7 +59,7 @@ Working rules: keep changes surgical, keep `pytest -q` green, regenerate `fronte
 3. **Phase by stage, not by scene** (`NOTES.md` §5): generate all keyframes (Klein loaded once) → `/free` → all videos (Wan) → `/free` → all swaps (ReActor). Minimizes model load/unload churn.
 4. **Wan video length = 4n+1.** `length` in `WanImageToVideo` accepts only 49, 81, 121… not arbitrary values.
 5. **Gemma vision requires `--mmproj`.** If a verdict is nonsense or "I can't see the image", the llama-server was started without the mmproj projector.
-6. **Identity via post-hoc ReActor swap, not per-scene reference.** Reference editing (`identity_edit`) **locks composition** — use it only for "same composition, light edit". For new scenes use text-to-image, then impose the face with ReActor against the master. (`NOTES.md` §3, `skills/gemma-prompt.md`.)
+6. **Identity via post-hoc ReActor swap, not per-scene reference editing.** Reference editing (`identity_edit`) **locks composition** — use it only for "same composition, light edit". For new scenes use text-to-image, then impose the face with ReActor. The face is chosen **per scene** (`Scene.identity`, a project `master_face` asset assigned by the storyboard from the assets' labels or by the user at a gate; empty = no swap); `Job.master_face` is only the default. (`NOTES.md` §3, `skills/gemma-prompt.md`.)
 7. **Evaluation returns JSON, not prose.** Always prompt Gemma for structured output (`NOTES.md` §6) and parse it leniently (Gemma sometimes wraps in ```json fences). Temperature **0.2 for evaluation** (consistent), **0.7 for generation** (creative) — don't mix them up.
 
 ## Services & endpoints

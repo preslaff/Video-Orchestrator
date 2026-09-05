@@ -289,6 +289,8 @@ decision and selected a Python-native stack. The whole app runs as **one local p
 ## 13. Sequential continuity (last-frame → next keyframe)
 
 `run_sequence(scenes, master_face, …)` chains scenes so consecutive clips flow into each other.
+
+**Per-scene identity and references (Sept 2026).** `Scene.identity` / `identity_asset_id` (the face the swap uses for that scene; empty = no swap) and `Scene.reference_asset_ids` (+ resolved `references` paths) live on the scene. The storyboard step receives the project's assets as `(id, kind, label)` and returns `identity` / `reference_ids` per scene; `vorch/scene_assets.py` resolves ids to paths for the storyboard, the scene editor and regenerate. The evaluator compares `identity_match` against the scene's face.
 Full design rationale: [`docs/sequential-continuity-plan.md`](docs/sequential-continuity-plan.md).
 
 - **Two modes, opt-in.** Each `Scene` is a *cut* by default — a fresh Klein keyframe, identity-locked
