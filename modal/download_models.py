@@ -4,6 +4,7 @@
     modal run modal/download_models.py --only wan22_fp8    # one set
     modal run modal/download_models.py --only all
     modal run modal/download_models.py --list-sets
+    modal run modal/download_models.py --only klein4b,klein9b,ltx25,wan_animate2   # Phase C sets
 
 Files land in the Volume under ComfyUI's ``models/<subdir>/`` layout, so the
 registry YAMLs in ``modal/workflows/`` find them by the same names the local
@@ -20,6 +21,11 @@ from pathlib import Path
 import modal
 
 WAN22 = "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+KLEIN4B = "Comfy-Org/flux2-klein-4B"
+KLEIN9B_ENC = "Comfy-Org/vae-text-encorder-for-flux-klein-9b"
+BFL9B = "black-forest-labs/FLUX.2-klein-9B"          # non-commercial license; accept it on HF first
+LTX25 = "Lightricks/LTX-2.5"                         # gated: accept the LTX-2.x Community License on HF
+ANIMATE2 = "Comfy-Org/Wan-Animate-2"
 
 # name -> [(repo, path in repo, models/<subdir>)]
 SETS: dict[str, list[tuple[str, str, str]]] = {
@@ -35,8 +41,32 @@ SETS: dict[str, list[tuple[str, str, str]]] = {
         (WAN22, "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "text_encoders"),
         (WAN22, "split_files/vae/wan_2.1_vae.safetensors", "vae"),
     ],
-    # Phase C candidates (docs/modal-backend.md §5-6): FLUX.2 Klein 9B, LTX-2.5,
-    # ReActor (inswapper_128.onnx, GFPGANv1.4.pth), GIMM-VFI. Add sets here.
+    "klein4b": [  # 16.1 GB — FLUX.2 Klein 4B bf16 (Apache 2.0) + Qwen3 4B encoder + FLUX.2 VAE (L40S)
+        (KLEIN4B, "split_files/diffusion_models/flux-2-klein-4b.safetensors", "diffusion_models"),
+        (KLEIN4B, "split_files/text_encoders/qwen_3_4b.safetensors", "text_encoders"),
+        (KLEIN4B, "split_files/vae/flux2-vae.safetensors", "vae"),
+    ],
+    "klein9b": [  # 34.9 GB — FLUX.2 Klein 9B (NON-COMMERCIAL) + Qwen3 8B encoder (+ VAE if klein4b not fetched)
+        (BFL9B, "flux-2-klein-9b.safetensors", "diffusion_models"),
+        (KLEIN9B_ENC, "split_files/text_encoders/qwen_3_8b.safetensors", "text_encoders"),
+        (KLEIN9B_ENC, "split_files/vae/flux2-vae.safetensors", "vae"),
+    ],
+    "ltx25": [  # 38.6 GB — LTX-2.5 22B distilled int8 + Gemma-4-12B encoder int8 + video/audio VAE + spatial upscaler (gated)
+        (LTX25, "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors", "diffusion_models"),
+        (LTX25, "text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors", "text_encoders"),
+        (LTX25, "vae/ltx-2.5-video-vae-bf16.safetensors", "vae"),
+        (LTX25, "vae/ltx-2.5-audio-vae-bf16.safetensors", "vae"),
+        (LTX25, "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors", "latent_upscale_models"),
+    ],
+    "wan_animate2": [  # 24.9 GB — Wan-Animate-2 int8 + distill LoRA + umt5 fp8 + clip_vision_h + Wan2.1 VAE bf16 (L40S)
+        (ANIMATE2, "diffusion_models/wan_animate_2_int8_convrot.safetensors", "diffusion_models"),
+        (ANIMATE2, "loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors", "loras"),
+        (ANIMATE2, "text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "text_encoders"),
+        (ANIMATE2, "clip_vision/clip_vision_h.safetensors", "clip_vision"),
+        (ANIMATE2, "vae/Wan2_1_VAE_bf16.safetensors", "vae"),
+    ],
+    # ReActor's models (inswapper_128.onnx, GFPGANv1.4.pth, insightface buffalo_l) are not on HF
+    # in one place: copy them from the local install with modal/upload_local_models.sh.
 }
 
 MODELS = "/models"

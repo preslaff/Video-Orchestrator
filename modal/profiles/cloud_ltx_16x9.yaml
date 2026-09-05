@@ -1,0 +1,9 @@
+# Import: python -m vorch profiles --import modal/profiles/cloud_ltx_16x9.yaml
+# LTX-2.5 on the H100: 1280x704 (sizes /32), 97 frames = 4 s @ 24 fps, native audio (enable
+# "keep audio" when assembling). Klein keyframes at the same size; ReActor local.
+name: Cloud LTX-2.5 16:9 (audio, Modal H100)
+base: cinematic_16x9
+overrides:
+  keyframe: {width: 1280, height: 704}
+  video: {workflow: animate_ltx25, width: 1280, height: 704, length: 97, fps: 24}
+  style: {animation_negative: "pc game, console game, video game, cartoon, childish, ugly"}

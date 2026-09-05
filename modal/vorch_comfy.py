@@ -33,12 +33,12 @@ COMFY_DIR = "/root/comfy/ComfyUI"
 PORT = 8188
 MINUTES = 60
 
-# Custom node packs (git URL, ref). Phase B needs none: the Wan 2.2 fp16/fp8
-# templates use core nodes only (UNETLoader, CLIPLoader, WanImageToVideo,
-# CreateVideo/SaveVideo). Phase C adds e.g.
-#   ("https://github.com/Gourieff/ComfyUI-ReActor", "main"),
-#   ("https://github.com/Lightricks/ComfyUI-LTXVideo", "main"),
-CUSTOM_NODES: list[tuple[str, str]] = []
+# Custom node packs (git URL, ref). Wan 2.2, LTX-2.5, Wan-Animate-2 and Klein use
+# core nodes only; ReActor (video face swap) is the one custom pack. Pin a ref
+# that matches the local install (`git describe` in custom_nodes/ComfyUI-ReActor).
+CUSTOM_NODES: list[tuple[str, str]] = [
+    ("https://github.com/Gourieff/ComfyUI-ReActor", "main"),
+]
 
 
 def _node_commands() -> list[str]:
@@ -48,6 +48,9 @@ def _node_commands() -> list[str]:
         dest = f"{COMFY_DIR}/custom_nodes/{name}"
         cmds.append(f"git clone --depth 1 --branch {ref} {url} {dest}")
         cmds.append(f"if [ -f {dest}/requirements.txt ]; then pip install -r {dest}/requirements.txt; fi")
+        if "ReActor" in name:
+            # ReActor imports insightface + onnxruntime lazily; its requirements.txt omits them.
+            cmds.append("pip install insightface onnxruntime-gpu")
     return cmds
 
 

@@ -7,8 +7,9 @@ default; a workflow runs on Modal only when its registry YAML says `backend: mod
 |---|---|
 | `vorch_comfy.py` | the Modal app: ComfyUI v0.34.0 (pinned to the local version) as two proxy-authenticated web servers, `comfy_l40s` and `comfy_h100`, models from the `vorch-models` Volume |
 | `download_models.py` | fills the Volume from Hugging Face (`wan22_fp16`, `wan22_fp8`) |
-| `workflows/` | registry entries for the cloud Wan variants (`animate_wan22_fp16` → modal-h100, `animate_wan22_fp8` → modal-l40s); same node ids and params as the built-in `animate` |
-| `profiles/` | importable profiles that keep Klein + ReActor local and send only the Wan phase to Modal |
+| `workflows/` | registry entries for the cloud models: `animate_wan22_fp16` (H100) / `animate_wan22_fp8` (L40S) — the built-in `animate` graph with full-precision loaders; `animate_ltx25` (H100; LTX-2.5 two-stage with audio, sizes /32, 8n+1 frames, 24 fps); `keyframe_flux2_4b` (L40S, Apache 2.0) / `keyframe_flux2_9b` (L40S, **non-commercial**); `animate_wan_animate2` (L40S post-step: Wan-Animate-2 puts the master face/body into the clip) |
+| `upload_local_models.sh` | copies ReActor's models (inswapper, GFPGAN, CodeFormer, buffalo_l) from the local ComfyUI into the Volume for the remote `faceswap_video` variant |
+| `profiles/` | importable profiles: Wan fp8/fp16 (480p, 720p) with Klein + ReActor local; `cloud_ltx_16x9` (LTX-2.5 with audio); `cloud_social_9x16_all_remote` (Klein 4B + Wan fp8 + Wan-Animate-2, nothing on the local GPU) |
 | `backends.example.yaml` | template for `~/vorch/backends.yaml` |
 
 ## One-time setup (your account)
@@ -25,6 +26,11 @@ export MODAL_PROXY_KEY=wk-…  MODAL_PROXY_SECRET=ws-…
 ```bash
 .venv/bin/modal run modal/download_models.py --only wan22_fp8     # 36 GB, L40S class
 .venv/bin/modal run modal/download_models.py --only wan22_fp16    # 69 GB, H100 class
+# Phase C sets (see download_models.py): klein4b 16 GB · klein9b 35 GB (non-commercial) ·
+# wan_animate2 25 GB · ltx25 39 GB (gated: accept the license on huggingface.co/Lightricks/LTX-2.5,
+# then export HF_TOKEN=$(cat ~/.cache/huggingface/token))
+.venv/bin/modal run modal/download_models.py --only klein4b,wan_animate2,ltx25
+bash modal/upload_local_models.sh                                  # ReActor models from the local install
 .venv/bin/modal deploy modal/vorch_comfy.py                       # prints the two URLs
 cp modal/backends.example.yaml ~/vorch/backends.yaml              # paste the URLs
 cp modal/workflows/* ~/vorch/workflows/

@@ -1,0 +1,28 @@
+# LTX-2.5 image-to-video (22B distilled, two-stage: half-res + 2x latent upsampler), with
+# native audio. Flattened from ComfyUI's official `video_ltx2_5_i2v` template (prompt enhancer
+# removed; the start image is scaled to the target size). Sizes must be multiples of 32
+# (16:9 -> 1280x704), length 8n+1 (97 = 4 s @ 24 fps), fps 24. Runs on the Modal H100 backend
+# (the L40S can run it too with int8 weights; set backend accordingly).
+# Install: copy this YAML + ltx25_i2v_two_stage.json into ~/vorch/workflows/.
+# License: LTX-2.x Community License (free under $10M revenue; gated HF repo Lightricks/LTX-2.5).
+name: animate_ltx25
+kind: animate
+template: ltx25_i2v_two_stage.json
+backend: modal-h100
+description: LTX-2.5 22B distilled i2v, two-stage with 2x latent upscale, native audio (24 fps, 8n+1 frames, sizes /32)
+tags: [ltx, ltx25, i2v, video, audio, cloud, license:ltx-community]
+timeout: 3600
+inputs: {start_image: image}
+outputs: {type: video, nodes: ["41"]}
+params:
+  start_image:     {node: "1",  field: image,      type: str, required: true}
+  positive:        {node: "3",  field: text,       type: str, required: true}
+  negative:        {node: "10", field: text,       type: str}
+  width:           {targets: [{node: "9", field: value}, {node: "2", field: width}],  type: int, constraint: multiple_of_32, min: 256, max: 1920}
+  height:          {targets: [{node: "12", field: value}, {node: "2", field: height}], type: int, constraint: multiple_of_32, min: 256, max: 1920}
+  length:          {targets: [{node: "27", field: length}, {node: "21", field: frames_number}], type: int, constraint: 8n+1, required: true}
+  fps:             {node: "16", field: value,      type: int, min: 1, max: 60}
+  seed:            {node: "14", field: noise_seed, type: int}
+  strength:        {node: "20", field: strength,   type: float, min: 0, max: 1}
+  unet:            {node: "4",  field: unet_name,  type: enum, enum_from: {class_type: UNETLoader, input: unet_name}}
+  filename_prefix: {node: "41", field: filename_prefix, type: str}

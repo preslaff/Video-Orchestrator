@@ -25,20 +25,40 @@ def test_modal_scripts_compile_and_pin_the_local_comfy_version():
     assert 'COMFY_VERSION = "v0.34.0"' in src
 
 
-def test_cloud_workflows_load_and_use_core_nodes_only():
+EXPECTED = {  # name -> (kind, backend)
+    "animate_wan22_fp16": ("animate", "modal-h100"),
+    "animate_wan22_fp8": ("animate", "modal-l40s"),
+    "animate_ltx25": ("animate", "modal-h100"),
+    "keyframe_flux2_4b": ("keyframe", "modal-l40s"),
+    "keyframe_flux2_9b": ("keyframe", "modal-l40s"),
+    "animate_wan_animate2": ("postprocess", "modal-l40s"),
+}
+
+
+def test_cloud_workflows_load_with_core_nodes_and_declared_backends():
     reg = registry.load_dirs([(MODAL / "workflows", False)])
     assert reg.errors == {}
-    assert reg.names() == ["animate_wan22_fp16", "animate_wan22_fp8"]
+    assert set(reg.names()) == set(EXPECTED)
+    builtin = registry.load_registry()
     for spec in reg.list():
-        assert spec.kind == "animate" and spec.backend.startswith("modal-")
-        assert set(spec.params) >= set(registry.load_registry().get("animate").params)
+        kind, backend = EXPECTED[spec.name]
+        assert (spec.kind, spec.backend) == (kind, backend)
         assert not (spec.requires_nodes & {"UnetLoaderGGUF", "CLIPLoaderGGUF"})
         wf = json.loads(spec.template.read_text())
-        assert "nodes" not in wf and wf["1"]["class_type"] == "UNETLoader"
+        assert "nodes" not in wf                                   # API format, not a UI export
+        if spec.kind in ("animate", "keyframe") and "ltx" not in spec.name:
+            # same params as the built-in of that kind (a profile can swap them freely)
+            assert set(spec.params) >= set(builtin.get("animate" if spec.kind == "animate" else "keyframe").params)
     fp16 = reg.get("animate_wan22_fp16")
-    assert fp16.backend == "modal-h100" and fp16.params["width"].max == 1280
-    files = {v for _, _, _, v in fp16.requires_models}
-    assert "wan2.2_i2v_high_noise_14B_fp16.safetensors" in files
+    assert fp16.params["width"].max == 1280
+    assert "wan2.2_i2v_high_noise_14B_fp16.safetensors" in {v for _, _, _, v in fp16.requires_models}
+    ltx = reg.get("animate_ltx25")
+    assert ltx.params["length"].constraint == "8n+1" and ltx.params["width"].constraint == "multiple_of_32"
+    assert {"LTXVConditioning", "LTXVLatentUpsampler", "LTXVAudioVAEDecode"} <= ltx.requires_nodes
+    a2 = reg.get("animate_wan_animate2")
+    assert a2.accepts("source_image") and a2.video_inputs() == ["input_video"]
+    assert "WanAnimate2ToVideo" in a2.requires_nodes
+    assert "license:non-commercial" in reg.get("keyframe_flux2_9b").tags
 
 
 def test_downloader_sets_cover_the_cloud_workflow_models():
@@ -53,7 +73,7 @@ def test_downloader_sets_cover_the_cloud_workflow_models():
             return [n.target.id]
         return []
 
-    consts = [n for n in tree.body if set(names(n)) & {"WAN22", "SETS"}]
+    consts = [n for n in tree.body if names(n) and all(x.isupper() for x in names(n))]  # WAN22, KLEIN4B, ..., SETS
     exec(compile(ast.Module(body=consts, type_ignores=[]), "sets", "exec"), ns)  # noqa: S102
     available = {Path(p).name for items in ns["SETS"].values() for _, p, _ in items}
     reg = registry.load_dirs([(MODAL / "workflows", False)])
@@ -62,10 +82,23 @@ def test_downloader_sets_cover_the_cloud_workflow_models():
             assert val in available, f"{spec.name} needs {val} but no download set provides it"
 
 
-def test_cloud_profiles_import_shape_and_reference_cloud_workflows():
-    reg = registry.load_dirs([(MODAL / "workflows", False)])
+def test_cloud_profiles_import_shape_and_validate(tmp_path, monkeypatch):
+    from vorch import config, profiles
+
+    # make the cloud workflows visible so the profiles validate against their real rules
+    for f in (MODAL / "workflows").iterdir():
+        (config.USER_WORKFLOW_DIR / f.name).write_bytes(f.read_bytes())
+    registry.reset_cache()
+    reg = registry.load_registry()
     for f in sorted((MODAL / "profiles").glob("*.yaml")):
         doc = yaml.safe_load(f.read_text())
         assert doc["name"] and doc["base"] in ("cinematic_16x9", "social_9x16", "social_1x1", "stills_16x9")
-        assert doc["overrides"]["video"]["workflow"] in reg
-        assert doc["overrides"]["video"]["length"] % 4 == 1
+        p = profiles.clone(profiles.builtin_profiles()[doc["base"]], doc["name"], overrides=doc["overrides"])
+        assert set(p.workflows_used()) <= set(reg.names()), (f.name, p.workflows_used())
+        rules = registry.load_registry().get(p.video.workflow)
+        assert p.video.workflow.startswith(("animate_",))
+        if "ltx" in p.video.workflow:
+            assert p.video.length % 8 == 1 and p.video.width % 32 == 0 and p.video.fps == 24
+        else:
+            assert p.video.length % 4 == 1
+        assert rules.backend.startswith("modal-")

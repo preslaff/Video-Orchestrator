@@ -1,0 +1,82 @@
+# Cloud variant of the built-in `keyframe` (same node ids, same params).
+# Install: copy this YAML + flux2_klein_9b_t2i.json into ~/vorch/workflows/ (see modal/README.md).
+name: keyframe_flux2_9b
+kind: keyframe
+template: flux2_klein_9b_t2i.json
+description: FLUX.2 Klein 9B text-to-image on the Modal L40S backend — NON-COMMERCIAL
+  license (personal / cinematic experiments only)
+tags:
+- klein
+- flux2
+- t2i
+- image
+- cloud
+- license:non-commercial
+outputs:
+  type: image
+  nodes:
+  - '9'
+params:
+  positive:
+    node: '76'
+    field: value
+    type: str
+    required: true
+  negative:
+    node: 75:67
+    field: text
+    type: str
+  seed:
+    node: 75:73
+    field: noise_seed
+    type: int
+    required: true
+  width:
+    node: 75:68
+    field: value
+    type: int
+    constraint: multiple_of_16
+    min: 256
+    max: 2048
+  height:
+    node: 75:69
+    field: value
+    type: int
+    constraint: multiple_of_16
+    min: 256
+    max: 2048
+  steps:
+    node: 75:62
+    field: steps
+    type: int
+    min: 1
+  cfg:
+    node: 75:63
+    field: cfg
+    type: float
+  unet:
+    node: 75:70
+    field: unet_name
+    type: enum
+    enum_from:
+      class_type: UNETLoader
+      input: unet_name
+  batch_size:
+    node: 75:66
+    field: batch_size
+    type: int
+    min: 1
+    max: 4
+  sampler:
+    node: 75:61
+    field: sampler_name
+    type: enum
+    enum_from:
+      class_type: KSamplerSelect
+      input: sampler_name
+  filename_prefix:
+    node: '9'
+    field: filename_prefix
+    type: str
+backend: modal-l40s
+timeout: 900

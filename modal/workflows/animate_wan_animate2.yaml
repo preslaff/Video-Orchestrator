@@ -1,0 +1,29 @@
+# Wan-Animate-2 character replacement as a post-step: the driving video is the job's clip, the
+# reference character is the job's master face (filled automatically as `source_image`), the
+# background follows the prompt. Flattened from ComfyUI's official `video_wan_animate2` template
+# (one 81-frame segment; frames are consumed 1:1 from the clip, no fps resampling). Model-level
+# identity — the alternative to frame-wise ReActor. Runs on the Modal L40S backend (int8 + distill LoRA).
+# Install: copy this YAML + wan_animate2_replace.json into ~/vorch/workflows/; add to a profile as
+#   post_steps: [{workflow: animate_wan_animate2, params: {character: "…", background: "…"}}]
+name: animate_wan_animate2
+kind: postprocess
+template: wan_animate2_replace.json
+backend: modal-l40s
+description: Wan-Animate-2 (14B int8 + lightx2v distill LoRA, 6 steps) replaces the character in a clip with the master face/body; 81 frames per run
+tags: [wan, animate2, identity, video, postprocess, cloud]
+timeout: 3600
+inputs: {input_video: video, source_image: image}
+outputs: {type: video, nodes: ["26"]}
+params:
+  input_video:     {node: "1",  field: file,  type: str, required: true}
+  source_image:    {node: "3",  field: image, type: str, required: true}
+  character:       {node: "9",  field: text,  type: str}    # "Character appearance description: … Background description: …"
+  motion:          {node: "11", field: text,  type: str}    # what the person does in the driving video
+  negative:        {node: "10", field: text,  type: str}
+  width:           {targets: [{node: "17", field: width},  {node: "4", field: resize_type.width},  {node: "5", field: resize_type.width}],  type: int, constraint: multiple_of_16, min: 256, max: 1280}
+  height:          {targets: [{node: "17", field: height}, {node: "4", field: resize_type.height}, {node: "5", field: resize_type.height}], type: int, constraint: multiple_of_16, min: 256, max: 1280}
+  length:          {node: "17", field: length, type: int, constraint: 4n+1, min: 5, max: 81}
+  seed:            {node: "22", field: noise_seed, type: int}
+  steps:           {node: "20", field: steps, type: int, min: 1}
+  reference_strength: {node: "17", field: reference_image_strength, type: float, min: 0, max: 1}
+  filename_prefix: {node: "26", field: filename_prefix, type: str}

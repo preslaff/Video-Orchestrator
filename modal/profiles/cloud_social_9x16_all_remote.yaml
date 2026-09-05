@@ -1,0 +1,10 @@
+# Import: python -m vorch profiles --import modal/profiles/cloud_social_9x16_all_remote.yaml
+# Everything on Modal: Klein 4B bf16 keyframes (Apache 2.0) and Wan 2.2 fp8 on the L40S, then
+# Wan-Animate-2 imposes the master face/body on the clip (model-level identity) instead of ReActor.
+name: Cloud social 9:16, all remote (Klein 4B + Wan fp8 + Animate-2)
+base: social_9x16
+overrides:
+  keyframe: {workflow: keyframe_flux2_4b}
+  video: {workflow: animate_wan22_fp8, width: 480, height: 832, length: 81, fps: 16}
+  face_swap: {enabled: false}
+  post_steps: [{workflow: animate_wan_animate2}]

@@ -1,0 +1,76 @@
+{
+ "1": {
+  "class_type": "LoadVideo",
+  "inputs": {
+   "file": "clip.mp4"
+  }
+ },
+ "2": {
+  "class_type": "GetVideoComponents",
+  "inputs": {
+   "video": [
+    "1",
+    0
+   ]
+  }
+ },
+ "3": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "master.png"
+  }
+ },
+ "4": {
+  "class_type": "ReActorFaceSwap",
+  "inputs": {
+   "enabled": true,
+   "swap_model": "inswapper_128.onnx",
+   "facedetection": "retinaface_resnet50",
+   "face_restore_model": "GFPGANv1.4.pth",
+   "face_restore_visibility": 1,
+   "codeformer_weight": 0.5,
+   "detect_gender_input": "no",
+   "detect_gender_source": "no",
+   "input_faces_index": "0",
+   "source_faces_index": "0",
+   "console_log_level": 1,
+   "input_image": [
+    "2",
+    0
+   ],
+   "source_image": [
+    "3",
+    0
+   ]
+  }
+ },
+ "5": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "images": [
+    "4",
+    0
+   ],
+   "fps": [
+    "2",
+    2
+   ],
+   "audio": [
+    "2",
+    1
+   ]
+  }
+ },
+ "6": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "video": [
+    "5",
+    0
+   ],
+   "filename_prefix": "video/FaceSwap",
+   "format": "mp4",
+   "codec": "h264"
+  }
+ }
+}

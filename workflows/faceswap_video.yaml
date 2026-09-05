@@ -1,0 +1,22 @@
+# Built-in: ReActor face swap over a whole clip (frame by frame, audio and fps preserved).
+# A `postprocess` step: the pipeline stages the clip as `input_video` and, when the job has a
+# master face, fills `source_image` with it (steps/postprocess.py). Add to a profile as
+#   post_steps: [{workflow: faceswap_video}]
+name: faceswap_video
+kind: postprocess
+template: reactor_video_faceswap.json
+description: ReActor inswapper_128 face swap applied to every frame of a clip (+ optional face restore); keeps fps and audio
+tags: [reactor, identity, video, postprocess]
+timeout: 1800
+inputs: {input_video: video, source_image: image}
+outputs: {type: video, nodes: ["6"]}
+params:
+  input_video:        {node: "1", field: file,  type: str, required: true}
+  source_image:       {node: "3", field: image, type: str, required: true}
+  restore_model:      {node: "4", field: face_restore_model, type: enum, enum_from: {class_type: ReActorFaceSwap, input: face_restore_model}}
+  restore_visibility: {node: "4", field: face_restore_visibility, type: float, min: 0, max: 1}
+  codeformer_weight:  {node: "4", field: codeformer_weight, type: float, min: 0, max: 1}
+  input_faces_index:  {node: "4", field: input_faces_index, type: str}
+  source_faces_index: {node: "4", field: source_faces_index, type: str}
+  filename_prefix:    {node: "6", field: filename_prefix, type: str}
+requires: {nodes: [ReActorFaceSwap]}
