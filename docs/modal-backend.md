@@ -1,6 +1,6 @@
 # Modal cloud backend — design
 
-> **Status (2026-09-05):** designed; Phase A (the code seam) implemented and verified; Phase B deployed on workspace `preslaff` (app `vorch-comfy`, Volume with the `wan22_fp8` set) and verified with a real job on the L40S; the `wan22_fp16` set and the H100 path are not yet exercised; Phases C–E
+> **Status (2026-09-05):** designed; Phase A (the code seam) implemented and verified; Phase B deployed on workspace `preslaff` (app `vorch-comfy`) and verified with a real job on the L40S; Phase C's code (workflow-driven constraints, remote-aware VRAM warnings, 720p presets, audio in assembly, master face for video post-steps) and templates (Wan fp16/fp8, LTX-2.5, Klein 4B/9B, Wan-Animate-2, built-in `faceswap_video`) are in the repo — live status in `modal/README.md`; Phases D–E
 > are planned. Facts about Modal and the models were researched in September 2026 and carry
 > dates; re-verify prices and model availability before Phase B.
 
@@ -196,7 +196,7 @@ from the Volume at ~2.5 GB/s is 25–40 s regardless. `backends.example.yaml` th
 
 Deploy with `modal deploy modal/vorch_comfy.py`; the printed URLs go into `~/vorch/backends.yaml`.
 
-## 5. Cloud workflows and profiles (Phase C)
+## 5. Cloud workflows and profiles (Phase C, implemented in `modal/workflows` + `modal/profiles`)
 
 New registry entries, exported as API JSON from ComfyUI's own templates on the Modal instance:
 

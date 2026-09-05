@@ -73,7 +73,7 @@ into the local output layout with the backend name in the file name.
 
 Param fields: `node` + `field` (or `targets: [{node, field}, …]` to write several nodes),
 `type` (`int|float|str|bool|enum|any`), `required`, `min`/`max`, `constraint`
-(`4n+1`, `multiple_of_16`, `multiple_of_8`, `positive`), `enum_from: {class_type, input}`
+(`4n+1` and `multiple_of_16` for Wan, `8n+1` and `multiple_of_32` for LTX-2.x, `multiple_of_8`, `positive`), `enum_from: {class_type, input}`
 (validated against `/object_info`). Loader model files (`unet_name`, `vae_name`,
 `swap_model`, …) are discovered from the template automatically for the environment check.
 
@@ -85,7 +85,7 @@ Param fields: `node` + `field` (or `targets: [{node, field}, …]` to write seve
 | animate | start_image (image input), positive, length | negative, width, height, fps, seed, steps, cfg, split_step, filename_prefix |
 | faceswap | input_image, source_image (image inputs) | restore_model, filename_prefix |
 | edit | positive, seed, ≥1 image input (`reference`, `reference_2`, …) | width, height, steps, cfg, unet, negative, batch_size, sampler, filename_prefix |
-| postprocess | ≥1 input (`input_video` or `input_image`) | fps, seed, filename_prefix |
+| postprocess | ≥1 input (`input_video` or `input_image`) | fps, seed, filename_prefix, source_image (auto-filled with the job's master face) |
 | custom | — | anything |
 
 The pipeline passes the optional names it knows; a workflow that does not declare one just
@@ -95,9 +95,10 @@ ignores it. That is what lets a leaner or richer user workflow replace a built-i
 
 A `postprocess` workflow takes one media file (`input_video` or `input_image`) and produces
 one. Profiles list them in `post_steps`; the orchestrator runs them in order after each clip
-or still, staging the previous output into ComfyUI `input/`, filling `fps`/`seed` from the
+or still, staging the previous output into ComfyUI `input/` (on the step's backend), filling `fps`/`seed` from the
 profile when declared, and freeing VRAM between different workflows. Steps whose input type
 does not match the media are skipped (an interpolator is skipped for stills).
+A step that declares a `source_image` param (video face swap, Wan-Animate-2 character replacement) receives the job's master face, staged once per backend; an explicit `params: {source_image: …}` wins. Built-in example: `faceswap_video` (ReActor over every frame, keeps fps and audio).
 
 Example graph for GIMM-VFI (installed here as `GIMMVFI_interpolate`):
 `VHS_LoadVideo` → `GIMMVFI_interpolate` (`interpolation_factor`, `seed`) → `VHS_VideoCombine`
@@ -108,7 +109,7 @@ the three commands above; the node ids in the YAML come from `inspect`.
 
 - **Templates are never restructured.** Only listed literal fields are replaced. If a field
   is a link (`["75:68", 0]`), map the node that feeds it (e.g. the `PrimitiveInt`) instead.
-- **Wan length must be 4n+1** (49, 81, 121…). Declare `constraint: 4n+1` on it.
+- **Wan length must be 4n+1** (49, 81, 121…). Declare `constraint: 4n+1` on it. **LTX-2.x length is 8n+1** (97, 121…) and its sizes are multiples of 32 — declare `8n+1` / `multiple_of_32`; profiles and the wizard read these constraints from the animate workflow you pick (`formats.workflow_rules`), so a profile on `animate_ltx25` rejects 81 frames while one on `animate` accepts them.
 - **Wan `steps` without `split_step`** keeps the HighNoise/LowNoise split at the template
   value (10) — set both.
 - **KV-edit output size follows the first reference** (the graph reads it via
