@@ -49,7 +49,7 @@ export function describeStep(e: JobEvent): string {
       return `Generating keyframe for ${scene}${variant}${attempt}${mode}${Number(e.max_attempts) > 1 ? ' — Gemma evaluates each attempt' : ''}`
     }
     case 'swap':
-      return `Imposing the master face on ${scene}${variant} (ReActor)`
+      return `Imposing ${e.identity ? `the face ${String(e.identity)}` : 'the master face'} on ${scene}${variant} (ReActor)`
     case 'animate':
       return `Animating ${scene} with Wan — ${String(e.length)} frames @ ${String(e.fps)} fps (~${String(e.seconds)}s); this is the slow step`
     case 'post':

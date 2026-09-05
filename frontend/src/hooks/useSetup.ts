@@ -233,6 +233,18 @@ export function useUploadAsset(projectId: string) {
   })
 }
 
+export function useUpdateAssetLabel(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ assetId, label }: { assetId: string; label: string }) => {
+      const { data, error } = await api.PATCH('/api/projects/{project_id}/assets/{asset_id}', { params: { path: { project_id: projectId, asset_id: assetId } }, body: { label } })
+      if (error) throw error
+      return data
+    },
+    onSuccess: () => invalidateProjects(qc, projectId),
+  })
+}
+
 export function useDeleteAsset(projectId: string) {
   const qc = useQueryClient()
   return useMutation({

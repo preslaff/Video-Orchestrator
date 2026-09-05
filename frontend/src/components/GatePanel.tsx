@@ -2,11 +2,12 @@
 
 import { useState } from 'react'
 import { errorMessage } from '@/api/client'
-import type { DecisionOut, JobPublic, SceneEdit } from '@/api/types'
+import type { AssetOut, DecisionOut, JobPublic, SceneEdit } from '@/api/types'
+import { AssetPicker } from '@/components/AssetPicker'
 import { useApprove, useRegenerateScene, useUpdateScenes } from '@/hooks/useJobs'
 import { Button, ErrorBox } from '@/components/ui'
 
-type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; references: string; chosen_variant: number | null }
+type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null; chosen_variant: number | null }
 
 function draftsFrom(job: JobPublic): Record<number, Draft> {
   const out: Record<number, Draft> = {}
@@ -15,7 +16,8 @@ function draftsFrom(job: JobPublic): Record<number, Draft> {
     out[s.index] = {
       description: s.description, keyframe_prompt: s.keyframe_prompt, keyframe_negative: s.keyframe_negative,
       animation_prompt: s.animation_prompt, animation_negative: s.animation_negative,
-      mode: s.mode as 't2i' | 'edit', references: s.references.join('\n'), chosen_variant: chosen >= 0 ? chosen : null,
+      mode: s.mode as 't2i' | 'edit', references: s.references.join('\n'), reference_asset_ids: [...(s.reference_asset_ids ?? [])],
+      identity_asset_id: s.identity_asset_id ?? null, chosen_variant: chosen >= 0 ? chosen : null,
     }
   }
   return out
@@ -27,7 +29,7 @@ function draftsFrom(job: JobPublic): Record<number, Draft> {
  * keyframe" / "Re-animate" — the variant picker chooses which candidate is the
  * scene's keyframe, and Approve continues the run.
  */
-export function GatePanel({ job, decisions = [], onStarted }: { job: JobPublic; decisions?: DecisionOut[]; onStarted?: () => void }) {
+export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job: JobPublic; decisions?: DecisionOut[]; onStarted?: () => void; assets?: AssetOut[] }) {
   const [drafts, setDrafts] = useState(() => draftsFrom(job))
   const update = useUpdateScenes(job.id)
   const approve = useApprove(job.id)
@@ -36,6 +38,11 @@ export function GatePanel({ job, decisions = [], onStarted }: { job: JobPublic; 
   if (!editable) return null
   const video = job.kind === 'video'
   const busy = update.isPending || approve.isPending || regen.isPending
+  const faces = assets.filter((a) => a.kind === 'master_face')
+  const refAssets = assets.filter((a) => a.kind !== 'master_face')
+  /** identity edits (asset id, '' = none) only when the project has faces; else leave untouched */
+  const identityEdit = (d: Draft): string | null => (faces.length ? (d.identity_asset_id ?? '') : null)
+  const refsEdit = (d: Draft): string[] | null => (refAssets.length ? d.reference_asset_ids : null)
 
   const regenerate = (index: number, what: 'keyframe' | 'video') => {
     const d = drafts[index]
@@ -53,7 +60,9 @@ export function GatePanel({ job, decisions = [], onStarted }: { job: JobPublic; 
         animation_prompt: video ? d.animation_prompt : null,
         animation_negative: video ? d.animation_negative : null,
         mode: what === 'keyframe' ? d.mode : null,
-        references: what === 'keyframe' ? d.references.split('\n').map((x) => x.trim()).filter(Boolean) : null,
+        references: what === 'keyframe' && !refAssets.length ? d.references.split('\n').map((x) => x.trim()).filter(Boolean) : null,
+        reference_asset_ids: what === 'keyframe' ? refsEdit(d) : null,
+        identity_asset_id: job.face_swap ? identityEdit(d) : null,   // a changed face applies to the redone swap
         apply_suggestion: false, // suggestions are applied in the editable prompt above
       },
     }, { onSuccess: () => onStarted?.() })
@@ -90,7 +99,9 @@ export function GatePanel({ job, decisions = [], onStarted }: { job: JobPublic; 
         animation_prompt: video ? d.animation_prompt : null,
         animation_negative: video ? d.animation_negative : null,
         mode: s.keyframe_path ? null : d.mode,
-        references: s.keyframe_path ? null : d.references.split('\n').map((x) => x.trim()).filter(Boolean),
+        references: s.keyframe_path || refAssets.length ? null : d.references.split('\n').map((x) => x.trim()).filter(Boolean),
+        reference_asset_ids: s.keyframe_path ? null : refsEdit(d),
+        identity_asset_id: job.face_swap && !s.video_path ? identityEdit(d) : null,
         chosen_variant: d.chosen_variant,
       }
     })
@@ -163,10 +174,21 @@ export function GatePanel({ job, decisions = [], onStarted }: { job: JobPublic; 
                 <div className="grid grid-cols-[8rem_1fr] gap-2">
                   <label className="block"><span className="text-xs text-neutral-500">mode</span>
                     <select value={d.mode} onChange={(e) => set(s.index, { mode: e.target.value as 't2i' | 'edit' })} className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1"><option value="t2i">t2i</option><option value="edit">edit</option></select></label>
-                  {d.mode === 'edit' && (
+                  {d.mode === 'edit' && !refAssets.length && (
                     <label className="block"><span className="text-xs text-neutral-500">reference paths (one per line)</span>
                       <textarea value={d.references} onChange={(e) => set(s.index, { references: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs" /></label>
                   )}
+                  {d.mode === 'edit' && refAssets.length > 0 && (
+                    <div><span className="text-xs text-neutral-500">references (project assets, in order)</span>
+                      <AssetPicker assets={refAssets} selected={d.reference_asset_ids} multi onChange={(ids) => set(s.index, { reference_asset_ids: ids })} testId={`refs-${s.index}`} /></div>
+                  )}
+                </div>
+              )}
+              {job.face_swap && faces.length > 0 && (
+                <div>
+                  <span className="text-xs text-neutral-500">identity for the face swap{s.video_path ? ' (applies on Re-animate)' : s.swapped_path ? ' (applies on Animate)' : ''}</span>
+                  <AssetPicker assets={faces} selected={d.identity_asset_id ? [d.identity_asset_id] : []} none="none" testId={`identity-${s.index}`}
+                    onChange={(ids) => set(s.index, { identity_asset_id: ids[0] ?? null })} />
                 </div>
               )}
               {video && (

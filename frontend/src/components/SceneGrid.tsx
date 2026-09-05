@@ -1,6 +1,6 @@
 'use client'
 
-import type { JobPublic, ScenePublic, VerdictOut } from '@/api/types'
+import type { AssetOut, JobPublic, ScenePublic, VerdictOut } from '@/api/types'
 import { MediaThumb } from '@/components/MediaThumb'
 
 function profileSizes(job: JobPublic): { kf: [number, number] | null; clip: [number, number] | null } {
@@ -20,9 +20,11 @@ export function VerdictChip({ v }: { v: VerdictOut | null | undefined }) {
   )
 }
 
-export function SceneCard({ job, scene, children }: { job: JobPublic; scene: ScenePublic; children?: React.ReactNode }) {
+export function SceneCard({ job, scene, children, assets = [] }: { job: JobPublic; scene: ScenePublic; children?: React.ReactNode; assets?: AssetOut[] }) {
   const { kf, clip } = profileSizes(job)
   const stills = job.kind === 'stills'
+  const face = scene.identity_asset_id ? assets.find((a) => a.id === scene.identity_asset_id) : undefined
+  const faceLabel = face ? (face.label || face.name) : scene.identity ? scene.identity.split('/').pop() : ''
   return (
     <article className="flex flex-col gap-2 rounded-lg border border-neutral-200 bg-white p-3">
       <header className="flex items-center justify-between">
@@ -51,6 +53,15 @@ export function SceneCard({ job, scene, children }: { job: JobPublic; scene: Sce
 
       <div className="flex flex-wrap items-center gap-2">
         <VerdictChip v={scene.keyframe_verdict} />
+        {job.face_swap && (scene.identity ? (
+          <span className="flex items-center gap-1 rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-800" title={scene.identity}>
+            {(face?.url ?? scene.identity_url) && (
+              // eslint-disable-next-line @next/next/no-img-element -- served by FastAPI
+              <img src={face?.url ?? scene.identity_url ?? ''} alt="" className="h-4 w-4 rounded-full object-cover" />
+            )}
+            {faceLabel}
+          </span>
+        ) : <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">no identity</span>)}
         {scene.mode === 'edit' && <span className="rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-800">edit · {scene.references.length} ref</span>}
         {scene.post_paths.length > 0 && <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs">{scene.post_paths.length} post-step(s)</span>}
       </div>

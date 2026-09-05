@@ -116,6 +116,7 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
                 <p>default profile <b>{project.data.default_profile_id}</b></p>
                 <p>master face {masterAsset ? <b>{masterAsset.label || masterAsset.name}</b> : <span className="text-amber-700">none — add one under Projects, or paste a path in step 3</span>}</p>
                 <p>{refAssets.length} reference/product asset(s) for edit mode</p>
+                {project.data.assets.filter((a) => a.kind === 'master_face').length > 1 && <p className="text-xs text-sky-800">{project.data.assets.filter((a) => a.kind === 'master_face').length} faces: the storyboard assigns one per scene from their labels (or none); adjust at the storyboard gate.</p>}
                 <p>export → <code className="text-xs">{project.data.export_root_effective}</code></p>
               </div>
             </div>

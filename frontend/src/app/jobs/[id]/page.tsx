@@ -64,7 +64,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
       <ProgressPanel job={j} events={live.events} connected={live.connected} />
 
       {(j.status === 'needs_approval' || j.status === 'done' || j.status === 'failed') && j.scenes.length > 0 && (
-        <GatePanel key={`${j.id}-${j.status}-${j.updated_at}`} job={j} decisions={decisions.data} onStarted={live.reconnect} />
+        <GatePanel key={`${j.id}-${j.status}-${j.updated_at}`} job={j} decisions={decisions.data} onStarted={live.reconnect} assets={project.data?.assets} />
       )}
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -93,7 +93,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         {j.scenes.length === 0 && <Empty>No storyboard yet.</Empty>}
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {j.scenes.map((s) => (
-            <SceneCard key={s.index} job={j} scene={s}>
+            <SceneCard key={s.index} job={j} scene={s} assets={project.data?.assets}>
               <ScenePrompts scene={s} video={j.kind === 'video'} />
             </SceneCard>
           ))}

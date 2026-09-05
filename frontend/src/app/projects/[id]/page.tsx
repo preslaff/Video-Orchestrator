@@ -4,7 +4,7 @@ import { use, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { errorMessage } from '@/api/client'
-import { useDeleteAsset, useDeleteProject, useProfiles, useProject, useUpdateProject, useUploadAsset } from '@/hooks/useSetup'
+import { useDeleteAsset, useDeleteProject, useProfiles, useProject, useUpdateAssetLabel, useUpdateProject, useUploadAsset } from '@/hooks/useSetup'
 import { useJobs } from '@/hooks/useJobs'
 import { Button, Card, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '@/components/ui'
 
@@ -20,6 +20,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
   const del = useDeleteProject()
   const upload = useUploadAsset(id)
   const delAsset = useDeleteAsset(id)
+  const relabel = useUpdateAssetLabel(id)
   const [kind, setKind] = useState('master_face')
   const [label, setLabel] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -59,13 +60,14 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
             <Button type="submit" variant="primary" disabled={!file || upload.isPending}>{upload.isPending ? 'Uploading…' : 'Upload'}</Button>
           </form>
           {p.assets.length === 0 && <Empty>No assets. Add a <b>master_face</b> for identity, <b>reference</b>/<b>product</b> images for edit mode.</Empty>}
+          {p.assets.some((a) => a.kind === 'master_face') && <p className="mb-2 text-xs text-neutral-500">Label faces by who and when (e.g. “Maria, age 8”) — the storyboard reads the labels to assign a face to each scene.</p>}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {p.assets.map((a) => (
               <div key={a.id} className="rounded border border-neutral-200 p-1">
                 {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
                 <img src={a.url} alt={a.name} className="aspect-square w-full rounded object-cover" />
                 <div className="mt-1 flex items-center justify-between text-xs">
-                  <span><span className="rounded bg-neutral-100 px-1">{a.kind}</span> {a.label || a.name}</span>
+                  <span><span className="rounded bg-neutral-100 px-1">{a.kind}</span> <button type="button" className="hover:underline" title="edit label" onClick={() => { const v = prompt(`Label for “${a.name}”`, a.label || ''); if (v !== null) relabel.mutate({ assetId: a.id, label: v }) }}>{a.label || a.name}</button></span>
                   <button type="button" className="text-red-700 hover:underline" onClick={() => { if (confirm(`Remove asset “${a.name}”?`)) delAsset.mutate(a.id) }}>remove</button>
                 </div>
               </div>
