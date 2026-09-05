@@ -8,7 +8,7 @@ import type { JobStatus } from '@/api/types'
 import { useDeleteJob, useJobs } from '@/hooks/useJobs'
 import { useProjects } from '@/hooks/useSetup'
 import { useGlobalEvents } from '@/hooks/useGlobalEvents'
-import { Button, Card, Empty, ErrorBox, StatusBadge, fmtTime } from '@/components/ui'
+import { Button, Card, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '@/components/ui'
 
 const STATUSES: JobStatus[] = ['pending', 'running', 'needs_approval', 'done', 'failed', 'cancelled']
 const PAGE = 25
@@ -48,12 +48,13 @@ export default function JobsPage() {
         {jobs.data && jobs.data.items.length > 0 && (
           <table className="w-full text-left text-sm">
             <thead className="text-xs uppercase text-neutral-500">
-              <tr><th className="py-1 pr-3">status</th><th className="py-1 pr-3">idea</th><th className="py-1 pr-3">project</th><th className="py-1 pr-3">kind</th><th className="py-1 pr-3">profile</th><th className="py-1 pr-3">updated</th><th /></tr>
+              <tr><th className="py-1 pr-3">status</th><th className="py-1 pr-3">id</th><th className="py-1 pr-3">idea</th><th className="py-1 pr-3">project</th><th className="py-1 pr-3">kind</th><th className="py-1 pr-3">profile</th><th className="py-1 pr-3">updated</th><th /></tr>
             </thead>
             <tbody>
               {jobs.data.items.map((j) => (
                 <tr key={j.id} className="border-t border-neutral-100 hover:bg-neutral-50">
                   <td className="py-2 pr-3"><StatusBadge status={j.status} /></td>
+                  <td className="py-2 pr-3"><JobIdChip id={j.id} /></td>
                   <td className="py-2 pr-3"><Link href={`/jobs/${j.id}`} className="font-medium hover:underline">{j.idea || j.id}</Link></td>
                   <td className="py-2 pr-3">
                     {j.project_id ? (

@@ -6,7 +6,7 @@ import { errorMessage } from '@/api/client'
 import { useDecisions, useExportStatus, useJob, useProvenance, useRunExport } from '@/hooks/useJobs'
 import { useJobEvents } from '@/hooks/useJobEvents'
 import { useProject } from '@/hooks/useSetup'
-import { Button, Card, Collapsible, Empty, ErrorBox, StatusBadge, fmtTime } from '@/components/ui'
+import { Button, Card, Collapsible, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '@/components/ui'
 import { Timeline } from '@/components/Timeline'
 import { DecisionLog } from '@/components/DecisionLog'
 import { SceneCard, ScenePrompts } from '@/components/SceneGrid'
@@ -40,6 +40,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         <Link href="/jobs" className="text-sm text-neutral-500 hover:underline">← jobs</Link>
         <StatusBadge status={j.status} />
         <h1 className="text-xl font-semibold">{j.idea}</h1>
+        <JobIdChip id={j.id} full />
         {j.project_id ? (
           <Link href={`/setup/projects/${j.project_id}`} className="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-200" title="project">
             📁 {project.data?.name ?? 'project'}

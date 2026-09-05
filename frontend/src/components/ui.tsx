@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { JobStatus } from '@/api/types'
 
 export function Card({ title, children, actions, className = '' }: { title?: ReactNode; children: ReactNode; actions?: ReactNode; className?: string }) {
@@ -107,5 +107,20 @@ export function Collapsible({
       </summary>
       <div className="border-t border-neutral-100 px-4 py-3">{children}</div>
     </details>
+  )
+}
+
+/** A job id: the short form everywhere (CLI, files, export folders use the first 8 chars),
+ * the full id on hover, click copies the full id. */
+export function JobIdChip({ id, full = false }: { id: string; full?: boolean }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(id); setCopied(true); setTimeout(() => setCopied(false), 1200) } catch { /* clipboard unavailable */ }
+  }
+  return (
+    <button type="button" onClick={copy} title={`${id} — click to copy`}
+      className="rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-xs text-neutral-600 hover:bg-neutral-200">
+      {copied ? 'copied' : full ? id : id.slice(0, 8)}
+    </button>
   )
 }
