@@ -133,13 +133,13 @@ the UI).
 
 | Route | Purpose |
 |---|---|
-| `/jobs` | All jobs with status, project, kind and profile; filters by project and status; live status badges; delete. |
+| `/jobs` | All jobs with id, status, project, kind and profile name; filters by project, unassigned and status, kept in the URL (`/jobs?project_id=…`, `?unassigned=1`); live status badges; delete. |
 | `/jobs/new` | The **new-job wizard**: project → profile → brief (idea, style, scenes, seed, autonomy, keyframe mode + references, face swap, evaluation) → review. Submission is blocked, with reasons, while the environment check fails (a *force* switch overrides). |
 | `/jobs/[id]` | The **job page**: progress panel, gate/review panel, scene grid (keyframes, variants, clips), assemble panel, export panel, collapsible decision log and provenance. Everything updates live over SSE; the stream resumes across approval gates and reloads. |
 | `/setup/env` | Environment check with a re-run button and the effective configuration. |
 | `/setup/workflows` | Registered ComfyUI workflows, their parameters and requirements; how to add one. |
 | `/setup/profiles` | Output profiles: clone, edit (aspect presets, sizes, 4n+1 helper, style vocabulary, workflow pickers, post-steps), delete. Built-ins are read-only. |
-| `/setup/projects` | Projects with asset uploads (master face, references, products, logos) and their jobs. |
+| `/projects` | The projects list (default profile, assets, jobs, last activity, plus an **Unassigned** row for jobs without a project) and the project page: settings, asset uploads (master face, references, products, logos), the project's jobs and **New job in this project** (opens the wizard with the project preselected). `/setup/projects` redirects here. |
 
 ## Setup phase
 
@@ -344,7 +344,7 @@ All routes under `/api`; interactive docs at `/docs`. Errors use one envelope:
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST / GET | `/jobs` | create; list (`limit`, `offset`, `status`, `project_id`) |
+| POST / GET | `/jobs` | create; list (`limit`, `offset`, `status`, `project_id`, `unassigned`) |
 | GET / DELETE | `/jobs/{id}` | job with scenes, media URLs, pending gate, assembly; delete |
 | PUT | `/jobs/{id}/scenes` | edit prompts/negatives/mode/references, choose a variant |
 | POST | `/jobs/{id}/scenes/{i}/regenerate` | redo a keyframe or clip (optional edits, `apply_suggestion`) |
