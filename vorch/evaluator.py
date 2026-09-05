@@ -99,10 +99,14 @@ SYSTEM = (
 )
 
 
-def _user_prompt(task_description: str, *, orientation: str | None = None, framing_hint: str = "") -> str:
+def _user_prompt(task_description: str, *, orientation: str | None = None, framing_hint: str = "",
+                 with_identity: bool = False) -> str:
     text = (
         f'Goal of the frame: "{task_description}"\n\n'
-        "Evaluate it and return the JSON verdict. Set verdict to \"accept\" only if the "
+        + ("The FIRST image is the generated frame; the SECOND image is the reference identity "
+           "(the person who must appear). Set identity_match to true only if the person in the "
+           "first image is recognisably the same person as in the second.\n\n" if with_identity else "")
+        + "Evaluate it and return the JSON verdict. Set verdict to \"accept\" only if the "
         "action is correct, the right character is shown, and there are no artifacts; "
         "otherwise \"retry\" with a concrete fix_suggestion for the prompt.\n"
         "score: overall quality on a 1-10 scale (10 = flawless, 7 = usable, 5 = average, "
@@ -156,15 +160,19 @@ def evaluate_image(
     orientation: str | None = None,
     framing_hint: str = "",
     review_threshold: int = REVIEW_SCORE_THRESHOLD,
+    identity_image: str | Path | None = None,
 ) -> Verdict:
     """Evaluate one keyframe; return a validated Verdict (retries on bad JSON).
 
     ``orientation`` (landscape/portrait/square) + ``framing_hint`` make Gemma
     judge ``framing_ok`` for the delivery format; ``review_threshold`` is the
-    profile's advisory score floor for ``needs_review``.
+    profile's advisory score floor for ``needs_review``; ``identity_image`` (the
+    scene's face) is attached so ``identity_match`` is judged against it.
     """
+    images = [image_path] + ([identity_image] if identity_image else [])
     return _evaluate(
-        [image_path], _user_prompt(task_description, orientation=orientation, framing_hint=framing_hint),
+        images, _user_prompt(task_description, orientation=orientation, framing_hint=framing_hint,
+                             with_identity=bool(identity_image)),
         attempts=attempts, review_threshold=review_threshold, label=Path(image_path).name,
         require_framing=orientation is not None,
     )

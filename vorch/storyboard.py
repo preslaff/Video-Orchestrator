@@ -36,6 +36,11 @@ class SceneBrief(BaseModel):
     character: str = ""
     setting: str = ""
     mood: str = ""
+    identity: str | None = None           # project asset id of the face for this scene (None = no swap)
+    reference_ids: list[str] = []         # project asset ids the keyframe should follow (edit mode)
+
+
+PROMPT_EXCLUDE = {"identity", "reference_ids"}  # asset ids never reach the image/motion prompts
 
 
 class PromptPair(BaseModel):
@@ -78,10 +83,15 @@ class PromptContext:
     style_negative: str = ""            # Klein negative
     wan_positive: str = "cinematic"     # how the motion prompt should end
     wan_negative: str = ""              # Wan negative
+    assets: tuple[tuple[str, str, str], ...] = ()   # (asset id, kind, label) the storyboard may assign
+    edit_mode: bool = False             # job keyframes are reference-locked edits -> pick references too
 
     @classmethod
-    def from_params(cls, params: Any) -> "PromptContext":
+    def from_params(cls, params: Any, *, assets: tuple[tuple[str, str, str], ...] = (),
+                    edit_mode: bool = False) -> "PromptContext":
         return cls(
+            assets=tuple(assets),
+            edit_mode=edit_mode,
             purpose=params.purpose,
             kind=params.kind,
             aspect=params.aspect,
@@ -105,6 +115,17 @@ class PromptContext:
             lines.append("Всяка сцена е самостоятелен кадър (снимка), без движение.")
         else:
             lines.append(f"Всяка сцена е клип от ~{self.clip_seconds:g}s — едно действие на сцена.")
+        faces = [(i, lbl) for i, k, lbl in self.assets if k == "master_face"]
+        refs = [(i, k, lbl) for i, k, lbl in self.assets if k != "master_face"]
+        if faces:
+            lines.append("Налични лица (identity) за face swap — id: описание: "
+                         + "; ".join(f"{i}: {lbl}" for i, lbl in faces))
+            lines.append('За всяка сцена посочи "identity": id-то на лицето, което съответства на героя и момента '
+                         'от историята (възраст, период), или null ако в кадъра няма герой или е друг човек.')
+        if refs and self.edit_mode:
+            lines.append("Налични референции (композиция/продукти) — id: вид: описание: "
+                         + "; ".join(f"{i}: {k}: {lbl}" for i, k, lbl in refs))
+            lines.append('За всяка сцена посочи "reference_ids": списък от id-та на референциите, които кадърът да следва (може празен).')
         return "\n".join(lines)
 
 
@@ -145,7 +166,10 @@ def generate_storyboard(
         f"Разбий на {n}. Върни JSON масив, по един обект на сцена:\n"
         '[{"scene": 1, "description": "какво се случва (кратко, наративно)", '
         '"character": "кой герой е в кадъра", "setting": "локация", '
-        '"mood": "емоция/тон"}]\n'
+        '"mood": "емоция/тон"'
+        + (', "identity": "id на лице или null"' if any(k == "master_face" for _, k, _ in ctx.assets) else "")
+        + (', "reference_ids": ["id", ...]' if ctx.edit_mode and any(k != "master_face" for _, k, _ in ctx.assets) else "")
+        + "}]\n"
         "Само JSON, без друг текст."
     )
     raw = gemma.complete_text(
@@ -193,7 +217,7 @@ def keyframe_prompt(
     style_line = ", ".join(x for x in (style, ctx.style_positive) if x) or "photorealistic, cinematic"
     negative = ctx.style_negative or DEFAULT_KEYFRAME_NEGATIVE
     user = (
-        f"Сцена: {scene.model_dump_json()}\n"
+        f"Сцена: {scene.model_dump_json(exclude=PROMPT_EXCLUDE)}\n"
         f"Стил/техника: {style_line}\n"
         f"Формат: {ctx.aspect} ({ctx.orientation}). Кадриране: {ctx.framing_hint}\n"
         f'Върни JSON: {{"positive": "...", "negative": "{negative}"}}'
@@ -209,7 +233,7 @@ def animation_prompt(
     ctx = context or DEFAULT_CONTEXT
     negative = ctx.wan_negative or DEFAULT_WAN_NEGATIVE
     user = (
-        f"Сцена: {scene.model_dump_json()}\n"
+        f"Сцена: {scene.model_dump_json(exclude=PROMPT_EXCLUDE)}\n"
         f"Клип: ~{ctx.clip_seconds:g}s, {ctx.aspect} ({ctx.orientation}). Движение: {ctx.motion_hint}.\n"
         "Леко, локализирано движение работи най-добре на 16GB VRAM.\n"
         f"Завърши с camera move + \"{ctx.wan_positive}\".\n"

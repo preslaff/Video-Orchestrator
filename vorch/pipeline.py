@@ -92,6 +92,25 @@ def upload_master(master_face: str | Path, params: GenParams = DEFAULT) -> str:
     return comfy.upload_image(master_face, backend=backends.for_workflow(params.faceswap_workflow))
 
 
+def stage_identity(face: str | Path, params: GenParams = DEFAULT, *, cache: dict | None = None) -> str:
+    """Stage a scene's identity face once per (backend, path); return the staged name.
+
+    Scenes may carry different faces (the protagonist at different ages) — the
+    cache lets a job upload each face once per run.
+    """
+    backend = backends.for_workflow(params.faceswap_workflow)
+    key = (backend.name, str(face))
+    if cache is not None and key in cache:
+        return cache[key]
+    src = Path(face).expanduser()
+    if not src.is_file():
+        raise FileNotFoundError(f"identity face not found: {src}")
+    name = comfy.upload_image(src, backend=backend)
+    if cache is not None:
+        cache[key] = name
+    return name
+
+
 def swap_master_onto(
     frame_path: Path, master_name: str, *, label: str = "faceswap", params: GenParams = DEFAULT,
     filename_prefix: str | None = None,
@@ -149,6 +168,7 @@ def generate_keyframe_evaluated(
     mode: str = "t2i",
     references: Sequence[str] = (),
     on_start: Callable[[int, int], None] | None = None,
+    identity_image: str | Path | None = None,
 ) -> tuple[Path, Verdict]:
     """Generate a keyframe, evaluate it, and retry with the fix up to N times.
 
@@ -175,6 +195,7 @@ def generate_keyframe_evaluated(
             kf_path, task, orientation=params.orientation,
             framing_hint=formats.framing_hint(params.aspect),
             review_threshold=params.review_threshold,
+            identity_image=identity_image,
         )
         if on_attempt is not None:
             on_attempt(attempt, kf_path, verdict)

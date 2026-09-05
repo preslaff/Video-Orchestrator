@@ -490,3 +490,66 @@ def test_n_scenes_caps_the_storyboard(wired):
     job = o.create_job("idea", master_face=str(master), autonomy="semi")
     o.run(job)
     assert len(job.scenes) == 1 and job.scenes[0].description == "d1"
+
+
+def _faces_project(store, tmp_path, monkeypatch):
+    from vorch import config, projects
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects.new_project("Ages")
+    young = projects.add_asset(p, b"y", kind="master_face", name="young.png", label="Maria, age 8")
+    old = projects.add_asset(p, b"o", kind="master_face", name="old.png", label="Maria, age 70")
+    projects.save(store, p)
+    return p, young, old
+
+
+def test_storyboard_assigns_identities_per_scene_and_swaps_accordingly(wired, tmp_path, monkeypatch):
+    store, master, calls = wired
+    p, young, old = _faces_project(store, tmp_path, monkeypatch)
+    briefs = [
+        SceneBrief(scene=1, description="child", identity=young.id),
+        SceneBrief(scene=2, description="street", identity=None),          # explicit: no face
+        SceneBrief(scene=3, description="grandmother", identity="ghost"),  # unknown id -> default kept
+    ]
+    monkeypatch.setattr(storyboard, "generate_storyboard", lambda idea, *, n_scenes=None, **kw: briefs)
+    swaps = []
+    monkeypatch.setattr(pipeline, "swap_master_onto", lambda frame, master_name, **kw: swaps.append(master_name) or f"/swap/{len(swaps)}.png")
+    o = Orchestrator(store, n_scenes=3, evaluate=False)
+    job = o.create_job("a life", master_face=str(master), autonomy="full", project_id=p.id)
+    o.run(job)
+    assert job.status is JobStatus.DONE
+    s0, s1, s2 = job.scenes
+    assert (s0.identity, s0.identity_asset_id) == (young.path, young.id)
+    assert s1.identity == "" and s1.identity_asset_id is None and s1.swapped_path is None
+    assert s2.identity == str(master) and s2.identity_asset_id is None      # default face kept
+    assert swaps == [young.path, str(master)]                                # scene 1 skipped
+    actions = [(d.scene_index, d.action, d.reason) for d in store.decisions(job.id) if d.phase == "storyboard"]
+    assert (0, "assigned", "identity: Maria, age 8") in actions
+    assert (1, "assigned", "identity: none") in actions
+    assert any(i == 2 and a == "warning" and "ghost" in r for i, a, r in actions)
+
+
+def test_regenerate_video_reswaps_with_the_scene_identity(wired, tmp_path, monkeypatch):
+    store, master, calls = wired
+    p, young, old = _faces_project(store, tmp_path, monkeypatch)
+    monkeypatch.setattr(storyboard, "generate_storyboard",
+                        lambda idea, *, n_scenes=None, **kw: [SceneBrief(scene=1, description="d", identity=young.id)])
+    swaps = []
+    monkeypatch.setattr(pipeline, "swap_master_onto", lambda frame, master_name, **kw: swaps.append(master_name) or f"/swap/{len(swaps)}.png")
+    o = Orchestrator(store, n_scenes=1, evaluate=False)
+    job = o.create_job("a life", master_face=str(master), autonomy="full", project_id=p.id)
+    o.run(job)
+    assert swaps == [young.path] and job.scenes[0].swapped_path == "/swap/1.png"
+    o.regenerate(job, 0, what="video", edits={"identity_asset_id": old.id})
+    assert job.scenes[0].identity == old.path and swaps == [young.path, old.path]
+    assert job.scenes[0].swapped_path == "/swap/2.png" and job.status is JobStatus.DONE
+
+
+def test_face_swap_without_default_master_needs_project_faces(wired, tmp_path, monkeypatch):
+    store, master, _ = wired
+    o = Orchestrator(store, n_scenes=1)
+    with pytest.raises(FileNotFoundError, match="no master_face assets"):
+        o.create_job("x", master_face="", autonomy="full")
+    p, _young, _old = _faces_project(store, tmp_path, monkeypatch)
+    job = o.create_job("x", master_face="", autonomy="full", project_id=p.id)
+    assert job.master_face == "" and job.face_swap is True

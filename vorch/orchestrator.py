@@ -142,10 +142,16 @@ class Orchestrator:
         # Master face only matters (and is only validated) when swapping.
         master_str = ""
         if self.face_swap:
-            master = Path(master_face).expanduser()
-            if not master.is_file():
+            master = Path(master_face).expanduser() if master_face else None
+            if master is not None and not master.is_file():
                 raise FileNotFoundError(f"master face not found: {master}")
-            master_str = str(master)
+            if master is None:
+                # No default face: the storyboard must be able to pick one per scene.
+                project = projects_mod.load(self.store, project_id) if project_id else None
+                if not projects_mod.identity_assets(project):
+                    raise FileNotFoundError("master face not found: face swap is on but no master face was "
+                                            "given and the project has no master_face assets")
+            master_str = str(master) if master is not None else ""
         elif master_face:
             master_str = str(Path(master_face).expanduser())
         refs = [str(Path(r).expanduser()) for r in (reference_images or [])]
@@ -251,6 +257,9 @@ class Orchestrator:
             scene.variants = []
             scene.swapped_path = None
             scene.swap_verdict = None
+        if what == "video":
+            scene.swapped_path = None   # the swap is part of the video phase: redo it with the current identity
+            scene.swap_verdict = None
         scene.video_path = None
         scene.raw_video_path = None
         scene.video_verdict = None
@@ -302,7 +311,14 @@ class Orchestrator:
         log.info("job %s: storyboard (idea=%r)", job.id, job.idea)
         self._event(job, "phase", phase="storyboard", total=self.n_scenes)
         self._event(job, "step", step="storyboard", detail="Gemma writes the storyboard and prompts")
-        context = storyboard.PromptContext.from_params(self.params)
+        project = projects_mod.load(self.store, job.project_id) if job.project_id else None
+        asset_list = tuple(
+            (a.id, a.kind, a.label or a.name) for a in (project.assets if project else [])
+            if a.kind in ("master_face", "reference", "product", "logo")
+        )
+        context = storyboard.PromptContext.from_params(
+            self.params, assets=asset_list if (self.face_swap or job.mode == "edit") else (), edit_mode=job.mode == "edit",
+        )
         briefs = storyboard.generate_storyboard(job.idea, n_scenes=self.n_scenes, context=context)
         if self.n_scenes and len(briefs) > self.n_scenes:
             # n_scenes is a hard cap: the model sometimes returns more than asked for
@@ -312,21 +328,22 @@ class Orchestrator:
         for i, brief in enumerate(briefs):
             kp = storyboard.keyframe_prompt(brief, style=job.style, context=context)
             ap = storyboard.animation_prompt(brief, context=context)
-            scenes.append(
-                Scene(
-                    index=i,
-                    description=brief.description,
-                    character=brief.character,
-                    setting=brief.setting,
-                    mood=brief.mood,
-                    keyframe_prompt=kp.positive,
-                    keyframe_negative=kp.negative,
-                    animation_prompt=ap.positive,
-                    animation_negative=ap.negative,
-                    mode=job.mode,
-                    references=list(job.reference_images) if job.mode == "edit" else [],
-                )
+            scene = Scene(
+                index=i,
+                description=brief.description,
+                character=brief.character,
+                setting=brief.setting,
+                mood=brief.mood,
+                keyframe_prompt=kp.positive,
+                keyframe_negative=kp.negative,
+                animation_prompt=ap.positive,
+                animation_negative=ap.negative,
+                mode=job.mode,
+                references=list(job.reference_images) if job.mode == "edit" else [],
+                identity=job.master_face if self.face_swap else "",
             )
+            self._assign_scene_assets(job, scene, brief, project)
+            scenes.append(scene)
         job.scenes = scenes
         self.store.log_decision(
             Decision(
@@ -336,6 +353,49 @@ class Orchestrator:
         )
         self.store.save_job(job)
         self._event(job, "storyboard", scenes=len(scenes))
+
+    def _assign_scene_assets(self, job: Job, scene: Scene, brief, project) -> None:
+        """Apply the storyboard's per-scene identity / reference picks (project asset
+        ids). Unknown ids are dropped with a decision-log warning; without a pick the
+        scene keeps the job defaults (master face, reference images)."""
+        if project is None or not (self.face_swap or job.mode == "edit"):
+            return
+        picks: dict = {}
+        if self.face_swap and brief.identity is not None:
+            picks["identity_asset_id"] = brief.identity
+        if job.mode == "edit" and brief.reference_ids:
+            picks["reference_ids"] = list(brief.reference_ids)
+        if not picks and brief.identity is None and self.face_swap and "identity" in getattr(brief, "model_fields_set", set()):
+            picks["identity_asset_id"] = ""  # the model explicitly said: no face in this scene
+        if not picks:
+            return
+        edits: dict = {}
+        if "identity_asset_id" in picks:
+            aid = picks["identity_asset_id"]
+            if aid == "" or project.asset(aid) is not None and project.asset(aid).kind == "master_face":
+                edits["identity_asset_id"] = aid
+            else:
+                self.store.log_decision(Decision(job_id=job.id, scene_index=scene.index, phase="storyboard",
+                                                 attempt=1, action="warning",
+                                                 reason=f"storyboard picked unknown identity {aid!r}; keeping the default"))
+        if "reference_ids" in picks:
+            known = [r for r in picks["reference_ids"] if project.asset(r) is not None]
+            unknown = [r for r in picks["reference_ids"] if r not in known]
+            if unknown:
+                self.store.log_decision(Decision(job_id=job.id, scene_index=scene.index, phase="storyboard",
+                                                 attempt=1, action="warning",
+                                                 reason=f"storyboard picked unknown references {unknown}"))
+            if known:
+                edits["reference_asset_ids"] = known
+        if not edits:
+            return
+        changed = scene_assets.apply_asset_edits(scene, edits, project)
+        label = scene_assets.identity_label(project, scene) or "none"
+        self.store.log_decision(Decision(
+            job_id=job.id, scene_index=scene.index, phase="storyboard", attempt=1, action="assigned",
+            reason=", ".join(f"identity: {label}" if c == "identity" else f"references: {len(scene.reference_asset_ids)}"
+                             for c in changed),
+        ))
 
     @property
     def variants_per_scene(self) -> int:
@@ -396,6 +456,7 @@ class Orchestrator:
                 seed=seed, max_attempts=self.max_attempts, on_attempt=log_attempt,
                 params=self.params, negative=scene.keyframe_negative or None,
                 mode=scene.mode, references=refs, filename_prefix=prefix, on_start=on_start,
+                identity_image=(scene.identity or None) if self.face_swap else None,
             )
         path, _ = pipeline._fresh_keyframe(
             scene.keyframe_prompt, seed=seed, evaluate=False, max_attempts=1,
@@ -417,8 +478,7 @@ class Orchestrator:
     def _phase_finish_stills(self, job: Job) -> None:
         """Stills jobs: impose the master face on every variant (when enabled) and
         mark the scenes complete. Post-steps for stills hook in here."""
-        do_swap = self.face_swap and bool(job.master_face)
-        master_name = pipeline.upload_master(job.master_face, self.params) if do_swap else None
+        face_cache: dict = {}  # (backend, face path) -> staged name
         self._event(job, "phase", phase="stills", total=len(job.scenes))
         for scene in job.scenes:
             if scene.status is SceneStatus.COMPLETE:
@@ -427,6 +487,9 @@ class Orchestrator:
                 log.warning("job %s: scene %d has no keyframe; skipping", job.id, scene.index)
                 continue
             provenance.set_context(scene=scene.index)
+            face = scene.identity if self.face_swap else ""
+            do_swap = bool(face)
+            master_name = pipeline.stage_identity(face, self.params, cache=face_cache) if do_swap else None
             if do_swap:
                 for v, variant in enumerate(scene.variants):
                     if variant.swapped_path:
@@ -458,7 +521,7 @@ class Orchestrator:
                     outs = run_chain(
                         src, self.params.post_steps, seed=variant.seed,
                         filename_prefix=output_prefix(job, scene.index, "post", v if len(scene.variants) > 1 else None),
-                        master_face=job.master_face or None,
+                        master_face=scene.identity or None,
                         prompts={"positive": scene.keyframe_prompt},
                     )
                     variant.post_paths = [str(o) for o in outs]
@@ -494,8 +557,7 @@ class Orchestrator:
             )
 
     def _phase_videos(self, job: Job) -> None:
-        do_swap = self.face_swap and bool(job.master_face)
-        master_name = pipeline.upload_master(job.master_face, self.params) if do_swap else None
+        face_cache: dict = {}  # (backend, face path) -> staged name; faces differ per scene
         self._event(job, "phase", phase="videos", total=len(job.scenes),
                     length=self.params.length, fps=self.params.fps)
         for scene in job.scenes:
@@ -505,9 +567,12 @@ class Orchestrator:
                 log.warning("job %s: scene %d has no keyframe; skipping", job.id, scene.index)
                 continue
             provenance.set_context(scene=scene.index)
+            face = scene.identity if self.face_swap else ""
+            do_swap = bool(face)
             if do_swap:
-                log.info("job %s: video scene %d (swap -> animate)", job.id, scene.index)
-                self._event(job, "step", step="swap", index=scene.index)
+                master_name = pipeline.stage_identity(face, self.params, cache=face_cache)
+                log.info("job %s: video scene %d (swap %s -> animate)", job.id, scene.index, Path(face).name)
+                self._event(job, "step", step="swap", index=scene.index, identity=Path(face).name)
                 swapped = pipeline.swap_master_onto(
                     scene.keyframe_path, master_name, params=self.params,
                     filename_prefix=output_prefix(job, scene.index, "swapped"),
@@ -542,7 +607,7 @@ class Orchestrator:
                 outs = run_chain(
                     video, self.params.post_steps, fps=self.params.fps, seed=seed,
                     filename_prefix=output_prefix(job, scene.index, "post"),
-                    master_face=job.master_face or None,
+                    master_face=scene.identity or None,
                     prompts={"positive": scene.keyframe_prompt, "motion": scene.animation_prompt},
                 )
                 if outs:

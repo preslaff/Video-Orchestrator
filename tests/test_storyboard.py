@@ -141,3 +141,40 @@ def test_default_context_keeps_legacy_prompts(monkeypatch):
     keyframe_prompt(SceneBrief(scene=1, description="d"))
     assert "photorealistic, cinematic" in calls[0][1] and "16:9" in calls[0][1]
     assert storyboard.merge_negatives("a, b", "B , c", "") == "a, b, c"
+
+
+# --- per-scene asset assignment (identity / references picked by the storyboard) -----------
+
+
+def test_storyboard_lists_assets_and_parses_picks(monkeypatch):
+    seen = {}
+
+    def fake(system, user, **kw):
+        seen["user"] = user
+        return ('[{"scene": 1, "description": "child plays", "character": "Maria", "setting": "yard", '
+                '"mood": "joy", "identity": "a1", "reference_ids": ["r1"]}, '
+                '{"scene": 2, "description": "empty street", "identity": null}]')
+
+    monkeypatch.setattr(storyboard.gemma, "complete_text", fake)
+    ctx = storyboard.PromptContext(assets=(("a1", "master_face", "Maria, age 8"), ("a2", "master_face", "Maria, age 70"),
+                                           ("r1", "reference", "yard.png")), edit_mode=True)
+    briefs = storyboard.generate_storyboard("a life", n_scenes=2, context=ctx)
+    assert briefs[0].identity == "a1" and briefs[0].reference_ids == ["r1"]
+    assert briefs[1].identity is None and briefs[1].reference_ids == []
+    assert "a1: Maria, age 8" in seen["user"] and "a2: Maria, age 70" in seen["user"] and "r1: reference: yard.png" in seen["user"]
+    assert '"identity": "id на лице или null"' in seen["user"] and '"reference_ids"' in seen["user"]
+    # without assets the prompt is unchanged (no identity field asked for)
+    storyboard.generate_storyboard("a life", n_scenes=1, context=storyboard.PromptContext())
+    assert "identity" not in seen["user"]
+    # references are only offered for edit-mode jobs
+    storyboard.generate_storyboard("x", n_scenes=1, context=storyboard.PromptContext(assets=(("r1", "reference", "yard"),)))
+    assert "reference_ids" not in seen["user"]
+
+
+def test_asset_ids_never_reach_the_image_prompts(monkeypatch):
+    seen = []
+    monkeypatch.setattr(storyboard.gemma, "complete_text", lambda s, u, **kw: seen.append(u) or '{"positive": "p", "negative": ""}')
+    brief = storyboard.SceneBrief(scene=1, description="d", identity="a1", reference_ids=["r1"])
+    storyboard.keyframe_prompt(brief)
+    storyboard.animation_prompt(brief)
+    assert all("a1" not in u and "reference_ids" not in u for u in seen)

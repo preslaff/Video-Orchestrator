@@ -221,3 +221,20 @@ def test_user_prompt_explains_the_score_scale(monkeypatch):
     assert "framing_ok" in seen["rf"]["json_schema"]["schema"]["required"]
     evaluate_image("k.png", "task")
     assert "framing_ok" not in seen["rf"]["json_schema"]["schema"].get("required", [])
+
+
+def test_evaluate_image_attaches_the_identity_face(monkeypatch, tmp_path):
+    from vorch import evaluator
+
+    seen = {}
+
+    def fake(system, prompt, images, **kw):
+        seen["prompt"], seen["images"] = prompt, list(images)
+        return ('{"action_correct": true, "identity_match": true, "style_match": true, "artifacts": false, '
+                '"composition_ok": true, "score": 8, "verdict": "accept", "fix_suggestion": ""}')
+
+    monkeypatch.setattr(evaluator.gemma, "complete_vision", fake)
+    evaluator.evaluate_image(tmp_path / "k.png", "a woman", identity_image=tmp_path / "face.png")
+    assert seen["images"] == [tmp_path / "k.png", tmp_path / "face.png"] and "SECOND image is the reference identity" in seen["prompt"]
+    evaluator.evaluate_image(tmp_path / "k.png", "a woman")
+    assert seen["images"] == [tmp_path / "k.png"] and "SECOND image" not in seen["prompt"]
