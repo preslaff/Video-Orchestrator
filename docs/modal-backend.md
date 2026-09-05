@@ -91,7 +91,9 @@ backends:
     cost_per_hour: 3.95
 ```
 
-Rules: the file holds **no secrets**, only env-var names; a missing env var is a `BackendError`
+Rules: the file holds **no secrets**, only env-var names; the values live in `~/vorch/vorch.env`
+(`KEY=VALUE`, loaded by `config.load_env_file` when any vorch process starts, so the API server and
+the CLI see the token no matter which shell launched them); a missing env var is a `BackendError`
 reported by the env check, not an import-time crash. Entries default to `remote: true`
 (`remote: false` is allowed for a second local ComfyUI sharing `COMFY_ROOT`). `local` is always
 present (from `VORCH_COMFY_URL`) and cannot be redefined. Names match `^[a-z0-9][a-z0-9_-]{0,31}$`

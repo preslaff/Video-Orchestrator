@@ -1,6 +1,8 @@
 # Copy to ~/vorch/backends.yaml and paste the URLs printed by `modal deploy modal/vorch_comfy.py`.
-# The file holds NO secrets: only the names of environment variables that carry the proxy token
-# (export MODAL_PROXY_KEY=wk-… MODAL_PROXY_SECRET=ws-… in the shell that runs `vorch serve`).
+# The file holds NO secrets: only the names of environment variables that carry the proxy token.
+# Put the values in ~/vorch/vorch.env (KEY=VALUE lines; loaded by every vorch process at start):
+#   MODAL_PROXY_KEY=wk-…
+#   MODAL_PROXY_SECRET=ws-…
 backends:
   modal-l40s:
     url: https://<workspace>--vorch-comfy-comfy-l40s.modal.run

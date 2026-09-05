@@ -3,6 +3,8 @@ with auth headers resolved from environment variables (never stored)."""
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from vorch import backends, config
@@ -139,3 +141,16 @@ def test_backends_reload_when_the_file_appears_or_changes(tmp_path):
     assert backends.load() is first                             # unchanged -> cached
     _write(tmp_path, "backends:\n  box:\n    url: http://box:8188\n  other:\n    url: http://o:8188\n")
     assert backends.names() == ["local", "box", "other"]
+
+
+def test_env_file_loads_secrets_without_overriding(tmp_path, monkeypatch):
+    monkeypatch.delenv("VT_KEY", raising=False)
+    monkeypatch.setenv("VT_SET", "shell")
+    f = tmp_path / "vorch.env"
+    f.write_text("# token\nexport VT_KEY=wk-1\nVT_QUOTED='a b'\nVT_SET=file\n\nbroken line\n")
+    assert sorted(config.load_env_file(f)) == ["VT_KEY", "VT_QUOTED"]
+    assert os.environ["VT_KEY"] == "wk-1" and os.environ["VT_QUOTED"] == "a b" and os.environ["VT_SET"] == "shell"
+    assert config.load_env_file(f, override=True) and os.environ["VT_SET"] == "file"
+    assert config.load_env_file(tmp_path / "missing.env") == []
+    for k in ("VT_KEY", "VT_QUOTED"):
+        monkeypatch.delenv(k)

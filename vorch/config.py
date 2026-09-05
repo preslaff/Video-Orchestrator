@@ -11,6 +11,36 @@ import os
 import random
 from pathlib import Path
 
+
+def load_env_file(path: str | Path | None = None, *, override: bool = False) -> list[str]:
+    """Load ``KEY=VALUE`` lines (``export`` prefix and quotes allowed, ``#`` comments)
+    from ``path`` (default ``VORCH_ENV_FILE`` or ``~/vorch/vorch.env``) into the
+    process environment. Existing variables win unless ``override``. Returns the
+    names set. Secrets such as the Modal proxy token live here so `vorch serve`
+    and the CLI find them regardless of the shell that started them.
+    """
+    p = Path(path or os.environ.get("VORCH_ENV_FILE", "~/vorch/vorch.env")).expanduser()
+    if not p.is_file():
+        return []
+    names: list[str] = []
+    for raw in p.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key and (override or key not in os.environ):
+            os.environ[key] = value
+            names.append(key)
+    return names
+
+
+load_env_file()  # before any VORCH_* / token lookup below
+
 # --- Service endpoints -------------------------------------------------------
 GEMMA_URL = os.environ.get("VORCH_GEMMA_URL", "http://localhost:8080")
 COMFY_URL = os.environ.get("VORCH_COMFY_URL", "http://localhost:8188")

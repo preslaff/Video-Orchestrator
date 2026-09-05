@@ -17,8 +17,12 @@ default; a workflow runs on Modal only when its registry YAML says `backend: mod
 ```bash
 .venv/bin/pip install -e ".[cloud]"          # the modal client
 .venv/bin/modal setup                        # browser login
-# Dashboard -> Settings -> Proxy Auth Tokens -> New token, then in the shell that runs vorch:
-export MODAL_PROXY_KEY=wk-…  MODAL_PROXY_SECRET=ws-…
+# Dashboard -> Settings -> Proxy Auth Tokens -> New token, then store it once:
+cat > ~/vorch/vorch.env <<'EOF'
+MODAL_PROXY_KEY=wk-…
+MODAL_PROXY_SECRET=ws-…
+EOF
+chmod 600 ~/vorch/vorch.env        # loaded by `vorch serve` and the CLI at start; no shell exports needed
 ```
 
 ## Deploy
