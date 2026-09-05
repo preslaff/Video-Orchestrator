@@ -1,7 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Trash2 } from 'lucide-react'
 import { errorMessage } from '@/api/client'
 import type { JobStatus } from '@/api/types'
@@ -13,11 +14,37 @@ import { Button, Card, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '
 const STATUSES: JobStatus[] = ['pending', 'running', 'needs_approval', 'done', 'failed', 'cancelled']
 const PAGE = 25
 
+const UNASSIGNED = '__unassigned'
+
 export default function JobsPage() {
-  const [status, setStatus] = useState<JobStatus | ''>('')
-  const [projectId, setProjectId] = useState('')
+  // useSearchParams needs a Suspense boundary for the static prerender
+  return <Suspense fallback={<Empty>Loading…</Empty>}><JobsList /></Suspense>
+}
+
+/** Filters live in the URL (`?project_id=…`, `?unassigned=1`, `?status=…`) so project pages and
+ * the Unassigned row can deep-link into the list; paging stays local. */
+function JobsList() {
+  const router = useRouter()
+  const sp = useSearchParams()
+  const status = (sp.get('status') ?? '') as JobStatus | ''
+  const projectId = sp.get('project_id') ?? (sp.get('unassigned') ? UNASSIGNED : '')
   const [offset, setOffset] = useState(0)
-  const jobs = useJobs({ status: status || undefined, project_id: projectId || undefined, limit: PAGE, offset })
+  const setFilters = (next: { status?: string; project?: string }) => {
+    const q = new URLSearchParams()
+    const st = next.status ?? status
+    const pr = next.project ?? projectId
+    if (st) q.set('status', st)
+    if (pr === UNASSIGNED) q.set('unassigned', '1')
+    else if (pr) q.set('project_id', pr)
+    setOffset(0)
+    router.replace(q.size ? `/jobs?${q}` : '/jobs')
+  }
+  const jobs = useJobs({
+    status: status || undefined,
+    project_id: projectId && projectId !== UNASSIGNED ? projectId : undefined,
+    unassigned: projectId === UNASSIGNED || undefined,
+    limit: PAGE, offset,
+  })
   const projects = useProjects()
   const projectName = (id: string | null | undefined) => projects.data?.find((p) => p.id === id)?.name
   const del = useDeleteJob()
@@ -30,11 +57,12 @@ export default function JobsPage() {
         <h1 className="text-xl font-semibold">Jobs</h1>
         <div className="flex items-center gap-3 text-sm">
           <span className="text-xs text-neutral-500">{live.connected ? '● live' : '○ offline'}</span>
-          <select value={projectId} onChange={(e) => { setProjectId(e.target.value); setOffset(0) }} className="rounded border border-neutral-300 bg-white px-2 py-1">
+          <select value={projectId} onChange={(e) => setFilters({ project: e.target.value })} className="rounded border border-neutral-300 bg-white px-2 py-1">
             <option value="">all projects</option>
             {projects.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            <option value={UNASSIGNED}>— unassigned —</option>
           </select>
-          <select value={status} onChange={(e) => { setStatus(e.target.value as JobStatus | ''); setOffset(0) }} className="rounded border border-neutral-300 bg-white px-2 py-1">
+          <select value={status} onChange={(e) => setFilters({ status: e.target.value })} className="rounded border border-neutral-300 bg-white px-2 py-1">
             <option value="">all statuses</option>
             {STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
           </select>

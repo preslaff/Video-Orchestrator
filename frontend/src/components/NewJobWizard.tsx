@@ -20,10 +20,10 @@ export function profileSummary(p: OutputProfile): string {
   return `video · ${p.aspect} · ${kf} → ${v.width}×${v.height} · ${v.length} frames @ ${v.fps} fps (~${clipSeconds(v.length, v.fps)}s)`
 }
 
-export function NewJobWizard() {
+export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: string } = {}) {
   const router = useRouter()
-  const [step, setStep] = useState(0)
-  const [projectId, setProjectId] = useState<string>('')
+  const [step, setStep] = useState(initialProjectId ? 1 : 0)  // a preselected project skips straight to the profile step
+  const [projectId, setProjectId] = useState<string>(initialProjectId)
   const [profileId, setProfileId] = useState<string>('')
   const [idea, setIdea] = useState('')
   const [style, setStyle] = useState('')

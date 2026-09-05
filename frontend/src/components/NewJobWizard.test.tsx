@@ -84,4 +84,24 @@ describe('NewJobWizard', () => {
     await waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0].body).toMatchObject({ idea: 'bread at dawn', force: false })
   })
+
+  const user = userEvent.setup()
+
+  it('preselects the project from initialProjectId and starts at the profile step', async () => {
+    const project = { id: 'p1', slug: 'p1', name: 'Perfume', default_profile_id: 'cinematic_16x9', n_assets: 0, n_jobs: 0, updated_at: '' }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const url = new URL(raw, 'http://localhost').pathname
+      const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
+      if (url === '/api/projects') return json([project])
+      if (url === '/api/projects/p1') return json({ ...project, brand_notes: '', style_notes: '', export_root: '', export_root_effective: '/x', assets: [], created_at: '' })
+      if (url.startsWith('/api/profiles')) return json([PROFILE])
+      return json({ error: { code: 'not_found', message: url } }, 404)
+    }))
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={qc}><NewJobWizard initialProjectId="p1" /></QueryClientProvider>)
+    expect(await screen.findByText('Cinematic 16:9')).toBeInTheDocument()   // profile step is shown first
+    await user.click(screen.getByText('1. Project'))
+    await waitFor(() => expect((screen.getByTestId('project') as HTMLSelectElement).value).toBe('p1'))
+  })
 })
