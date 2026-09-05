@@ -1210,6 +1210,8 @@ export interface components {
             n_jobs: number;
             /** Updated At */
             updated_at: string;
+            /** Last Job At */
+            last_job_at?: string | null;
         };
         /** ProvenanceOut */
         ProvenanceOut: {
@@ -1523,6 +1525,8 @@ export interface operations {
                 offset?: number;
                 status?: components["schemas"]["JobStatus"] | null;
                 project_id?: string | null;
+                /** @description only jobs without a project */
+                unassigned?: boolean;
             };
             header?: never;
             path?: never;

@@ -52,6 +52,7 @@ class ProjectSummaryOut(BaseModel):
     n_assets: int
     n_jobs: int
     updated_at: str
+    last_job_at: str | None = None  # updated_at of the project's most recent job
 
 
 class ProjectCreate(BaseModel):
@@ -109,11 +110,15 @@ def _save(store: Store, p: Project) -> Project:
 
 @router.get("", response_model=list[ProjectSummaryOut])
 async def list_projects(store: Store = Depends(get_store)) -> list[ProjectSummaryOut]:
-    return [
-        ProjectSummaryOut(id=p.id, slug=p.slug, name=p.name, default_profile_id=p.default_profile_id,
-                          n_assets=len(p.assets), n_jobs=store.count_jobs(project_id=p.id), updated_at=p.updated_at)
-        for p in projects.list_all(store)
-    ]
+    out = []
+    for p in projects.list_all(store):
+        latest = store.list_jobs(project_id=p.id, limit=1)
+        out.append(ProjectSummaryOut(
+            id=p.id, slug=p.slug, name=p.name, default_profile_id=p.default_profile_id,
+            n_assets=len(p.assets), n_jobs=store.count_jobs(project_id=p.id), updated_at=p.updated_at,
+            last_job_at=latest[0].updated_at if latest else None,
+        ))
+    return out
 
 
 @router.post("", response_model=ProjectOut, status_code=201)

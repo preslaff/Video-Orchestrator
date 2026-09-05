@@ -106,6 +106,18 @@
               ],
               "title": "Project Id"
             }
+          },
+          {
+            "name": "unassigned",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "only jobs without a project",
+              "default": false,
+              "title": "Unassigned"
+            },
+            "description": "only jobs without a project"
           }
         ],
         "responses": {
@@ -3280,6 +3292,17 @@
           "updated_at": {
             "type": "string",
             "title": "Updated At"
+          },
+          "last_job_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Job At"
           }
         },
         "type": "object",

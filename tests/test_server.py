@@ -502,6 +502,26 @@ def test_job_listing_carries_the_profile_name(client):
     assert client.get(f"/api/jobs/{job.id}").json()["profile"]["name"] == "Cloud social 9:16 test"
 
 
+def test_unassigned_jobs_filter_and_project_last_job(client):
+    from vorch import projects as projects_mod
+    from vorch.state import new_job
+
+    proj = projects_mod.save(client.store, projects_mod.new_project(name="Filter Co"))
+    a = new_job(idea="in project", project_id=proj.id)
+    b = new_job(idea="no project")
+    client.store.save_job(a)
+    client.store.save_job(b)
+    un = client.get("/api/jobs?unassigned=1").json()
+    assert [j["idea"] for j in un["items"] if j["id"] in (a.id, b.id)] == ["no project"] and un["total"] >= 1
+    assert all(j["project_id"] is None for j in un["items"])
+    r = client.get(f"/api/jobs?unassigned=1&project_id={proj.id}")
+    assert r.status_code == 400 and r.json()["error"]["code"] == "bad_request"
+    rows = {p["id"]: p for p in client.get("/api/projects").json()}
+    assert rows[proj.id]["n_jobs"] == 1 and rows[proj.id]["last_job_at"] == client.get(f"/api/jobs/{a.id}").json()["updated_at"]
+    empty = projects_mod.save(client.store, projects_mod.new_project(name="Empty Co"))
+    assert {p["id"]: p for p in client.get("/api/projects").json()}[empty.id]["last_job_at"] is None
+
+
 # --- assembly routes -------------------------------------------------------------
 
 

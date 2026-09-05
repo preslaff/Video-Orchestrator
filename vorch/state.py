@@ -461,9 +461,11 @@ class Store:
         offset: int = 0,
         status: JobStatus | str | None = None,
         project_id: str | None = None,
+        unassigned: bool = False,
     ) -> list[JobSummary]:
-        """Newest first; optional status / project filters and limit/offset paging."""
-        where, params = self._job_filter(status, project_id)
+        """Newest first; optional status / project filters (``unassigned`` = jobs with
+        no project) and limit/offset paging."""
+        where, params = self._job_filter(status, project_id, unassigned=unassigned)
         q = (
             "SELECT id, status, idea, updated_at, project_id, kind, data->>'profile_id' AS profile_id, "
             "data->'profile'->>'name' AS profile_name "
@@ -488,14 +490,18 @@ class Store:
             for r in rows
         ]
 
-    def count_jobs(self, *, status: JobStatus | str | None = None, project_id: str | None = None) -> int:
-        where, params = self._job_filter(status, project_id)
+    def count_jobs(self, *, status: JobStatus | str | None = None, project_id: str | None = None,
+                   unassigned: bool = False) -> int:
+        where, params = self._job_filter(status, project_id, unassigned=unassigned)
         with self._pool.connection() as conn:
             return conn.execute(f"SELECT count(*) AS n FROM jobs{where}", params).fetchone()["n"]
 
     @staticmethod
-    def _job_filter(status: JobStatus | str | None, project_id: str | None = None) -> tuple[str, list]:
+    def _job_filter(status: JobStatus | str | None, project_id: str | None = None, *,
+                    unassigned: bool = False) -> tuple[str, list]:
         clauses, params = [], []
+        if unassigned:
+            clauses.append("project_id IS NULL")
         if status is not None:
             clauses.append("status = %s")
             params.append(status.value if isinstance(status, JobStatus) else str(status))

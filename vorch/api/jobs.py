@@ -62,14 +62,17 @@ async def list_jobs(
     offset: int = Query(0, ge=0),
     status: JobStatus | None = None,
     project_id: str | None = None,
+    unassigned: bool = Query(False, description="only jobs without a project"),
     store: Store = Depends(get_store),
 ) -> Page[JobSummaryOut]:
+    if unassigned and project_id:
+        raise ApiError(400, "bad_request", "project_id and unassigned are mutually exclusive")
     items = [
         JobSummaryOut(id=s.id, status=s.status.value, idea=s.idea, updated_at=s.updated_at,
                       project_id=s.project_id, kind=s.kind, profile_id=s.profile_id, profile_name=s.profile_name)
-        for s in store.list_jobs(limit=limit, offset=offset, status=status, project_id=project_id)
+        for s in store.list_jobs(limit=limit, offset=offset, status=status, project_id=project_id, unassigned=unassigned)
     ]
-    total = store.count_jobs(status=status, project_id=project_id)
+    total = store.count_jobs(status=status, project_id=project_id, unassigned=unassigned)
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 
