@@ -117,7 +117,7 @@ def test_orchestrator_sets_video_path_to_final(make_store, tmp_path, monkeypatch
                         lambda *a, filename_prefix=None, **k: prefixes.update(clip=filename_prefix) or "/raw.mp4")
     seen = {}
 
-    def fake_chain(path, chain, *, fps=None, seed=None, filename_prefix=None):
+    def fake_chain(path, chain, *, fps=None, seed=None, filename_prefix=None, **kw):
         seen.update(path=str(path), chain=[s.workflow for s in chain], fps=fps, prefix=filename_prefix)
         return ["/post1.mp4", "/final.mp4"]
 
@@ -131,3 +131,44 @@ def test_orchestrator_sets_video_path_to_final(make_store, tmp_path, monkeypatch
     assert seen == {"path": "/raw.mp4", "chain": ["interp"], "fps": 16, "prefix": f"vorch/{job.id[:8]}/s00_post"}
     assert prefixes == {"kf": f"vorch/{job.id[:8]}/s00_keyframe", "clip": f"vorch/{job.id[:8]}/s00_clip"}
     assert any(d.phase == "post" for d in store.decisions(job.id))
+
+
+def test_video_step_gets_the_master_face_on_its_backend(user_registry, capture, tmp_path, monkeypatch):
+    """A `postprocess` step declaring `source_image` (video face swap) receives the
+    job's master face, uploaded once per backend."""
+    import json
+    from pathlib import Path
+
+    from vorch.clients import comfy
+
+    (tmp_path / "wf" / "vswap.json").write_text(json.dumps({
+        "1": {"class_type": "LoadVideo", "inputs": {"file": "clip.mp4"}},
+        "2": {"class_type": "LoadImage", "inputs": {"image": "face.png"}},
+        "13": {"class_type": "SaveVideo", "inputs": {"filename_prefix": "video/sw", "video": ["1", 0]}},
+    }))
+    (tmp_path / "wf" / "vswap.yaml").write_text(yaml.safe_dump({
+        "kind": "postprocess", "template": "vswap.json",
+        "inputs": {"input_video": "video", "source_image": "image"},
+        "outputs": {"type": "video", "nodes": ["13"]},
+        "params": {"input_video": {"node": "1", "field": "file", "type": "str", "required": True},
+                   "source_image": {"node": "2", "field": "image", "type": "str", "required": True}},
+    }))
+    reg = registry.load_registry([config.WORKFLOW_DIR, tmp_path / "wf"], force=True)
+    registry._cache[tuple(str(p) for p, _ in registry._default_dirs())] = reg
+    uploads: list = []
+    monkeypatch.setattr(comfy, "upload_image", lambda p, **kw: uploads.append((Path(p).name, (kw.get("backend") or type("L", (), {"name": "local"})).name)) or f"staged:{Path(p).name}")
+    posted, _ = capture
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"v")
+    master = tmp_path / "master.jpg"
+    master.write_bytes(b"i")
+    outs = postprocess.run_chain(clip, [PostStep("vswap"), PostStep("vswap")], master_face=master)
+    assert len(outs) == 2
+    assert uploads[0] == ("clip.mp4", "local") and ("master.jpg", "local") in uploads
+    assert sum(1 for n, _ in uploads if n == "master.jpg") == 1          # staged once per backend
+    assert posted[-1]["2"]["inputs"]["image"] == "staged:master.jpg"
+    posted.clear()
+    postprocess.run_chain(clip, [PostStep("vswap", {"source_image": "other.png"})], master_face=master)
+    assert posted[-1]["2"]["inputs"]["image"] == "other.png"             # explicit param wins
+    postprocess.run_chain(clip, [PostStep("vswap")])                      # no master: not filled
+    assert posted[-1]["2"]["inputs"]["image"] == "face.png"

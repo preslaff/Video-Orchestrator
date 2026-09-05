@@ -18,14 +18,14 @@ function clipSize(job: JobPublic): [number, number] | null {
   return v?.width && v.height ? [v.width, v.height] : null
 }
 
-type Draft = { rows: Row[]; cuts: CutDraft[]; fps: number | ''; smooth: boolean }
+type Draft = { rows: Row[]; cuts: CutDraft[]; fps: number | ''; smooth: boolean; audio: boolean }
 
 /** Initial editor state from the last assembly spec (if any) or all clips in order. */
 function seedDraft(status: AssemblyStatusT | undefined): Draft {
-  if (!status) return { rows: [], cuts: [], fps: '', smooth: false }
+  if (!status) return { rows: [], cuts: [], fps: '', smooth: false, audio: false }
   const clips = status.clips
   const known = new Set(clips.map((c) => c.scene_index))
-  const spec = status.record?.spec as { items?: { scene_index: number; source: 'final' | 'raw'; target_seconds?: number | null }[]; cuts?: CutDraft[]; fps?: number | null; smooth?: boolean } | undefined
+  const spec = status.record?.spec as { items?: { scene_index: number; source: 'final' | 'raw'; target_seconds?: number | null }[]; cuts?: CutDraft[]; fps?: number | null; smooth?: boolean; audio?: boolean } | undefined
   const rows: Row[] = []
   const used = new Set<number>()
   for (const it of spec?.items ?? []) {
@@ -37,7 +37,7 @@ function seedDraft(status: AssemblyStatusT | undefined): Draft {
   for (const c of clips) if (!used.has(c.scene_index)) rows.push({ scene_index: c.scene_index, selected: !spec, source: 'final', target: null })
   const n = rows.filter((r) => r.selected).length
   const cuts = defaultCuts(n).map((d, i) => spec?.cuts?.[i] ?? d)
-  return { rows, cuts, fps: spec?.fps ?? '', smooth: !!spec?.smooth }
+  return { rows, cuts, fps: spec?.fps ?? '', smooth: !!spec?.smooth, audio: !!spec?.audio }
 }
 
 export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; events: JobEvent[]; onStarted?: () => void }) {
@@ -52,6 +52,7 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
   const cuts = seeded.cuts          // cut i sits between selected clip i and i+1 (position-keyed, survives reordering)
   const fps = seeded.fps
   const smooth = seeded.smooth
+  const audio = seeded.audio
   const update = (patch: Partial<Draft>) => setDraft({ ...seeded, ...patch })
   const [encoder, setEncoder] = useState<'libx264' | 'h264_nvenc'>('libx264')
 
@@ -103,6 +104,7 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
       crf: 18,
       encoder,
       smooth,
+      audio,
     }
     run.mutate({ spec, force: job.status !== 'done' }, { onSuccess: () => onStarted?.() })
   }
@@ -199,6 +201,10 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
         <label className="flex items-center gap-1 text-neutral-600" title="motion-compensated interpolation (ffmpeg minterpolate) for clips slower than 1×; several seconds per clip">
           <input type="checkbox" aria-label="smooth slow motion" checked={smooth} onChange={(e) => update({ smooth: e.target.checked })} />
           smooth slow motion{anySlow && !smooth ? <span className="text-xs text-amber-700">(off: frames are repeated)</span> : <span className="text-xs text-neutral-400">(slower render)</span>}
+        </label>
+        <label className="flex items-center gap-1 text-neutral-600" title="keep the clips' own audio (LTX clips carry a track; Wan clips are silent, so this changes nothing for them)">
+          <input type="checkbox" aria-label="keep audio" checked={audio} onChange={(e) => update({ audio: e.target.checked })} />
+          keep audio
         </label>
         <label className="flex items-center gap-1 text-neutral-600">encoder
           <select value={encoder} onChange={(e) => setEncoder(e.target.value as 'libx264' | 'h264_nvenc')} className="rounded border border-neutral-300 bg-white px-2 py-1">

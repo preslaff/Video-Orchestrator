@@ -50,6 +50,7 @@ class AssemblySpec:
     crf: int = 18
     encoder: str = "libx264"
     smooth: bool = False            # motion-interpolated slow motion (slow render)
+    audio: bool = False             # keep the clips' audio (LTX clips carry a track; Wan clips do not)
 
     @property
     def speeds(self) -> list[float]:
@@ -60,7 +61,7 @@ class AssemblySpec:
             "items": [asdict(i) for i in self.items],
             "cuts": [asdict(c) for c in self.cuts],
             "fps": self.fps, "width": self.width, "height": self.height,
-            "crf": self.crf, "encoder": self.encoder, "smooth": self.smooth,
+            "crf": self.crf, "encoder": self.encoder, "smooth": self.smooth, "audio": self.audio,
         }
 
     @classmethod
@@ -71,7 +72,7 @@ class AssemblySpec:
                   for c in d.get("cuts", [])],
             fps=d.get("fps"), width=d.get("width"), height=d.get("height"),
             crf=int(d.get("crf", 18)), encoder=str(d.get("encoder", "libx264")),
-            smooth=bool(d.get("smooth", False)),
+            smooth=bool(d.get("smooth", False)), audio=bool(d.get("audio", False)),
         )
 
 
@@ -306,7 +307,8 @@ def resolve(job: Job, spec: dict | None) -> tuple[AssemblySpec, list[Path]]:
         if v is not None and (not isinstance(v, int) or v <= 0):
             raise ValueError(f"{key} must be a positive integer")
     resolved = AssemblySpec(items=items, cuts=cuts, fps=d.get("fps"), width=d.get("width"),
-                            height=d.get("height"), crf=crf, encoder=encoder, smooth=bool(d.get("smooth", False)))
+                            height=d.get("height"), crf=crf, encoder=encoder, smooth=bool(d.get("smooth", False)),
+                            audio=bool(d.get("audio", False)))
     # Speeds from target durations, then transition lengths vs the RETIMED clip lengths.
     infos = [media.probe(p) for p in paths]
     for it, info in zip(items, infos):
@@ -368,9 +370,9 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
         if emit:
             emit({"job_id": job.id, "type": "step", "step": "assemble", "n_clips": len(paths),
                   "seconds": round(total, 2), "fps": fps, "width": width, "height": height,
-                  "smooth": spec.smooth, "retimed": sum(1 for sp in speeds if sp != 1.0)})
+                  "smooth": spec.smooth, "audio": spec.audio, "retimed": sum(1 for sp in speeds if sp != 1.0)})
         media.assemble(paths, spec.cuts, dest, fps=fps, size=(width, height), crf=spec.crf,
-                       encoder=spec.encoder, speeds=speeds, smooth=spec.smooth)
+                       encoder=spec.encoder, speeds=speeds, smooth=spec.smooth, audio=spec.audio)
         info = media.probe(dest)
         rec = AssemblyRecord(
             path=str(dest), created_at=created, duration=round(info.frame_duration, 3), n_clips=len(paths),
@@ -380,7 +382,7 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
         provenance.write_manifest(dest, "assemble", {
             "spec": spec.to_dict(), "clips": [str(p) for p in paths], "fps": fps, "width": width,
             "height": height, "crf": spec.crf, "encoder": spec.encoder, "version": version,
-            "speeds": speeds, "smooth": spec.smooth,
+            "speeds": speeds, "smooth": spec.smooth, "audio": spec.audio,
         }, {"kind": "assembly", "job_id": job.id})
         _link_replace(dest, output_path(job))
         side = provenance.manifest_path(dest)

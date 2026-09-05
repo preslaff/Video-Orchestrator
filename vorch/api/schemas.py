@@ -227,6 +227,7 @@ class AssemblySpecIn(BaseModel):
     crf: int = 18
     encoder: Literal["libx264", "h264_nvenc"] = "libx264"
     smooth: bool = False   # motion-interpolated slow motion for clips slower than 1x (much slower render)
+    audio: bool = False    # keep the clips' audio (LTX clips have a track; Wan clips are silent -> ignored)
 
 
 class AssemblyClipOut(BaseModel):

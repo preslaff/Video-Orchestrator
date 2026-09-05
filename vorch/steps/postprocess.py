@@ -3,7 +3,9 @@
 A profile lists ``post_steps: [{workflow, params}]``; after each clip (or
 still) the orchestrator feeds the file through them: stage the current file
 into ComfyUI ``input/``, fill ``fps``/``seed`` from the run when the workflow
-declares them, run, and hand the output to the next step. Steps whose input
+declares them, run, and hand the output to the next step. A step declaring a
+``source_image`` param (video face swap, character replacement) gets the job's
+master face, staged on that step's backend. Steps whose input
 type does not match the media are skipped (an interpolator on a still), and
 VRAM is reclaimed whenever the workflow changes (different models). Each step
 stages its input on, and runs on, its own workflow's backend.
@@ -22,6 +24,7 @@ from . import run_step
 log = logging.getLogger("vorch.postprocess")
 
 AUTO_FILL = ("fps", "seed")
+MASTER_PARAM = "source_image"  # filled with the staged master face when the step declares it
 
 
 def run_chain(
@@ -31,16 +34,19 @@ def run_chain(
     fps: int | None = None,
     seed: int | None = None,
     filename_prefix: str | None = None,
+    master_face: str | Path | None = None,
 ) -> list[Path]:
     """Apply ``chain`` (objects with ``.workflow`` / ``.params``) to ``path``.
 
-    Returns every produced file in order (empty when nothing applied); the
-    final deliverable is ``produced[-1]`` if any.
+    ``master_face`` (a local image) is staged once per backend and passed as
+    ``source_image`` to steps that declare it. Returns every produced file in
+    order (empty when nothing applied); the final deliverable is ``produced[-1]``.
     """
     reg = registry.load_registry()
     current = Path(path)
     produced: list[Path] = []
     prev_workflow: str | None = None
+    staged_master: dict[str, str] = {}  # backend name -> uploaded name
     for i, step in enumerate(chain):
         spec = reg.get(step.workflow)
         if spec.kind != "postprocess":
@@ -61,6 +67,10 @@ def run_chain(
         for key in AUTO_FILL:
             if auto[key] is not None and spec.accepts(key) and key not in step.params:
                 values[key] = auto[key]
+        if master_face and spec.accepts(MASTER_PARAM) and MASTER_PARAM not in step.params:
+            if backend.name not in staged_master:
+                staged_master[backend.name] = comfy.upload_image(master_face, backend=backend)
+            values[MASTER_PARAM] = staged_master[backend.name]
         values.update(step.params)
         if filename_prefix and spec.accepts("filename_prefix") and "filename_prefix" not in step.params:
             values["filename_prefix"] = f"{filename_prefix}_{step.workflow}"

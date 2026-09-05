@@ -448,6 +448,7 @@ class Orchestrator:
                     outs = run_chain(
                         src, self.params.post_steps, seed=variant.seed,
                         filename_prefix=output_prefix(job, scene.index, "post", v if len(scene.variants) > 1 else None),
+                        master_face=job.master_face or None,
                     )
                     variant.post_paths = [str(o) for o in outs]
                     self.store.save_job(job)
@@ -530,6 +531,7 @@ class Orchestrator:
                 outs = run_chain(
                     video, self.params.post_steps, fps=self.params.fps, seed=seed,
                     filename_prefix=output_prefix(job, scene.index, "post"),
+                    master_face=job.master_face or None,
                 )
                 if outs:
                     scene.post_paths = [str(o) for o in outs]

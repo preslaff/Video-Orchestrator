@@ -617,6 +617,11 @@ export interface components {
              * @default false
              */
             smooth: boolean;
+            /**
+             * Audio
+             * @default false
+             */
+            audio: boolean;
         };
         /** AssemblyStatus */
         AssemblyStatus: {

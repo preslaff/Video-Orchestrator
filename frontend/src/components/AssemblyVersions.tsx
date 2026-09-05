@@ -9,9 +9,10 @@ import { Button, ErrorBox, fmtTime } from '@/components/ui'
 import { fmtBytes, fmtSeconds, fmtSpeed } from '@/lib/assembly'
 
 export function describeSpeeds(spec: unknown): string {
-  const s = spec as { items?: { scene_index: number; target_seconds?: number | null; speed?: number }[]; smooth?: boolean } | undefined
+  const s = spec as { items?: { scene_index: number; target_seconds?: number | null; speed?: number }[]; smooth?: boolean; audio?: boolean } | undefined
   const parts = (s?.items ?? []).filter((i) => i.target_seconds != null).map((i) => `s${String(i.scene_index + 1).padStart(2, '0')} ${fmtSpeed(i.speed ?? 1)}`)
   if (parts.length && s?.smooth) parts.push('smooth')
+  if (s?.audio) parts.push('audio')
   return parts.join(' · ')
 }
 

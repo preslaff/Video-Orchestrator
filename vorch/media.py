@@ -305,6 +305,63 @@ def _norm(width: int, height: int, fps: float, *, speed: float = 1.0, smooth: bo
     return f"{head},setpts=PTS/{speed:g},{rate},{trim},{tail}"
 
 
+def _tempo(speed: float) -> str:
+    """``atempo`` chain for ``speed`` (each stage stays within 0.5–2)."""
+    parts: list[str] = []
+    s = speed
+    while s > 2.0:
+        parts.append("atempo=2")
+        s /= 2.0
+    while s < 0.5:
+        parts.append("atempo=0.5")
+        s *= 2.0
+    if abs(s - 1.0) > 1e-9:
+        parts.append(f"atempo={s:g}")
+    return "".join(p + "," for p in parts)
+
+
+def _audio_norm(i: int, has_audio: bool, *, speed: float, target: float) -> str:
+    """Per-input audio: retimed with ``atempo``, padded/trimmed to exactly ``target``
+    seconds (so ``acrossfade`` durations line up with ``xfade``); silence for
+    clips without a track."""
+    if not has_audio:
+        return f"anullsrc=r=48000:cl=stereo,atrim=duration={target:.4f},asetpts=PTS-STARTPTS[a{i}]"
+    return (f"[{i}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"{_tempo(speed)}apad=whole_dur={target:.4f},atrim=duration={target:.4f},asetpts=PTS-STARTPTS[a{i}]")
+
+
+def build_audio_filtergraph(
+    durations: list[float], cuts: list[Cut], has_audio: list[bool], *, speeds: list[float] | None = None,
+) -> tuple[str, str]:
+    """``(filter_complex_part, output_label)`` for the audio track, mirroring
+    :func:`build_filtergraph`: ``acrossfade`` where the video ``xfade``s, ``concat``
+    at hard cuts, silence for clips without audio (LTX clips carry audio; Wan clips do not)."""
+    n = len(durations)
+    speeds = list(speeds) if speeds else [1.0] * n
+    durations = retimed(durations, speeds)
+    parts = [_audio_norm(i, has_audio[i], speed=speeds[i], target=durations[i]) for i in range(n)]
+    groups: list[list[int]] = [[0]]
+    for i, c in enumerate(cuts):
+        if c.transition == "none":
+            groups.append([i + 1])
+        else:
+            groups[-1].append(i + 1)
+    labels: list[str] = []
+    for g, members in enumerate(groups):
+        current = f"[a{members[0]}]"
+        for k, idx in enumerate(members[1:]):
+            c = cuts[idx - 1]
+            last = k == len(members) - 2
+            label = f"[ag{g}]" if last else f"[ax{g}_{k}]"
+            parts.append(f"{current}[a{idx}]acrossfade=d={c.duration:g}:c1=tri:c2=tri{label}")
+            current = label
+        labels.append(current)
+    if len(labels) == 1:
+        return ";".join(parts), labels[0]
+    parts.append("".join(labels) + f"concat=n={len(labels)}:v=0:a=1[aout]")
+    return ";".join(parts), "[aout]"
+
+
 def build_filtergraph(
     durations: list[float], cuts: list[Cut], *, width: int, height: int, fps: float,
     speeds: list[float] | None = None, smooth: bool = False,
@@ -366,13 +423,17 @@ def assemble(
     timeout: float | None = None,
     speeds: list[float] | None = None,
     smooth: bool = False,
+    audio: bool = False,
 ) -> Path:
-    """Join ``clips`` into one h264 mp4 (no audio) with per-cut xfade transitions.
+    """Join ``clips`` into one h264 mp4 with per-cut xfade transitions.
 
     ``speeds`` (one per clip, 0.25–4) retime clips; ``smooth`` renders slow-downs
-    with motion interpolation (much slower). Size and fps default to the first
-    clip. Written atomically (``.part`` then rename). Raises ValueError for a
-    bad spec, MediaError when ffmpeg fails.
+    with motion interpolation (much slower). ``audio=True`` keeps the clips'
+    audio (AAC; crossfaded/concatenated like the video, silence where a clip has
+    none) when at least one clip has a track — otherwise the result is silent,
+    as before. Size and fps default to the first clip. Written atomically
+    (``.part`` then rename). Raises ValueError for a bad spec, MediaError when
+    ffmpeg fails.
     """
     paths = [Path(c).expanduser() for c in clips]
     for p in paths:
@@ -389,6 +450,10 @@ def assemble(
     validate_cuts(rt, cuts, fps=fps)
     graph, out = build_filtergraph(durations, cuts, width=width, height=height, fps=fps,
                                    speeds=speeds, smooth=smooth)
+    with_audio = bool(audio) and any(i.has_audio for i in infos)
+    if with_audio:
+        agraph, aout = build_audio_filtergraph(durations, cuts, [i.has_audio for i in infos], speeds=speeds)
+        graph = graph + ";" + agraph
     if timeout is None:
         smooth_secs = sum(t for t, sp in zip(rt, speeds or []) if smooth and sp < 1.0)
         timeout = config.ASSEMBLE_TIMEOUT + 30 * smooth_secs
@@ -399,7 +464,8 @@ def assemble(
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
     for p in paths:
         cmd += ["-i", str(p)]
-    cmd += ["-filter_complex", graph, "-map", out, "-an"]
+    cmd += ["-filter_complex", graph, "-map", out]
+    cmd += ["-map", aout, "-c:a", "aac", "-b:a", "192k"] if with_audio else ["-an"]
     if encoder == "h264_nvenc":
         cmd += ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
     else:
@@ -418,7 +484,7 @@ def assemble(
         part.unlink(missing_ok=True)
         raise MediaError("ffmpeg produced no output")
     os.replace(part, dest)
-    log.info("assembled %d clip(s)%s -> %s (%.2fs)", len(paths),
+    log.info("assembled %d clip(s)%s%s -> %s (%.2fs)", len(paths),
              f", {sum(1 for sp in (speeds or []) if sp != 1)} retimed{' smooth' if smooth else ''}" if speeds else "",
-             dest, total_duration(durations, cuts, speeds))
+             ", with audio" if with_audio else "", dest, total_duration(durations, cuts, speeds))
     return dest

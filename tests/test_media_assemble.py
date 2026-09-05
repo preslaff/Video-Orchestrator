@@ -161,3 +161,45 @@ def test_assemble_with_speeds_fast_and_smooth(tmp_path):
     # A transition longer than a sped-up clip is caught against the RETIMED length (1 s).
     with pytest.raises(ValueError, match="shorter than both"):
         media.assemble([a, b], [Cut("fade", 1.5)], tmp_path / "bad2.mp4", speeds=[1.0, 2.0])
+
+
+# --- audio (Phase C: LTX clips carry a track) --------------------------------------------
+
+
+def _clip_with_audio(path, seconds, *, silent=False, fps=8):
+    import subprocess
+
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+           "-f", "lavfi", "-i", f"testsrc=size=64x64:rate={fps}:duration={seconds}"]
+    if not silent:
+        cmd += ["-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={seconds}", "-c:a", "aac"]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-shortest", str(path)]
+    subprocess.run(cmd, check=True)
+    return path
+
+
+def test_audio_filtergraph_mirrors_video_cuts():
+    graph, out = media.build_audio_filtergraph([2.0, 2.0, 2.0], [Cut("fade", 0.5), Cut("none", 0)], [True, False, True], speeds=[1.0, 1.0, 4.0])
+    assert "[0:a]aresample=48000" in graph and "apad=whole_dur=2.0000,atrim=duration=2.0000" in graph
+    assert "anullsrc=r=48000:cl=stereo,atrim=duration=2.0000" in graph       # silent clip -> silence
+    assert "[2:a]" in graph and "atempo=2,atempo=2,apad=whole_dur=0.5000" in graph  # 4x -> two atempo stages
+    assert "[a0][a1]acrossfade=d=0.5:c1=tri:c2=tri[ag0]" in graph
+    assert graph.endswith("[ag0][a2]concat=n=2:v=0:a=1[aout]") and out == "[aout]"
+    assert media._tempo(0.25) == "atempo=0.5,atempo=0.5," and media._tempo(1.0) == "" and media._tempo(1.5) == "atempo=1.5,"
+
+
+def test_assemble_keeps_audio_when_asked(tmp_path):
+    import shutil
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    a = _clip_with_audio(tmp_path / "a.mp4", 2)
+    b = _clip_with_audio(tmp_path / "b.mp4", 2, silent=True)
+    assert media.probe(a).has_audio and not media.probe(b).has_audio
+    silent = media.assemble([a, b], [Cut("fade", 0.5)], tmp_path / "silent.mp4")
+    assert not media.probe(silent).has_audio                       # default unchanged
+    out = media.assemble([a, b], [Cut("fade", 0.5)], tmp_path / "audio.mp4", audio=True)
+    info = media.probe(out)
+    assert info.has_audio and abs(info.frame_duration - 3.5) < 0.2
+    both_silent = media.assemble([b, b], [Cut("fade", 0.5)], tmp_path / "bs.mp4", audio=True)
+    assert not media.probe(both_silent).has_audio                  # no track anywhere -> silent file
