@@ -64,7 +64,7 @@ export default function JobsPage() {
                     ) : <span className="text-xs text-neutral-400">—</span>}
                   </td>
                   <td className="py-2 pr-3 text-neutral-600">{j.kind}</td>
-                  <td className="py-2 pr-3 text-neutral-600">{j.profile_id ?? '—'}</td>
+                  <td className="py-2 pr-3 text-neutral-600" title={j.profile_id ?? undefined}>{j.profile_name ?? j.profile_id ?? '—'}</td>
                   <td className="py-2 pr-3 whitespace-nowrap text-neutral-500">{fmtTime(j.updated_at)}</td>
                   <td className="py-2 text-right">
                     <Button variant="ghost" title="delete job" disabled={j.status === 'running'} onClick={() => { if (confirm(`Delete job “${j.idea}”? Files on disk are kept.`)) del.mutate(j.id) }}>

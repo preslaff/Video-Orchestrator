@@ -9,6 +9,7 @@ import { useProject } from '@/hooks/useSetup'
 import { Button, Card, Collapsible, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '@/components/ui'
 import { Timeline } from '@/components/Timeline'
 import { DecisionLog } from '@/components/DecisionLog'
+import { ProfileSummary } from '@/components/ProfileSummary'
 import { SceneCard, ScenePrompts } from '@/components/SceneGrid'
 import { GatePanel } from '@/components/GatePanel'
 import { ProgressPanel } from '@/components/ProgressPanel'
@@ -33,7 +34,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   if (job.isLoading) return <Empty>Loading…</Empty>
   if (job.error || !job.data) return <ErrorBox message={errorMessage(job.error, 'Job not found')} />
   const j = job.data
-  const profile = j.profile as { aspect?: string } | null
+  const profile = j.profile as { aspect?: string; name?: string } | null
 
   return (
     <div className="space-y-4">
@@ -49,7 +50,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         ) : (
           <span className="rounded bg-neutral-50 px-2 py-0.5 text-xs text-neutral-400">no project</span>
         )}
-        <span className="text-xs text-neutral-500">{j.kind} · {j.profile_id ?? 'default profile'} · {profile?.aspect ?? '16:9'} · seed {j.seed || 'random'}</span>
+        <span className="text-xs text-neutral-500" title={j.profile_id ?? undefined}>{j.kind} · {profile?.name ?? j.profile_id ?? 'default profile'} · {profile?.aspect ?? '16:9'} · seed {j.seed || 'random'}</span>
         {j.pending_gate && <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900">waiting for approval: {j.pending_gate}</span>}
         {j.status === 'failed' && (
           <Button variant="primary" disabled={retry.isPending} title="resume from the persisted state: finished scenes are kept, the failed step runs again"
@@ -106,6 +107,9 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
       )}
 
       <div className="space-y-3">
+        <Collapsible title="Profile" hint={`${profile?.name ?? j.profile_id ?? 'default'} · the settings this job was run with (frozen snapshot) · click to expand`}>
+          <ProfileSummary job={j} />
+        </Collapsible>
         <Collapsible title="Decision log" count={decisions.data?.length ?? 0} hint="why each frame was accepted, retried or flagged · click to expand">
           <DecisionLog decisions={decisions.data} />
         </Collapsible>

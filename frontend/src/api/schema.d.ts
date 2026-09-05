@@ -961,6 +961,8 @@ export interface components {
         JobStatus: "pending" | "running" | "needs_approval" | "done" | "failed" | "cancelled";
         /** JobSummaryOut */
         JobSummaryOut: {
+            /** Profile Name */
+            profile_name?: string | null;
             /** Id */
             id: string;
             /** Status */

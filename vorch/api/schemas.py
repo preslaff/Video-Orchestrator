@@ -153,6 +153,7 @@ class JobPublic(BaseModel):
 
 
 class JobSummaryOut(BaseModel):
+    profile_name: str | None = None  # from the job's profile snapshot
     id: str
     status: str
     idea: str

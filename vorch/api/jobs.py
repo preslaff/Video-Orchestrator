@@ -66,7 +66,7 @@ async def list_jobs(
 ) -> Page[JobSummaryOut]:
     items = [
         JobSummaryOut(id=s.id, status=s.status.value, idea=s.idea, updated_at=s.updated_at,
-                      project_id=s.project_id, kind=s.kind, profile_id=s.profile_id)
+                      project_id=s.project_id, kind=s.kind, profile_id=s.profile_id, profile_name=s.profile_name)
         for s in store.list_jobs(limit=limit, offset=offset, status=status, project_id=project_id)
     ]
     total = store.count_jobs(status=status, project_id=project_id)

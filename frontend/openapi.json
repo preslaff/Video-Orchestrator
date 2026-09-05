@@ -2761,6 +2761,17 @@
       },
       "JobSummaryOut": {
         "properties": {
+          "profile_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Name"
+          },
           "id": {
             "type": "string",
             "title": "Id"

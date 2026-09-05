@@ -490,6 +490,18 @@ def test_retry_resumes_a_failed_job(client):
     assert client.post("/api/jobs/nope/retry").status_code == 404
 
 
+def test_job_listing_carries_the_profile_name(client):
+    from vorch import profiles
+    from vorch.state import new_job
+
+    prof = profiles.clone(profiles.default_profile(), "Cloud social 9:16 test")
+    job = new_job(idea="named", profile_id=prof.id, profile=prof.snapshot())
+    client.store.save_job(job)
+    rows = {r["id"]: r for r in client.get("/api/jobs").json()["items"]}
+    assert rows[job.id]["profile_name"] == "Cloud social 9:16 test" and rows[job.id]["profile_id"] == prof.id
+    assert client.get(f"/api/jobs/{job.id}").json()["profile"]["name"] == "Cloud social 9:16 test"
+
+
 # --- assembly routes -------------------------------------------------------------
 
 

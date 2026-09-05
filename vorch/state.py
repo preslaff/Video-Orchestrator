@@ -357,6 +357,7 @@ class JobSummary:
     project_id: str | None = None
     kind: str = "video"
     profile_id: str | None = None
+    profile_name: str | None = None  # from the snapshot (user profiles have opaque ids)
 
 
 class Store:
@@ -464,7 +465,8 @@ class Store:
         """Newest first; optional status / project filters and limit/offset paging."""
         where, params = self._job_filter(status, project_id)
         q = (
-            "SELECT id, status, idea, updated_at, project_id, kind, data->>'profile_id' AS profile_id "
+            "SELECT id, status, idea, updated_at, project_id, kind, data->>'profile_id' AS profile_id, "
+            "data->'profile'->>'name' AS profile_name "
             f"FROM jobs{where} ORDER BY updated_at DESC"
         )
         if limit is not None:
@@ -481,6 +483,7 @@ class Store:
                 project_id=r["project_id"],
                 kind=r["kind"],
                 profile_id=r["profile_id"],
+                profile_name=r["profile_name"],
             )
             for r in rows
         ]
