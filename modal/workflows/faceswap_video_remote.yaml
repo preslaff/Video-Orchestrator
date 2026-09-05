@@ -1,0 +1,66 @@
+# Remote variant of the built-in `faceswap_video` (same template); ReActor's models come from
+# modal/upload_local_models.sh. Install: copy this YAML + reactor_video_faceswap.json into ~/vorch/workflows/.
+name: faceswap_video_remote
+kind: postprocess
+template: reactor_video_faceswap.json
+description: ReActor video face swap on the Modal L40S backend (needs modal/upload_local_models.sh)
+tags:
+- reactor
+- identity
+- video
+- postprocess
+- cloud
+timeout: 1800
+inputs:
+  input_video: video
+  source_image: image
+outputs:
+  type: video
+  nodes:
+  - '6'
+params:
+  input_video:
+    node: '1'
+    field: file
+    type: str
+    required: true
+  source_image:
+    node: '3'
+    field: image
+    type: str
+    required: true
+  restore_model:
+    node: '4'
+    field: face_restore_model
+    type: enum
+    enum_from:
+      class_type: ReActorFaceSwap
+      input: face_restore_model
+  restore_visibility:
+    node: '4'
+    field: face_restore_visibility
+    type: float
+    min: 0
+    max: 1
+  codeformer_weight:
+    node: '4'
+    field: codeformer_weight
+    type: float
+    min: 0
+    max: 1
+  input_faces_index:
+    node: '4'
+    field: input_faces_index
+    type: str
+  source_faces_index:
+    node: '4'
+    field: source_faces_index
+    type: str
+  filename_prefix:
+    node: '6'
+    field: filename_prefix
+    type: str
+requires:
+  nodes:
+  - ReActorFaceSwap
+backend: modal-l40s

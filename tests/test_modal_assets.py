@@ -32,7 +32,9 @@ EXPECTED = {  # name -> (kind, backend)
     "keyframe_flux2_4b": ("keyframe", "modal-l40s"),
     "keyframe_flux2_9b": ("keyframe", "modal-l40s"),
     "animate_wan_animate2": ("postprocess", "modal-l40s"),
+    "faceswap_video_remote": ("postprocess", "modal-l40s"),
 }
+LOCAL_UPLOAD = {"faceswap_video_remote"}  # models come from modal/upload_local_models.sh, not a download set
 
 
 def test_cloud_workflows_load_with_core_nodes_and_declared_backends():
@@ -46,6 +48,8 @@ def test_cloud_workflows_load_with_core_nodes_and_declared_backends():
         assert not (spec.requires_nodes & {"UnetLoaderGGUF", "CLIPLoaderGGUF"})
         wf = json.loads(spec.template.read_text())
         assert "nodes" not in wf                                   # API format, not a UI export
+        if spec.name == "faceswap_video_remote":
+            assert spec.template.read_bytes() == (ROOT / "workflows" / "reactor_video_faceswap.json").read_bytes()
         if spec.kind in ("animate", "keyframe") and "ltx" not in spec.name:
             # same params as the built-in of that kind (a profile can swap them freely)
             assert set(spec.params) >= set(builtin.get("animate" if spec.kind == "animate" else "keyframe").params)
@@ -77,9 +81,13 @@ def test_downloader_sets_cover_the_cloud_workflow_models():
     exec(compile(ast.Module(body=consts, type_ignores=[]), "sets", "exec"), ns)  # noqa: S102
     available = {Path(p).name for items in ns["SETS"].values() for _, p, _ in items}
     reg = registry.load_dirs([(MODAL / "workflows", False)])
+    uploader = (MODAL / "upload_local_models.sh").read_text()
     for spec in reg.list():
         for _, _, _, val in spec.requires_models:
-            assert val in available, f"{spec.name} needs {val} but no download set provides it"
+            if spec.name in LOCAL_UPLOAD:
+                assert val in uploader, f"{spec.name} needs {val} but upload_local_models.sh does not copy it"
+            else:
+                assert val in available, f"{spec.name} needs {val} but no download set provides it"
 
 
 def test_cloud_profiles_import_shape_and_validate(tmp_path, monkeypatch):
