@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import lru_cache
@@ -75,6 +76,51 @@ def last_frame(video_path: str | Path, dest: str | Path | None = None) -> Path:
     if not dest.is_file():
         raise MediaError(f"ffmpeg produced no frame for {video_path}")
     log.info("last frame: %s -> %s", video_path, dest)
+    return dest
+
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+JPEG_MAGIC = b"\xff\xd8\xff"
+
+
+def sniff_image(path: str | Path) -> str:
+    """'png' | 'jpeg' | 'other' from the file's magic bytes (extensions lie: uploads
+    named .png are often WebP or AVIF)."""
+    with open(path, "rb") as f:
+        head = f.read(12)
+    if head.startswith(PNG_MAGIC):
+        return "png"
+    if head.startswith(JPEG_MAGIC):
+        return "jpeg"
+    return "other"
+
+
+def ensure_png(src: str | Path, *, max_side: int = 1024) -> Path:
+    """A real PNG for image models that only decode PNG/JPEG (llama.cpp's mmproj
+    loader): PNG/JPEG sources are returned as they are; anything else (WebP, AVIF,
+    GIF, BMP…) is transcoded once with ffmpeg to ``<stem>.vision.png`` beside the
+    source (or in the temp dir when that is not writable), bounded to ``max_side``."""
+    src = Path(src).expanduser()
+    kind = sniff_image(src)
+    if kind in ("png", "jpeg"):
+        return src
+    dest = src.with_name(f"{src.stem}.vision.png")
+    try:
+        if dest.is_file() and dest.stat().st_mtime_ns >= src.stat().st_mtime_ns:
+            return dest
+        writable = os.access(dest.parent, os.W_OK)
+    except OSError:
+        writable = False
+    if not writable:
+        dest = Path(tempfile.gettempdir()) / f"vorch-vision-{abs(hash(str(src)))}.png"
+        if dest.is_file():
+            return dest
+    vf = f"scale='min({max_side},iw)':'min({max_side},ih)':force_original_aspect_ratio=decrease"
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-vf", vf, "-frames:v", "1", str(dest)]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+        raise MediaError(f"cannot convert {src.name} to PNG for the vision model: {e}") from e
     return dest
 
 

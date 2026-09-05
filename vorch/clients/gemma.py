@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
 import requests
 
 from .. import config
+
+log = logging.getLogger("vorch.gemma")
 
 
 class GemmaError(RuntimeError):
@@ -58,12 +61,27 @@ def complete_text(
 
 
 def encode_image(path: str | Path) -> str:
-    """Read an image file and return a base64 data-URL payload string."""
-    data = Path(path).read_bytes()
-    b64 = base64.b64encode(data).decode()
-    suffix = Path(path).suffix.lstrip(".").lower() or "png"
-    mime = "jpeg" if suffix in ("jpg", "jpeg") else suffix
-    return f"data:image/{mime};base64,{b64}"
+    """Read an image file and return a base64 data-URL payload string.
+
+    llama-server decodes PNG and JPEG only, so the real format is sniffed (uploads
+    named .png are often WebP/AVIF) and anything else is transcoded to PNG first
+    (``media.ensure_png``); the mime type follows the bytes, not the extension.
+    """
+    from .. import media  # local import: media pulls in ffmpeg helpers
+
+    p = Path(path)
+    try:
+        real = media.ensure_png(p)
+        mime = "jpeg" if media.sniff_image(real) == "jpeg" else "png"
+    except (media.MediaError, OSError) as e:
+        # Not convertible (no ffmpeg, not an image at all): send the bytes as they are,
+        # labelled by extension, exactly as before — the server decides.
+        log.warning("vision: could not normalise %s (%s); sending raw bytes", p.name, e)
+        real = p
+        suffix = p.suffix.lstrip(".").lower() or "png"
+        mime = "jpeg" if suffix in ("jpg", "jpeg") else suffix
+    data = Path(real).read_bytes()
+    return f"data:image/{mime};base64,{base64.b64encode(data).decode()}"
 
 
 def complete_vision(
