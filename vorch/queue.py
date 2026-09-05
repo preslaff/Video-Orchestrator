@@ -19,6 +19,7 @@ from collections.abc import Callable
 from . import assembly as assembly_mod
 from . import export as export_mod
 from . import projects as projects_mod
+from . import scene_assets
 from .orchestrator import Orchestrator
 from .state import Decision, Job, JobStatus, Store
 from .submission import resolve_submission
@@ -249,6 +250,8 @@ class JobManager:
         if job is None:
             raise KeyError(job_id)
         by_index = {s.index: s for s in job.scenes}
+        project = (projects_mod.load(self.store, job.project_id)
+                   if job.project_id and any(scene_assets.has_asset_edits(e) for e in edits) else None)
         for edit in edits:
             scene = by_index.get(edit.get("index"))
             if scene is None:
@@ -257,6 +260,8 @@ class JobManager:
                           "keyframe_negative", "animation_negative", "mode", "references"):
                 if edit.get(field) is not None:
                     setattr(scene, field, edit[field])
+            if scene_assets.has_asset_edits(edit):
+                scene_assets.apply_asset_edits(scene, edit, project)  # ValueError -> 400
             chosen = edit.get("chosen_variant")
             if chosen is not None:
                 if not 0 <= int(chosen) < len(scene.variants):

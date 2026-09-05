@@ -197,6 +197,23 @@ async def asset_file(project_id: str, asset_id: str, store: Store = Depends(get_
     return FileResponse(a.path, filename=a.name)
 
 
+class AssetPatch(BaseModel):
+    label: str
+
+
+@router.patch("/{project_id}/assets/{asset_id}", response_model=AssetOut)
+async def update_asset(project_id: str, asset_id: str, body: AssetPatch, store: Store = Depends(get_store)) -> AssetOut:
+    """Rename an asset's label (e.g. a face as "Maria, age 8") — labels are what the
+    storyboard reads when it assigns identities and references to scenes."""
+    p = _load(store, project_id)
+    try:
+        a = projects.set_asset_label(p, asset_id, body.label)
+    except KeyError:
+        raise ApiError(404, "not_found", "no such asset")
+    _save(store, p)
+    return _asset_out(p, a)
+
+
 @router.delete("/{project_id}/assets/{asset_id}", status_code=204)
 async def delete_asset(project_id: str, asset_id: str, store: Store = Depends(get_store)) -> None:
     p = _load(store, project_id)

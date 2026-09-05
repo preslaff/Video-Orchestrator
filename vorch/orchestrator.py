@@ -25,6 +25,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import config, pipeline, profiles, provenance, storyboard
+from . import projects as projects_mod
+from . import scene_assets
 from .genparams import DEFAULT, GenParams
 from .steps.postprocess import run_chain
 from .state import Decision, Job, JobStatus, Scene, SceneStatus, Store, Variant, new_job
@@ -233,6 +235,10 @@ class Orchestrator:
         for field_name in self.SCENE_EDIT_FIELDS:
             if edits and edits.get(field_name) is not None:
                 setattr(scene, field_name, edits[field_name])
+        asset_changes: list[str] = []
+        if scene_assets.has_asset_edits(edits):
+            project = projects_mod.load(self.store, job.project_id) if job.project_id else None
+            asset_changes = scene_assets.apply_asset_edits(scene, edits or {}, project)
         applied = ""
         if what == "keyframe" and edits and edits.get("apply_suggestion"):
             fix = self.last_fix_suggestion(job, scene)
@@ -252,7 +258,7 @@ class Orchestrator:
         scene.status = SceneStatus.PENDING if what == "keyframe" else SceneStatus.KEYFRAME
         scene.regenerations += 1
         job.export = None
-        changed = [k for k in self.SCENE_EDIT_FIELDS if edits and edits.get(k) is not None]
+        changed = [k for k in self.SCENE_EDIT_FIELDS if edits and edits.get(k) is not None] + asset_changes
         if applied:
             changed.append("applied evaluator suggestion")
         self.store.log_decision(Decision(

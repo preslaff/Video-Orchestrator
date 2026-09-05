@@ -153,3 +153,24 @@ def test_failed_assembly_not_exported(tmp_path):
     assert "assembly.mp4" not in rec.files and not any(m.startswith("assembly") for m in rec.missing)
     dest = next((tmp_path / "export" / "_unassigned").glob("*"))
     assert json.loads((dest / "manifest.json").read_text())["assembly"] is None
+
+
+def test_manifest_records_per_scene_identity(store, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    proj = projects.new_project("Ages")
+    face = projects.add_asset(proj, b"f", kind="master_face", name="young.png", label="Maria, age 8")
+    proj = projects.save(store, proj)
+    job = new_job(idea="A life", project_id=proj.id)
+    job.scenes = [
+        Scene(index=0, keyframe_path=_media(tmp_path, "k0.png"), identity=face.path, identity_asset_id=face.id,
+              reference_asset_ids=["r1"], description="child"),
+        Scene(index=1, keyframe_path=_media(tmp_path, "k1.png"), description="no one"),
+    ]
+    store.save_job(job)
+    rec = export.export_job(store, job, proj)
+    m = json.loads((tmp_path / "export" / "ages" / f"{job.id[:8]}_a-life" / "manifest.json").read_text())
+    assert m["scenes"][0]["identity"] == {"path": face.path, "asset_id": face.id, "label": "Maria, age 8"}
+    assert m["scenes"][0]["reference_asset_ids"] == ["r1"] and m["scenes"][1]["identity"] is None
+    readme = (tmp_path / "export" / "ages" / f"{job.id[:8]}_a-life" / "README.txt").read_text()
+    assert "01. child  — identity: Maria, age 8" in readme and "02. no one\n" in readme
+    assert rec.ok

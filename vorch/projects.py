@@ -14,6 +14,7 @@ import re
 import shutil
 import unicodedata
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,10 +94,40 @@ def export_root(project: Project | None) -> Path:
 
 
 def master_face(project: Project | None) -> Asset | None:
+    """The project's default identity (first master_face asset)."""
     if project is None:
         return None
     faces = project.assets_of("master_face")
     return faces[0] if faces else None
+
+
+def identity_assets(project: Project | None) -> list[Asset]:
+    """All faces a scene may be assigned (label them by who/when: "Maria, age 8")."""
+    return project.assets_of("master_face") if project is not None else []
+
+
+def resolve_asset_paths(project: Project | None, asset_ids: Sequence[str]) -> list[str]:
+    """Asset ids -> file paths, in order. KeyError names the first unknown id."""
+    if not asset_ids:
+        return []
+    if project is None:
+        raise KeyError("no project")
+    out: list[str] = []
+    for aid in asset_ids:
+        a = project.asset(aid)
+        if a is None:
+            raise KeyError(aid)
+        out.append(a.path)
+    return out
+
+
+def set_asset_label(project: Project, asset_id: str, label: str) -> Asset:
+    a = project.asset(asset_id)
+    if a is None:
+        raise KeyError(asset_id)
+    a.label = label.strip()
+    project.updated_at = _now()
+    return a
 
 
 def add_asset(

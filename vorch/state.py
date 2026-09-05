@@ -91,6 +91,9 @@ class Scene:
     keyframe_negative: str = ""       # per-scene negative (profile negative when empty)
     mode: str = "t2i"                 # t2i | edit (reference-locked keyframe)
     references: list[str] = field(default_factory=list)  # local paths for mode="edit"
+    reference_asset_ids: list[str] = field(default_factory=list)  # project asset ids behind `references`
+    identity: str = ""                # face used by the swap for THIS scene ("" = no swap)
+    identity_asset_id: str | None = None                  # project asset id behind `identity`
     keyframe_path: str | None = None
     keyframe_verdict: Verdict | None = None
     animation_prompt: str = ""
@@ -236,6 +239,9 @@ def _scene_to_dict(s: Scene) -> dict:
         "keyframe_negative": s.keyframe_negative,
         "mode": s.mode,
         "references": list(s.references),
+        "reference_asset_ids": list(s.reference_asset_ids),
+        "identity": s.identity,
+        "identity_asset_id": s.identity_asset_id,
         "keyframe_path": s.keyframe_path,
         "keyframe_verdict": _verdict_to_dict(s.keyframe_verdict),
         "animation_prompt": s.animation_prompt,
@@ -264,6 +270,9 @@ def _scene_from_dict(d: dict) -> Scene:
         keyframe_negative=d.get("keyframe_negative", ""),
         mode=d.get("mode", "t2i"),
         references=list(d.get("references", []) or []),
+        reference_asset_ids=list(d.get("reference_asset_ids", []) or []),
+        identity=d.get("identity", "") or "",
+        identity_asset_id=d.get("identity_asset_id"),
         keyframe_path=d.get("keyframe_path"),
         keyframe_verdict=_verdict_from_dict(d.get("keyframe_verdict")),
         animation_prompt=d.get("animation_prompt", ""),

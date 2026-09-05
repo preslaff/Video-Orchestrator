@@ -40,10 +40,12 @@ def variant_out(v: Variant) -> VariantOut:
     )
 
 
-def scene_to_public(s: Scene) -> ScenePublic:
+def scene_to_public(s: Scene, project_id: str | None = None) -> ScenePublic:
     d = _scene_to_dict(s)
     d["variants"] = [variant_out(v) for v in s.variants]
     d.update(
+        identity_url=(f"/api/projects/{project_id}/assets/{s.identity_asset_id}/file"
+                      if project_id and s.identity_asset_id else None),
         keyframe_url=media_url(s.keyframe_path),
         video_url=media_url(s.video_path),
         swapped_url=media_url(s.swapped_path),
@@ -56,7 +58,7 @@ def scene_to_public(s: Scene) -> ScenePublic:
 
 def job_to_public(job: Job, store: Store) -> JobPublic:
     d = job_to_dict(job)
-    d["scenes"] = [scene_to_public(s) for s in job.scenes]
+    d["scenes"] = [scene_to_public(s, job.project_id) for s in job.scenes]
     d["pending_gate"] = Orchestrator.pending_gate(job, store)
     return JobPublic.model_validate(d)
 

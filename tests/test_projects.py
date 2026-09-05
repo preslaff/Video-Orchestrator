@@ -81,3 +81,24 @@ def test_delete_project_nulls_job_project_id(store):
     assert store.load_job(job.id).project_id is None  # job survives; link nulled
     assert store.list_jobs()[0].project_id is None
     assert store.delete_project(p.id) is False
+
+
+def test_identity_assets_resolve_paths_and_labels(tmp_path, monkeypatch):
+    from vorch import config, projects
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects.new_project("Ages")
+    young = projects.add_asset(p, b"a", kind="master_face", name="young.png", label="Maria, age 8")
+    old = projects.add_asset(p, b"b", kind="master_face", name="old.png")
+    prod = projects.add_asset(p, b"c", kind="product", name="bottle.png")
+    assert [a.id for a in projects.identity_assets(p)] == [young.id, old.id]
+    assert projects.identity_assets(None) == []
+    assert projects.resolve_asset_paths(p, [prod.id, young.id]) == [prod.path, young.path]
+    assert projects.resolve_asset_paths(p, []) == [] and projects.resolve_asset_paths(None, []) == []
+    with pytest.raises(KeyError, match="nope"):
+        projects.resolve_asset_paths(p, ["nope"])
+    with pytest.raises(KeyError, match="no project"):
+        projects.resolve_asset_paths(None, [young.id])
+    assert projects.set_asset_label(p, old.id, "  Maria, age 70 ").label == "Maria, age 70"
+    with pytest.raises(KeyError):
+        projects.set_asset_label(p, "nope", "x")

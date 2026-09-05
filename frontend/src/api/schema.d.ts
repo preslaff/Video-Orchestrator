@@ -476,7 +476,12 @@ export interface paths {
         delete: operations["delete_asset_api_projects__project_id__assets__asset_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Asset
+         * @description Rename an asset's label (e.g. a face as "Maria, age 8") — labels are what the
+         *     storyboard reads when it assigns identities and references to scenes.
+         */
+        patch: operations["update_asset_api_projects__project_id__assets__asset_id__patch"];
         trace?: never;
     };
 }
@@ -745,6 +750,11 @@ export interface components {
             path: string;
             /** Url */
             url: string;
+        };
+        /** AssetPatch */
+        AssetPatch: {
+            /** Label */
+            label: string;
         };
         /** Body_upload_asset_api_projects__project_id__assets_post */
         Body_upload_asset_api_projects__project_id__assets_post: {
@@ -1256,6 +1266,10 @@ export interface components {
             mode?: ("t2i" | "edit") | null;
             /** References */
             references?: string[] | null;
+            /** Reference Asset Ids */
+            reference_asset_ids?: string[] | null;
+            /** Identity Asset Id */
+            identity_asset_id?: string | null;
             /** Chosen Variant */
             chosen_variant?: number | null;
         };
@@ -1325,6 +1339,20 @@ export interface components {
              * @default []
              */
             references: string[];
+            /**
+             * Reference Asset Ids
+             * @default []
+             */
+            reference_asset_ids: string[];
+            /**
+             * Identity
+             * @default
+             */
+            identity: string;
+            /** Identity Asset Id */
+            identity_asset_id?: string | null;
+            /** Identity Url */
+            identity_url?: string | null;
             /** Keyframe Path */
             keyframe_path?: string | null;
             /** Keyframe Url */
@@ -1379,6 +1407,10 @@ export interface components {
             mode?: ("t2i" | "edit") | null;
             /** References */
             references?: string[] | null;
+            /** Reference Asset Ids */
+            reference_asset_ids?: string[] | null;
+            /** Identity Asset Id */
+            identity_asset_id?: string | null;
             /**
              * Apply Suggestion
              * @default false
@@ -2674,6 +2706,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_asset_api_projects__project_id__assets__asset_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetOut"];
+                };
             };
             /** @description Validation Error */
             422: {

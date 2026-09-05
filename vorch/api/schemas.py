@@ -46,7 +46,9 @@ class SceneEdit(BaseModel):
     keyframe_negative: str | None = None
     animation_negative: str | None = None
     mode: Literal["t2i", "edit"] | None = None
-    references: list[str] | None = None
+    references: list[str] | None = None            # explicit paths (CLI / no project)
+    reference_asset_ids: list[str] | None = None   # project asset ids -> resolved into `references`
+    identity_asset_id: str | None = None           # face for this scene's swap; "" clears it (no swap)
     chosen_variant: int | None = None   # pick which variant is the scene's keyframe
 
 
@@ -66,6 +68,8 @@ class SceneRegenerate(BaseModel):
     animation_negative: str | None = None
     mode: Literal["t2i", "edit"] | None = None
     references: list[str] | None = None
+    reference_asset_ids: list[str] | None = None
+    identity_asset_id: str | None = None           # "" = no swap for this scene
     apply_suggestion: bool = False   # append the evaluator's last fix suggestion to the keyframe prompt
 
 
@@ -112,6 +116,10 @@ class ScenePublic(BaseModel):
     animation_negative: str = ""
     mode: str = "t2i"
     references: list[str] = []
+    reference_asset_ids: list[str] = []
+    identity: str = ""                    # face path used by this scene's swap ("" = none)
+    identity_asset_id: str | None = None
+    identity_url: str | None = None       # the asset's file URL when it is a project asset
     keyframe_path: str | None = None
     keyframe_url: str | None = None
     keyframe_verdict: VerdictOut | None = None

@@ -304,3 +304,16 @@ def test_list_jobs_filters_by_project(store):
     store.save_job(new_job(idea="a"))
     assert store.count_jobs(project_id="nope") == 0
     assert store.list_jobs(project_id="nope") == []
+
+
+def test_scene_identity_and_reference_asset_ids_round_trip():
+    from vorch.state import Scene, _scene_from_dict, _scene_to_dict
+
+    s = Scene(index=2, identity="/faces/young.png", identity_asset_id="a1", references=["/r/1.png"],
+              reference_asset_ids=["r1"])
+    d = _scene_to_dict(s)
+    assert d["identity"] == "/faces/young.png" and d["identity_asset_id"] == "a1" and d["reference_asset_ids"] == ["r1"]
+    back = _scene_from_dict(d)
+    assert (back.identity, back.identity_asset_id, back.reference_asset_ids) == ("/faces/young.png", "a1", ["r1"])
+    legacy = _scene_from_dict({"index": 0, "mode": "t2i"})           # rows saved before the fields existed
+    assert legacy.identity == "" and legacy.identity_asset_id is None and legacy.reference_asset_ids == []

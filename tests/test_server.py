@@ -522,6 +522,58 @@ def test_unassigned_jobs_filter_and_project_last_job(client):
     assert {p["id"]: p for p in client.get("/api/projects").json()}[empty.id]["last_job_at"] is None
 
 
+def _project_with_faces(store):
+    from vorch import projects as projects_mod
+
+    p = projects_mod.save(store, projects_mod.new_project(name="Faces Co"))
+    young = projects_mod.add_asset(p, b"y", kind="master_face", name="young.png", label="Maria, age 8")
+    old = projects_mod.add_asset(p, b"o", kind="master_face", name="old.png", label="Maria, age 70")
+    ref = projects_mod.add_asset(p, b"r", kind="reference", name="room.png")
+    projects_mod.save(store, p)
+    return p, young, old, ref
+
+
+def test_asset_label_patch(client):
+    p, young, _old, _ref = _project_with_faces(client.store)
+    r = client.patch(f"/api/projects/{p.id}/assets/{young.id}", json={"label": "Maria, age 9"})
+    assert r.status_code == 200 and r.json()["label"] == "Maria, age 9"
+    assert client.patch(f"/api/projects/{p.id}/assets/nope", json={"label": "x"}).status_code == 404
+    got = client.get(f"/api/projects/{p.id}").json()
+    assert {a["id"]: a["label"] for a in got["assets"]}[young.id] == "Maria, age 9"
+
+
+def test_update_scenes_assigns_identity_and_references_by_asset_id(client):
+    from vorch.state import Scene, new_job
+
+    p, young, old, ref = _project_with_faces(client.store)
+    job = new_job(idea="ages", project_id=p.id)
+    job.status = JobStatus.NEEDS_APPROVAL
+    job.scenes = [Scene(index=0), Scene(index=1)]
+    client.store.save_job(job)
+    r = client.put(f"/api/jobs/{job.id}/scenes", json={"scenes": [
+        {"index": 0, "identity_asset_id": young.id, "reference_asset_ids": [ref.id], "mode": "edit"},
+        {"index": 1, "identity_asset_id": old.id},
+    ]})
+    assert r.status_code == 200
+    s0, s1 = r.json()["scenes"]
+    assert s0["identity"] == young.path and s0["identity_asset_id"] == young.id
+    assert s0["identity_url"] == f"/api/projects/{p.id}/assets/{young.id}/file"
+    assert s0["references"] == [ref.path] and s0["reference_asset_ids"] == [ref.id]
+    assert s1["identity_asset_id"] == old.id
+    # clear the identity -> no swap for that scene
+    r = client.put(f"/api/jobs/{job.id}/scenes", json={"scenes": [{"index": 1, "identity_asset_id": ""}]})
+    assert r.json()["scenes"][1]["identity"] == "" and r.json()["scenes"][1]["identity_asset_id"] is None
+    # unknown asset -> 400; asset ids without a project -> 400
+    r = client.put(f"/api/jobs/{job.id}/scenes", json={"scenes": [{"index": 0, "identity_asset_id": "ghost"}]})
+    assert r.status_code == 400 and "ghost" in r.json()["error"]["message"]
+    orphan = new_job(idea="no project")
+    orphan.status = JobStatus.NEEDS_APPROVAL
+    orphan.scenes = [Scene(index=0)]
+    client.store.save_job(orphan)
+    r = client.put(f"/api/jobs/{orphan.id}/scenes", json={"scenes": [{"index": 0, "reference_asset_ids": [ref.id]}]})
+    assert r.status_code == 400 and "no project" in r.json()["error"]["message"]
+
+
 # --- assembly routes -------------------------------------------------------------
 
 

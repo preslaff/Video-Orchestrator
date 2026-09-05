@@ -1688,6 +1688,66 @@
       }
     },
     "/api/projects/{project_id}/assets/{asset_id}": {
+      "patch": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Update Asset",
+        "description": "Rename an asset's label (e.g. a face as \"Maria, age 8\") — labels are what the\nstoryboard reads when it assigns identities and references to scenes.",
+        "operationId": "update_asset_api_projects__project_id__assets__asset_id__patch",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Asset Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "projects"
@@ -2293,6 +2353,19 @@
           "url"
         ],
         "title": "AssetOut"
+      },
+      "AssetPatch": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "AssetPatch"
       },
       "Body_upload_asset_api_projects__project_id__assets_post": {
         "properties": {
@@ -3488,6 +3561,31 @@
             ],
             "title": "References"
           },
+          "reference_asset_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Asset Ids"
+          },
+          "identity_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity Asset Id"
+          },
           "chosen_variant": {
             "anyOf": [
               {
@@ -3590,6 +3688,41 @@
             "type": "array",
             "title": "References",
             "default": []
+          },
+          "reference_asset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reference Asset Ids",
+            "default": []
+          },
+          "identity": {
+            "type": "string",
+            "title": "Identity",
+            "default": ""
+          },
+          "identity_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity Asset Id"
+          },
+          "identity_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity Url"
           },
           "keyframe_path": {
             "anyOf": [
@@ -3816,6 +3949,31 @@
               }
             ],
             "title": "References"
+          },
+          "reference_asset_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Asset Ids"
+          },
+          "identity_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity Asset Id"
           },
           "apply_suggestion": {
             "type": "boolean",

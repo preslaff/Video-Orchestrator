@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from . import provenance
+from . import scene_assets
 from .projects import export_root, slugify
 from .state import Job, Store
 
@@ -151,6 +152,9 @@ def build_manifest(job: Job, project: Any | None, store: Store | None, files: di
             "animation_prompt": s.animation_prompt,
             "animation_negative": s.animation_negative,
             "mode": s.mode,
+            "identity": ({"path": s.identity, "asset_id": s.identity_asset_id,
+                          "label": scene_assets.identity_label(project, s)} if s.identity else None),
+            "reference_asset_ids": list(s.reference_asset_ids),
             "seeds": seeds,
             "verdicts": {"keyframe": _verdict_dict(s.keyframe_verdict),
                          "video": _verdict_dict(s.video_verdict),
@@ -213,7 +217,9 @@ def build_readme(job: Job, manifest: dict, files: list[str]) -> str:
     lines.append("")
     lines.append("scene order:")
     for s in manifest["scenes"]:
-        lines.append(f"  {s['index'] + 1:02d}. {s['description'] or s['keyframe_prompt'][:70]}")
+        ident = s.get("identity")
+        lines.append(f"  {s['index'] + 1:02d}. {s['description'] or s['keyframe_prompt'][:70]}"
+                     + (f"  — identity: {ident['label']}" if ident else ""))
     lines += ["", "files:"] + [f"  {f}" for f in files]
     lines += [
         "",
