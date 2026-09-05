@@ -256,6 +256,10 @@ Assumptions: Modal prices of Sept 2026, cold start ≈ 90 s billed, `scaledown_w
 |---|---|---|---|---|---|
 | 5 scenes, Wan 2.2 fp16 480p × 49, A100-80 ($2.50/h), 3 min per clip | 15 min | $0.63 | $0.06 | $0.42 | **≈ $1.10** |
 | **measured 2026-09-05:** 1 scene, Wan 2.2 fp8 480×832 × 81 frames, L40S ($1.95/h) — 6 min 9 s from face swap to downloaded clip (upload, readiness, generation, download) | 6.2 min | $0.20 | — | $0.33 | **≈ $0.53** |
+| **measured:** Wan 2.2 **fp16 1280×720 × 81**, 20 steps, H100 ($3.95/h) | 12.5 min | $0.82 | — | $0.66 | **≈ $1.50** |
+| **measured:** **LTX-2.5** 1280×704 × 97 @ 24 fps with audio, distilled, H100 — 90 s for the first clip (cold container), then ~28 s per clip | 3 clips ≈ 2.5 min | $0.16 | — | $0.66 | **≈ $0.85** |
+| **measured:** all-remote 9:16 — Klein 4B keyframe (~10 s), Wan fp8 81 frames (6 min), Wan-Animate-2 81 frames (2.2–2.6 min), L40S | ≈ 10 min | $0.33 | — | $0.33 | **≈ $0.66** |
+| **measured:** remote ReActor over a 49-frame clip (L40S, incl. upload/download and insightface load) | 2.2 min | $0.07 | — | — | (+ the clip's cost) |
 | 5 scenes, Wan fp16 720p × 81, H100 ($3.95/h), 6 min per clip | 30 min | $1.98 | $0.10 | $0.66 | **≈ $2.75** |
 | 10 Klein 4B keyframes on L4 ($0.80/h), ~6 s each | 1 min | $0.01 | $0.02 | $0.13 | ≈ $0.16, dominated by the idle tail: keep Klein local |
 | one regenerated scene on H100 | 6 min | $0.40 | $0.10 | $0.66 | ≈ $1.15 (the tail dominates; use `scaledown_window=120` when regenerating a lot) |
@@ -295,7 +299,7 @@ Media transfer is 5–20 MB per clip; Modal does not itemise egress today (verif
 | E — UI polish | backend badges, grouped env page, profile chips with cost hints, "on modal (H100)" in the step line | 2 |
 | **Total** | | **21.5 (18.5 without D)** |
 
-## 11. Live checklist (Phase B) — items 1–5 done on 2026-09-05 with the fp8/L40S path (job 86c7ff2e); 6–8 pending
+## 11. Live checklist (Phase B) — items 1–5 done on 2026-09-05 with the fp8/L40S path (job 86c7ff2e); item 7 partly (see the measured rows in §8); 6 and 8 pending. **Phase C verified live the same day:** Wan fp16 720p on the H100 (job a45ff3f8), LTX-2.5 with audio + audio assembly (74dddbb7), Klein 4B remote + Wan fp8 + Wan-Animate-2 all on the L40S (d8ae9721), remote ReActor video face swap (829ee354).
 
 1. `pip install modal && modal setup`; create a proxy token; `modal secret create huggingface HF_TOKEN=…`.
 2. `modal run modal/download_models.py --only wan22` (watch the Volume size), then `modal deploy modal/vorch_comfy.py`.

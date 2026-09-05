@@ -62,6 +62,19 @@ L40S in 6 min 9 s from face swap to downloaded `s00_clip_00001_.modal-l40s.mp4` 
 time + the 10-minute idle tail). Gotcha fixed on the way: a Volume cannot be mounted over
 ComfyUI's stock `models/` folder, so the image removes it.
 
+### Phase C (2026-09-05)
+
+| job | path | measured |
+|---|---|---|
+| a45ff3f8 | Wan 2.2 **fp16 1280×720 × 81**, H100 | 12 min 27 s render (the H100 log's own figure); impasto style preserved at 720p |
+| 74dddbb7 | **LTX-2.5** 1280×704 × 97 @ 24 fps, H100 | 90 s first clip (cold), ~28 s per clip after; clips carry 48 kHz AAC; `vorch assemble --spec {audio: true}` kept the track |
+| d8ae9721 | all remote on the L40S: Klein 4B bf16 keyframe → Wan fp8 81 f → Wan-Animate-2 | keyframe ~10 s, Wan 6 min, Animate-2 2.2–2.6 min; with the scene prompts auto-filled the character lands in the scene's setting |
+| 829ee354 | Wan fp8 49 f → remote ReActor over the clip (L40S) | ReActor step 2 min 10 s incl. transfers (51 s locally) |
+
+Gotchas met: the LTX repo is gated (accept the license on HF, export `HF_TOKEN`); Wan fp16 720p at 20 steps is a
+long render even on the H100 — expect 12–13 min per 81-frame clip; Wan-Animate-2 takes clothing from the
+reference image and the background from the prompt, so use a reference asset in the intended outfit.
+
 ## Cost hygiene
 
 - `scaledown_window` is 10 minutes: a container costs its GPU rate for 10 idle minutes after the
