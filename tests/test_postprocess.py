@@ -172,3 +172,31 @@ def test_video_step_gets_the_master_face_on_its_backend(user_registry, capture, 
     assert posted[-1]["2"]["inputs"]["image"] == "other.png"             # explicit param wins
     postprocess.run_chain(clip, [PostStep("vswap")])                      # no master: not filled
     assert posted[-1]["2"]["inputs"]["image"] == "face.png"
+
+
+def test_generative_step_gets_the_scene_prompts(user_registry, capture, tmp_path):
+    """A step declaring `positive`/`motion` receives the scene prompts unless set explicitly."""
+    import json
+
+    (tmp_path / "wf" / "gen.json").write_text(json.dumps({
+        "1": {"class_type": "LoadVideo", "inputs": {"file": "clip.mp4"}},
+        "9": {"class_type": "CLIPTextEncode", "inputs": {"text": "default", "clip": ["1", 0]}},
+        "11": {"class_type": "CLIPTextEncode", "inputs": {"text": "default motion", "clip": ["1", 0]}},
+        "13": {"class_type": "SaveVideo", "inputs": {"filename_prefix": "video/g", "video": ["1", 0]}},
+    }))
+    (tmp_path / "wf" / "gen.yaml").write_text(yaml.safe_dump({
+        "kind": "postprocess", "template": "gen.json",
+        "inputs": {"input_video": "video"}, "outputs": {"type": "video", "nodes": ["13"]},
+        "params": {"input_video": {"node": "1", "field": "file", "type": "str", "required": True},
+                   "positive": {"node": "9", "field": "text", "type": "str"},
+                   "motion": {"node": "11", "field": "text", "type": "str"}},
+    }))
+    reg = registry.load_registry([config.WORKFLOW_DIR, tmp_path / "wf"], force=True)
+    registry._cache[tuple(str(p) for p, _ in registry._default_dirs())] = reg
+    posted, _ = capture
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"v")
+    postprocess.run_chain(clip, [PostStep("gen")], prompts={"positive": "a woman on a rooftop", "motion": "she smiles"})
+    assert posted[-1]["9"]["inputs"]["text"] == "a woman on a rooftop" and posted[-1]["11"]["inputs"]["text"] == "she smiles"
+    postprocess.run_chain(clip, [PostStep("gen", {"positive": "fixed"})], prompts={"positive": "scene", "motion": None})
+    assert posted[-1]["9"]["inputs"]["text"] == "fixed" and posted[-1]["11"]["inputs"]["text"] == "default motion"

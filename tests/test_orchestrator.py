@@ -481,3 +481,12 @@ def test_regenerate_applies_evaluator_suggestion(wired, monkeypatch):
     # Applying again does not duplicate the correction.
     o.regenerate(job, 0, edits={"apply_suggestion": True})
     assert job.scenes[0].keyframe_prompt.count("Correction:") == 1
+
+
+def test_n_scenes_caps_the_storyboard(wired):
+    """The fake storyboard returns 2 briefs; n_scenes=1 keeps only the first."""
+    store, master, _ = wired
+    o = Orchestrator(store, n_scenes=1)
+    job = o.create_job("idea", master_face=str(master), autonomy="semi")
+    o.run(job)
+    assert len(job.scenes) == 1 and job.scenes[0].description == "d1"

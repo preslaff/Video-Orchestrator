@@ -4,7 +4,7 @@
 # (one 81-frame segment; frames are consumed 1:1 from the clip, no fps resampling). Model-level
 # identity — the alternative to frame-wise ReActor. Runs on the Modal L40S backend (int8 + distill LoRA).
 # Install: copy this YAML + wan_animate2_replace.json into ~/vorch/workflows/; add to a profile as
-#   post_steps: [{workflow: animate_wan_animate2, params: {character: "…", background: "…"}}]
+#   post_steps: [{workflow: animate_wan_animate2}]   # prompts and master face are filled per scene
 name: animate_wan_animate2
 kind: postprocess
 template: wan_animate2_replace.json
@@ -17,8 +17,8 @@ outputs: {type: video, nodes: ["26"]}
 params:
   input_video:     {node: "1",  field: file,  type: str, required: true}
   source_image:    {node: "3",  field: image, type: str, required: true}
-  character:       {node: "9",  field: text,  type: str}    # "Character appearance description: … Background description: …"
-  motion:          {node: "11", field: text,  type: str}    # what the person does in the driving video
+  positive:        {node: "9",  field: text,  type: str}    # auto-filled with the scene's keyframe prompt (character + setting); Wan-Animate-2 likes "Character appearance description: … Background description: …"
+  motion:          {node: "11", field: text,  type: str}    # auto-filled with the scene's animation prompt
   negative:        {node: "10", field: text,  type: str}
   width:           {targets: [{node: "17", field: width},  {node: "4", field: resize_type.width},  {node: "5", field: resize_type.width}],  type: int, constraint: multiple_of_16, min: 256, max: 1280}
   height:          {targets: [{node: "17", field: height}, {node: "4", field: resize_type.height}, {node: "5", field: resize_type.height}], type: int, constraint: multiple_of_16, min: 256, max: 1280}

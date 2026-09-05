@@ -137,7 +137,7 @@ def generate_storyboard(
 ) -> list[SceneBrief]:
     """Break an idea into a list of scene briefs (description/character/setting/mood)."""
     ctx = context or DEFAULT_CONTEXT
-    n = f"около {n_scenes} сцени" if n_scenes else "толкова сцени колкото историята изисква"
+    n = f"точно {n_scenes} сцени (не повече, не по-малко)" if n_scenes else "толкова сцени колкото историята изисква"
     what = "снимки" if ctx.kind == "stills" else "видео"
     user = (
         f'Идея за {what}: "{idea}"\n'

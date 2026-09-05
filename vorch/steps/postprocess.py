@@ -25,6 +25,9 @@ log = logging.getLogger("vorch.postprocess")
 
 AUTO_FILL = ("fps", "seed")
 MASTER_PARAM = "source_image"  # filled with the staged master face when the step declares it
+# Scene prompts a generative post-step may declare: `positive` (the scene's keyframe prompt —
+# character + setting) and `motion` (its animation prompt). Explicit step params win.
+PROMPT_PARAMS = ("positive", "motion")
 
 
 def run_chain(
@@ -35,12 +38,16 @@ def run_chain(
     seed: int | None = None,
     filename_prefix: str | None = None,
     master_face: str | Path | None = None,
+    prompts: dict[str, str] | None = None,
 ) -> list[Path]:
     """Apply ``chain`` (objects with ``.workflow`` / ``.params``) to ``path``.
 
     ``master_face`` (a local image) is staged once per backend and passed as
-    ``source_image`` to steps that declare it. Returns every produced file in
-    order (empty when nothing applied); the final deliverable is ``produced[-1]``.
+    ``source_image`` to steps that declare it; ``prompts`` (``positive`` /
+    ``motion``) fill the same-named params of generative steps (Wan-Animate-2)
+    so the replaced character keeps the scene's setting and action. Returns
+    every produced file in order (empty when nothing applied); the final
+    deliverable is ``produced[-1]``.
     """
     reg = registry.load_registry()
     current = Path(path)
@@ -67,6 +74,10 @@ def run_chain(
         for key in AUTO_FILL:
             if auto[key] is not None and spec.accepts(key) and key not in step.params:
                 values[key] = auto[key]
+        for key in PROMPT_PARAMS:
+            text = (prompts or {}).get(key)
+            if text and spec.accepts(key) and key not in step.params:
+                values[key] = text
         if master_face and spec.accepts(MASTER_PARAM) and MASTER_PARAM not in step.params:
             if backend.name not in staged_master:
                 staged_master[backend.name] = comfy.upload_image(master_face, backend=backend)

@@ -298,6 +298,10 @@ class Orchestrator:
         self._event(job, "step", step="storyboard", detail="Gemma writes the storyboard and prompts")
         context = storyboard.PromptContext.from_params(self.params)
         briefs = storyboard.generate_storyboard(job.idea, n_scenes=self.n_scenes, context=context)
+        if self.n_scenes and len(briefs) > self.n_scenes:
+            # n_scenes is a hard cap: the model sometimes returns more than asked for
+            log.info("job %s: storyboard returned %d scenes, keeping the first %d", job.id, len(briefs), self.n_scenes)
+            briefs = briefs[: self.n_scenes]
         scenes: list[Scene] = []
         for i, brief in enumerate(briefs):
             kp = storyboard.keyframe_prompt(brief, style=job.style, context=context)
@@ -449,6 +453,7 @@ class Orchestrator:
                         src, self.params.post_steps, seed=variant.seed,
                         filename_prefix=output_prefix(job, scene.index, "post", v if len(scene.variants) > 1 else None),
                         master_face=job.master_face or None,
+                        prompts={"positive": scene.keyframe_prompt},
                     )
                     variant.post_paths = [str(o) for o in outs]
                     self.store.save_job(job)
@@ -532,6 +537,7 @@ class Orchestrator:
                     video, self.params.post_steps, fps=self.params.fps, seed=seed,
                     filename_prefix=output_prefix(job, scene.index, "post"),
                     master_face=job.master_face or None,
+                    prompts={"positive": scene.keyframe_prompt, "motion": scene.animation_prompt},
                 )
                 if outs:
                     scene.post_paths = [str(o) for o in outs]
