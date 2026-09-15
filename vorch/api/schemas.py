@@ -162,6 +162,8 @@ class JobPublic(BaseModel):
     # yet reached. status "running" with active false is an orphan (server restarted).
     active: bool = False
     stopping: bool = False
+    # How many references the job's edit workflow uses; extra ones are ignored (0 = unknown).
+    edit_reference_slots: int = 0
 
 
 class JobSummaryOut(BaseModel):

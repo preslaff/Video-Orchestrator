@@ -2728,6 +2728,11 @@
             "type": "boolean",
             "title": "Stopping",
             "default": false
+          },
+          "edit_reference_slots": {
+            "type": "integer",
+            "title": "Edit Reference Slots",
+            "default": 0
           }
         },
         "type": "object",

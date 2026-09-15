@@ -329,3 +329,20 @@ saving the job, so **Stop is cooperative** (`vorch/cancel.py`):
   clip is saved before post-steps and `video_path` (the deliverable) only after the chain, so a
   scene stopped mid-chain resumes with the chain alone.
 - API: `POST /api/jobs/{id}/stop` (202); `JobPublic.active` / `stopping`; SSE `stopping` event.
+
+### Editing scenes at any stage
+
+`PUT /api/jobs/{id}/scenes` and `POST …/scenes/{n}/regenerate` work whenever no segment is in
+flight — at either gate, and on done, failed or stopped jobs.
+
+- **Validated before anything starts** (`scene_assets.validate_scene`): edit mode needs at least
+  one existing reference. `JobManager.regenerate` rehearses its edits on a copy of the scene, so a
+  bad edit is a 400 instead of a job that fails inside its run segment. Scene edits are
+  all-or-nothing.
+- **Edits invalidate what they replace.** A new face (`invalidate_after_identity_change`) drops
+  the swap and the clip built on the old one (stills: every variant's swap/post outputs). Choosing
+  a different keyframe variant on a video job drops its clip, reopens the keyframes gate and moves
+  a done job back to `needs_approval`; on stills the scene shows that variant's outputs.
+- **Reference slots come from the workflow**: `steps.edit.reference_slots` counts the edit
+  workflow's image inputs (`JobPublic.edit_reference_slots`); extra references are ignored and
+  logged as a warning.

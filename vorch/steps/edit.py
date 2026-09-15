@@ -48,3 +48,14 @@ def edit(
         if value is not None and spec.accepts(name):
             params[name] = value
     return run_step(workflow, timeout=timeout, **params)[0]
+
+
+def reference_slots(workflow: str) -> int:
+    """How many reference images ``workflow`` actually uses (its declared image inputs).
+
+    References beyond this are ignored by ``edit``; 0 when the workflow is unknown.
+    """
+    try:
+        return len(registry.load_registry().get(workflow).image_inputs())
+    except (KeyError, registry.RegistryError):
+        return 0

@@ -12,6 +12,7 @@ from pathlib import Path
 from .. import config, provenance
 from ..evaluator import Verdict
 from ..orchestrator import Orchestrator
+from ..steps.edit import reference_slots
 from ..state import Job, Scene, Store, Variant, _scene_to_dict, job_to_dict
 from .schemas import JobPublic, ProvenanceOut, ScenePublic, VariantOut, VerdictOut
 
@@ -56,6 +57,14 @@ def scene_to_public(s: Scene, project_id: str | None = None) -> ScenePublic:
     return ScenePublic.model_validate(d)
 
 
+def _edit_reference_slots(job: Job, store: Store) -> int:
+    """References the job's edit workflow uses (0 = unknown); the UI says "the first N are used"."""
+    try:
+        return reference_slots(Orchestrator.from_job(store, job).params.edit_workflow)
+    except Exception:  # a job whose profile no longer validates must still be viewable
+        return 0
+
+
 def job_to_public(job: Job, store: Store, manager=None) -> JobPublic:
     """``manager`` (a ``JobManager``) adds the live run state: whether a segment is in
     flight in this server (``active``) and whether a stop is pending (``stopping``).
@@ -63,6 +72,7 @@ def job_to_public(job: Job, store: Store, manager=None) -> JobPublic:
     d = job_to_dict(job)
     d["scenes"] = [scene_to_public(s, job.project_id) for s in job.scenes]
     d["pending_gate"] = Orchestrator.pending_gate(job, store)
+    d["edit_reference_slots"] = _edit_reference_slots(job, store)
     if manager is not None:
         d["active"] = manager.is_active(job.id)
         d["stopping"] = manager.is_stopping(job.id)

@@ -1,0 +1,193 @@
+"""Editing scenes at any stage: validation before anything starts, and invalidation of
+outputs built on what an edit replaced (a face, a keyframe variant)."""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from vorch import config, projects
+from vorch.orchestrator import GATE_KEYFRAMES
+from vorch.queue import JobManager
+from vorch.state import JobStatus, Scene, SceneStatus, Variant, new_job
+
+
+class NoRunOrch:
+    """Fails loudly if a regenerate that should have been rejected ever starts."""
+
+    def __init__(self, store, job):
+        self.emit = lambda e: None
+
+    def regenerate(self, job, index, **kw):  # pragma: no cover - must not be reached
+        raise AssertionError("regenerate started despite an invalid edit")
+
+
+@pytest.fixture
+def mgr(make_store, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    store = make_store()
+    m = JobManager(store, orchestrator_factory=lambda s, j: NoRunOrch(s, j), auto_export=False)
+    yield m
+    store.close()
+
+
+def _done_video_job(store, **scene_kw):
+    job = new_job(idea="v", kind="video", autonomy="semi")
+    job.status = JobStatus.DONE
+    job.export = {"path": "/export"}
+    job.scenes = [Scene(index=0, keyframe_path="/kf1.png", swapped_path="/sw.png", raw_video_path="/raw.mp4",
+                        video_path="/final.mp4", post_paths=["/final.mp4"], status=SceneStatus.COMPLETE,
+                        variants=[Variant("/kf1.png"), Variant("/kf2.png")], **scene_kw)]
+    store.save_job(job)
+    return job
+
+
+# --- validation ------------------------------------------------------------------------
+
+
+def test_edit_mode_without_references_is_rejected_and_nothing_is_saved(mgr):
+    job = _done_video_job(mgr.store)
+    with pytest.raises(ValueError, match="at least one reference"):
+        mgr.update_scenes(job.id, [{"index": 0, "description": "new", "mode": "edit", "references": []}])
+    saved = mgr.store.load_job(job.id).scenes[0]
+    assert saved.mode == "t2i" and saved.description == ""  # all-or-nothing
+
+
+def test_missing_reference_file_is_rejected(mgr, tmp_path):
+    job = _done_video_job(mgr.store)
+    with pytest.raises(ValueError, match="not found"):
+        mgr.update_scenes(job.id, [{"index": 0, "mode": "edit", "references": [str(tmp_path / "gone.png")]}])
+    ref = tmp_path / "ref.png"
+    ref.write_bytes(b"x")
+    mgr.update_scenes(job.id, [{"index": 0, "mode": "edit", "references": [str(ref)]}])
+    assert mgr.store.load_job(job.id).scenes[0].mode == "edit"
+
+
+def test_prompt_only_edits_are_not_blocked_by_validation(mgr):
+    job = _done_video_job(mgr.store)
+    mgr.update_scenes(job.id, [{"index": 0, "keyframe_prompt": "sharper"}])
+    assert mgr.store.load_job(job.id).scenes[0].keyframe_prompt == "sharper"
+
+
+def test_invalid_regenerate_is_rejected_before_the_job_starts(mgr):
+    job = _done_video_job(mgr.store)
+
+    async def go():
+        with pytest.raises(ValueError, match="at least one reference"):
+            await mgr.regenerate(job.id, 0, what="keyframe", edits={"mode": "edit", "references": []})
+        with pytest.raises(ValueError, match="unknown project asset|no project"):
+            await mgr.regenerate(job.id, 0, what="keyframe", edits={"reference_asset_ids": ["nope"]})
+        with pytest.raises(ValueError, match="what must be"):
+            await mgr.regenerate(job.id, 0, what="audio")
+
+    asyncio.run(go())
+    assert mgr.store.load_job(job.id).status is JobStatus.DONE  # never marked running
+    assert not mgr.is_active(job.id)
+
+
+def test_regenerating_a_stills_clip_is_rejected_up_front(mgr):
+    job = new_job(idea="s", kind="stills")
+    job.status = JobStatus.DONE
+    job.scenes = [Scene(index=0, keyframe_path="/k.png")]
+    mgr.store.save_job(job)
+    with pytest.raises(ValueError, match="no clip"):
+        asyncio.run(mgr.regenerate(job.id, 0, what="video"))
+
+
+# --- invalidation ----------------------------------------------------------------------
+
+
+def test_new_face_drops_the_swap_and_clip_built_on_the_old_one(mgr, tmp_path):
+    p = projects.new_project("Faces")
+    young = projects.add_asset(p, b"y", kind="master_face", name="young.png")
+    old = projects.add_asset(p, b"o", kind="master_face", name="old.png")
+    projects.save(mgr.store, p)
+    job = _done_video_job(mgr.store, identity=young.path, identity_asset_id=young.id)
+    job.project_id = p.id
+    mgr.store.save_job(job)
+
+    mgr.update_scenes(job.id, [{"index": 0, "identity_asset_id": young.id}])  # unchanged: keeps outputs
+    assert mgr.store.load_job(job.id).scenes[0].video_path == "/final.mp4"
+
+    mgr.update_scenes(job.id, [{"index": 0, "identity_asset_id": old.id}])
+    saved = mgr.store.load_job(job.id)
+    s = saved.scenes[0]
+    assert s.identity == old.path and s.keyframe_path == "/kf1.png"  # the keyframe stays
+    assert (s.swapped_path, s.raw_video_path, s.video_path, s.post_paths) == (None, None, None, [])
+    assert s.status is SceneStatus.KEYFRAME and saved.export is None
+
+
+def test_new_face_on_stills_drops_every_variant_swap(mgr, tmp_path):
+    p = projects.new_project("S")
+    a = projects.add_asset(p, b"a", kind="master_face", name="a.png")
+    b = projects.add_asset(p, b"b", kind="master_face", name="b.png")
+    projects.save(mgr.store, p)
+    job = new_job(idea="s", kind="stills")
+    job.project_id = p.id
+    job.status = JobStatus.DONE
+    job.scenes = [Scene(index=0, keyframe_path="/k1.png", identity=a.path, identity_asset_id=a.id,
+                        swapped_path="/s1.png", status=SceneStatus.COMPLETE,
+                        variants=[Variant("/k1.png", swapped_path="/s1.png", post_paths=["/p1.png"]),
+                                  Variant("/k2.png", swapped_path="/s2.png")])]
+    mgr.store.save_job(job)
+    mgr.update_scenes(job.id, [{"index": 0, "identity_asset_id": b.id}])
+    s = mgr.store.load_job(job.id).scenes[0]
+    assert all(v.swapped_path is None and v.post_paths == [] for v in s.variants)
+    assert s.swapped_path is None and s.status is SceneStatus.KEYFRAME
+
+
+def test_choosing_another_variant_on_a_done_video_job_reopens_the_keyframes_gate(mgr):
+    job = _done_video_job(mgr.store)
+    mgr.update_scenes(job.id, [{"index": 0, "chosen_variant": 0}])  # the current one: nothing changes
+    assert mgr.store.load_job(job.id).scenes[0].video_path == "/final.mp4"
+
+    mgr.update_scenes(job.id, [{"index": 0, "chosen_variant": 1}])
+    saved = mgr.store.load_job(job.id)
+    s = saved.scenes[0]
+    assert s.keyframe_path == "/kf2.png" and s.video_path is None and s.raw_video_path is None
+    assert s.status is SceneStatus.KEYFRAME and saved.export is None
+    assert saved.status is JobStatus.NEEDS_APPROVAL
+    assert any(d.phase == GATE_KEYFRAMES and d.action == "reopened" for d in mgr.store.decisions(job.id))
+
+
+def test_choosing_another_variant_on_stills_shows_that_variants_outputs(mgr):
+    job = new_job(idea="s", kind="stills")
+    job.status = JobStatus.DONE
+    job.scenes = [Scene(index=0, keyframe_path="/a.png", swapped_path="/as.png", post_paths=["/ap.png"],
+                        variants=[Variant("/a.png", swapped_path="/as.png", post_paths=["/ap.png"]),
+                                  Variant("/b.png", swapped_path="/bs.png", post_paths=["/bp.png"])])]
+    mgr.store.save_job(job)
+    mgr.update_scenes(job.id, [{"index": 0, "chosen_variant": 1}])
+    saved = mgr.store.load_job(job.id)
+    s = saved.scenes[0]
+    assert (s.keyframe_path, s.swapped_path, s.post_paths) == ("/b.png", "/bs.png", ["/bp.png"])
+    assert saved.status is JobStatus.DONE  # stills have no clip to redo
+
+
+def test_reference_slot_warning_when_a_scene_has_more_than_the_workflow_uses(make_store, tmp_path, monkeypatch):
+    from vorch import orchestrator as om
+    from vorch import pipeline, profiles, storyboard
+    from vorch.orchestrator import Orchestrator
+    from vorch.storyboard import PromptPair, SceneBrief
+
+    store = make_store()
+    refs = []
+    for i in range(3):
+        r = tmp_path / f"r{i}.png"
+        r.write_bytes(b"x")
+        refs.append(str(r))
+    monkeypatch.setattr(storyboard, "generate_storyboard", lambda idea, **kw: [SceneBrief(scene=1, description="d")])
+    monkeypatch.setattr(storyboard, "keyframe_prompt", lambda b, **kw: PromptPair(positive="kf"))
+    monkeypatch.setattr(storyboard, "animation_prompt", lambda b, **kw: PromptPair(positive="an"))
+    monkeypatch.setattr(pipeline, "stage_references", lambda paths, params, cache=None: list(paths))
+    monkeypatch.setattr(pipeline, "_fresh_keyframe", lambda *a, **k: ("/kf.png", None))
+    monkeypatch.setattr(pipeline, "animate_frame", lambda *a, **k: "/v.mp4")
+    prof = profiles.apply_overrides(profiles.default_profile(), {"evaluate": {"enabled": False},
+                                                                 "face_swap": {"enabled": False}})
+    o = Orchestrator(store, profile=prof)
+    job = o.create_job("idea", mode="edit", reference_images=refs, autonomy="full")
+    o.run(job)
+    warnings = [d.reason for d in store.decisions(job.id) if d.action == "warning"]
+    assert warnings == [f"3 references but {o.params.edit_workflow} uses the first 2"]
+    assert om.reference_slots(o.params.edit_workflow) == 2

@@ -751,3 +751,8 @@ def test_assembly_speed_validation_routes(client, stub_media):
     assert client.post(f"/api/jobs/{job.id}/assemble", json={"items": [{"scene_index": 0, "target_seconds": -1}]}).status_code == 422
     st = client.get(f"/api/jobs/{job.id}/assemble").json()
     assert st["default_spec"]["items"][0]["target_seconds"] is None and st["default_spec"]["smooth"] is False
+
+
+def test_job_reports_how_many_references_its_edit_workflow_uses(client):
+    job = _paused_job_with_scene(client.store)
+    assert client.get(f"/api/jobs/{job.id}").json()["edit_reference_slots"] == 2  # identity_edit: two images

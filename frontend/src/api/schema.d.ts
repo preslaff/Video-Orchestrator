@@ -941,6 +941,11 @@ export interface components {
              * @default false
              */
             stopping: boolean;
+            /**
+             * Edit Reference Slots
+             * @default 0
+             */
+            edit_reference_slots: number;
         };
         /**
          * JobSpec

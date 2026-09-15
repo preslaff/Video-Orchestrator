@@ -12,6 +12,7 @@ GPU-free and framework-free: this is plain asyncio. The web layer is server.py.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import threading
 from collections import deque
@@ -22,8 +23,8 @@ from . import cancel
 from . import export as export_mod
 from . import projects as projects_mod
 from . import scene_assets
-from .orchestrator import Orchestrator
-from .state import Decision, Job, JobStatus, Store
+from .orchestrator import GATE_KEYFRAMES, Orchestrator
+from .state import Decision, Job, JobStatus, SceneStatus, Store
 from .submission import resolve_submission
 
 log = logging.getLogger("vorch.queue")
@@ -267,11 +268,34 @@ class JobManager:
             raise KeyError(job_id)
         if job.status is JobStatus.RUNNING:
             raise RuntimeError("job is running")
-        if not any(s.index == index for s in job.scenes):
+        scene = next((s for s in job.scenes if s.index == index), None)
+        if scene is None:
             raise KeyError(f"scene {index}")
+        self._rehearse_regenerate(job, scene, what, edits or {})  # ValueError -> 400, nothing started
         prev = self._start(job)
         self._spawn(self._execute(job, lambda o, j: o.regenerate(j, index, what=what, edits=edits), prev))
         return job
+
+    def _rehearse_regenerate(self, job: Job, scene, what: str, edits: dict) -> None:
+        """Apply a regenerate's edits to a copy of the scene and validate the result.
+
+        ``Orchestrator.reopen_scene`` applies them inside the run segment, after RUNNING
+        is persisted — any error there would fail the whole job. Rehearsing here turns a
+        bad edit into a ValueError before anything starts.
+        """
+        if what not in ("keyframe", "video"):
+            raise ValueError("what must be 'keyframe' or 'video'")
+        if what == "video" and job.kind != "video":
+            raise ValueError("stills jobs have no clip to regenerate")
+        trial = copy.deepcopy(scene)
+        for field_name in Orchestrator.SCENE_EDIT_FIELDS:
+            if edits.get(field_name) is not None:
+                setattr(trial, field_name, edits[field_name])
+        if scene_assets.has_asset_edits(edits):
+            project = projects_mod.load(self.store, job.project_id) if job.project_id else None
+            scene_assets.apply_asset_edits(trial, edits, project)
+        if what == "keyframe":
+            scene_assets.validate_scene(trial)
 
     def events(self, job_id: str, *, after: int | None = None) -> asyncio.Queue:
         """Subscribe to a job's event stream (drain until a {'type': 'end'} event)."""
@@ -282,12 +306,19 @@ class JobManager:
         return job_id in self._active
 
     def update_scenes(self, job_id: str, edits: list[dict]) -> Job:
-        """Apply prompt/description edits to a paused job's scenes and persist them.
+        """Apply scene edits to a job that is not running and persist them.
 
         Each edit is ``{"index": int, "description"?, "keyframe_prompt"?,
         "animation_prompt"?, "keyframe_negative"?, "animation_negative"?,
-        "mode"?, "references"?}``. Only allowed while the job is **not** running
-        (a run segment in flight would race the orchestrator's own writes).
+        "mode"?, "references"?, "reference_asset_ids"?, "identity_asset_id"?,
+        "chosen_variant"?}``. Allowed at any stage except while a segment is in flight
+        (it would race the orchestrator's own writes). All-or-nothing: an invalid edit
+        raises ValueError before anything is saved.
+
+        Edits that change what was already built invalidate it, so a resumed or
+        re-approved job never keeps a stale output: a new face drops the swap and the
+        clip built on the old one; choosing a different keyframe variant on a video job
+        drops its clip and reopens the keyframes gate.
         """
         if job_id in self._active:
             raise RuntimeError(f"job {job_id} is running; pause before editing")
@@ -297,23 +328,50 @@ class JobManager:
         by_index = {s.index: s for s in job.scenes}
         project = (projects_mod.load(self.store, job.project_id)
                    if job.project_id and any(scene_assets.has_asset_edits(e) for e in edits) else None)
+        reopen_keyframes = False
         for edit in edits:
             scene = by_index.get(edit.get("index"))
             if scene is None:
                 continue
+            old_identity = (scene.identity, scene.identity_asset_id)
             for field in ("description", "keyframe_prompt", "animation_prompt",
                           "keyframe_negative", "animation_negative", "mode", "references"):
                 if edit.get(field) is not None:
                     setattr(scene, field, edit[field])
             if scene_assets.has_asset_edits(edit):
                 scene_assets.apply_asset_edits(scene, edit, project)  # ValueError -> 400
+            if any(edit.get(k) is not None for k in scene_assets.MODE_FIELDS):
+                scene_assets.validate_scene(scene)
+            if (scene.identity, scene.identity_asset_id) != old_identity:
+                scene_assets.invalidate_after_identity_change(scene, job.kind)
+                job.export = None
             chosen = edit.get("chosen_variant")
             if chosen is not None:
                 if not 0 <= int(chosen) < len(scene.variants):
                     raise ValueError(f"scene {scene.index}: no variant {chosen}")
                 v = scene.variants[int(chosen)]
-                scene.keyframe_path, scene.keyframe_verdict = v.path, v.verdict
-                scene.swapped_path = v.swapped_path
+                if v.path != scene.keyframe_path:
+                    scene.keyframe_path, scene.keyframe_verdict = v.path, v.verdict
+                    job.export = None
+                    if job.kind == "stills":
+                        # Stills finish every variant; the scene shows the chosen one's outputs.
+                        scene.swapped_path = v.swapped_path
+                        scene.post_paths = list(v.post_paths)
+                    else:
+                        # The clip was animated from the previous keyframe.
+                        scene.swapped_path = None
+                        scene.swap_verdict = None
+                        scene.raw_video_path = scene.video_path = None
+                        scene.video_verdict = None
+                        scene.post_paths = []
+                        scene.status = SceneStatus.KEYFRAME
+                        reopen_keyframes = True
+        if reopen_keyframes and job.autonomy != "full":
+            # The new keyframe must be reviewed before its clip is rendered again.
+            self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase=GATE_KEYFRAMES,
+                                             attempt=1, action="reopened"))
+            if job.status is JobStatus.DONE:
+                job.status = JobStatus.NEEDS_APPROVAL
         return self.store.save_job(job)
 
     # -- internals --

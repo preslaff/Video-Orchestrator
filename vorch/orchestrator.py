@@ -28,6 +28,7 @@ from . import cancel, config, pipeline, profiles, provenance, storyboard
 from . import projects as projects_mod
 from . import scene_assets
 from .genparams import DEFAULT, GenParams
+from .steps.edit import reference_slots
 from .steps.postprocess import run_chain
 from .state import Decision, Job, JobStatus, Scene, SceneStatus, Store, Variant, new_job
 
@@ -423,6 +424,12 @@ class Orchestrator:
                 pipeline.stage_references(scene.references, self.params, cache=ref_cache)
                 if scene.mode == "edit" else ()
             )
+            slots = reference_slots(self.params.edit_workflow) if scene.mode == "edit" else 0
+            if slots and len(scene.references) > slots and not scene.variants:
+                self.store.log_decision(Decision(
+                    job_id=job.id, scene_index=scene.index, phase="keyframe", attempt=1, action="warning",
+                    reason=f"{len(scene.references)} references but {self.params.edit_workflow} uses the first {slots}",
+                ))
             for v in range(len(scene.variants), n):
                 cancel.check()  # every earlier variant is already saved
                 provenance.set_context(scene=scene.index, variant=v if n > 1 else None)

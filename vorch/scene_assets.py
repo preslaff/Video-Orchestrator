@@ -61,3 +61,51 @@ def identity_label(project: Any | None, scene: Any) -> str:
         if a is not None:
             return a.label or a.name
     return scene.identity.rsplit("/", 1)[-1] if scene.identity else ""
+
+
+# --- validation & invalidation (edits at any stage) -----------------------------------
+
+MODE_FIELDS = ("mode", "references", "reference_asset_ids")
+
+
+def validate_scene(scene: Any) -> None:
+    """A scene's keyframe settings must be generatable; raise ValueError otherwise.
+
+    Checked *before* any work starts: a bad edit used to surface only inside the run
+    segment, turning a typo into a FAILED job instead of a 400.
+    """
+    from pathlib import Path
+
+    if scene.mode not in ("t2i", "edit"):
+        raise ValueError(f"scene {scene.index}: unknown mode {scene.mode!r} (t2i | edit)")
+    if scene.mode == "edit":
+        if not scene.references:
+            raise ValueError(f"scene {scene.index}: edit mode needs at least one reference image")
+        missing = [r for r in scene.references if not Path(r).expanduser().is_file()]
+        if missing:
+            raise ValueError(f"scene {scene.index}: reference image not found: {missing[0]}")
+
+
+def invalidate_after_identity_change(scene: Any, kind: str) -> None:
+    """Drop every output built on the scene's previous face, so the new one is applied.
+
+    Video: the swap, the raw clip, the clip and its post-steps (the keyframe stays).
+    Stills: every variant's swap and post-steps. The scene goes back to KEYFRAME so the
+    next run redoes exactly that. Kept out of ``apply_asset_edits``, which the storyboard
+    also uses on scenes that have no outputs yet.
+    """
+    from .state import SceneStatus
+
+    scene.swapped_path = None
+    scene.swap_verdict = None
+    scene.post_paths = []
+    if kind == "stills":
+        for v in scene.variants:
+            v.swapped_path = None
+            v.post_paths = []
+    else:
+        scene.raw_video_path = None
+        scene.video_path = None
+        scene.video_verdict = None
+    if scene.keyframe_path:
+        scene.status = SceneStatus.KEYFRAME
