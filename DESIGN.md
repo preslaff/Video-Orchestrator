@@ -346,3 +346,23 @@ flight — at either gate, and on done, failed or stopped jobs.
 - **Reference slots come from the workflow**: `steps.edit.reference_slots` counts the edit
   workflow's image inputs (`JobPublic.edit_reference_slots`); extra references are ignored and
   logged as a warning.
+
+### An image of your choice as a keyframe
+
+`POST …/scenes/{n}/regenerate` with `what="keyframe"` and `keyframe_asset_id` uses a project
+image instead of generating one (`Orchestrator.reopen_scene` → `_install_user_keyframe`):
+
+- fitted with `media.fit_image` to the job's keyframe size into
+  `COMFY_OUTPUT/vorch/<job8>/sNN_keyframe_user_<n>.png` — the only tree `/media` serves, and at
+  the frame size Wan expects; a provenance sidecar records the asset and the job;
+- **appended** as a `Variant(source="user", asset_id=…)`, so generated candidates stay selectable;
+  `ScenePublic.keyframe_source` says which kind is chosen;
+- everything built on the old keyframe is cleared and the gate reopened exactly as for a
+  regenerated keyframe; `_scene_needs_keyframes` never generates over a user variant (so a stills
+  job with several variants keeps it) and the evaluator never judges it. A plain regenerate goes
+  back to generating.
+
+Validated in `JobManager.regenerate` before the job starts (the job has a project; the asset and
+its file exist). **Assemblies go stale visibly**: records store the joined `clips`, and
+`assembly.is_stale` compares them with each scene's current clip (older records fall back to the
+sidecar manifest).

@@ -184,8 +184,8 @@ def fit_image(src: str | Path, width: int, height: int, dest: str | Path | None 
     vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
     cmd = ["ffmpeg", "-y", "-i", str(src), "-vf", vf, "-frames:v", "1", str(dest)]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
         raise MediaError(f"ffmpeg failed to fit {src} to {width}x{height}: {e}") from e
     if not dest.is_file():
         raise MediaError(f"ffmpeg produced no image for {src}")

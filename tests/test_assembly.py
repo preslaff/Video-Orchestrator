@@ -229,3 +229,49 @@ def test_run_passes_speeds_and_reports_retimed_total(tmp_path, monkeypatch):
     assert rec.spec["items"][0]["target_seconds"] == 6.125 and rec.spec["smooth"] is True
     round_trip = assembly.AssemblySpec.from_dict(rec.spec)
     assert round_trip.items[0].speed == pytest.approx(0.5) and round_trip.smooth is True
+
+
+def _assembled(tmp_path, monkeypatch, job):
+    spec, paths = assembly.resolve(job, {})
+
+    def fake_assemble(clips, cuts, dest, **kw):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"mp4")
+        return dest
+
+    monkeypatch.setattr(media, "assemble", fake_assemble)
+    rec = assembly.run(job, spec, paths)
+    assembly.register_version(job, rec)
+    return rec
+
+
+def test_assembly_goes_stale_when_a_joined_clip_changes(tmp_path, monkeypatch):
+    job = _job(tmp_path)
+    rec = _assembled(tmp_path, monkeypatch, job)
+    assert rec.clips == [s.video_path for s in job.scenes]
+    assert assembly.status(job)["record"]["stale"] is False
+
+    new_clip = tmp_path / "s1_regenerated.mp4"
+    new_clip.write_bytes(b"v2")
+    job.scenes[1].video_path = str(new_clip)
+    assert assembly.status(job)["record"]["stale"] is True
+
+    job.scenes[1].video_path = None  # clip cleared by an edit, not rendered yet
+    assert assembly.is_stale(job, assembly.AssemblyRecord.from_dict(job.assembly)) is True
+
+
+def test_old_records_without_clips_fall_back_to_the_sidecar(tmp_path, monkeypatch):
+    job = _job(tmp_path)
+    _assembled(tmp_path, monkeypatch, job)
+    job.assembly.pop("clips")  # a record written before clips were stored
+    assert assembly.status(job)["record"]["stale"] is False
+    job.scenes[0].video_path = str(tmp_path / "other.mp4")
+    assert assembly.status(job)["record"]["stale"] is True
+
+
+def test_unknown_clips_or_failed_records_are_never_flagged(tmp_path):
+    job = _job(tmp_path)
+    rec = assembly.AssemblyRecord(path=str(tmp_path / "gone.mp4"), created_at="", spec={"items": [{"scene_index": 0}]})
+    assert assembly.is_stale(job, rec) is False  # no clips and no sidecar: cannot know
+    failed = assembly.AssemblyRecord(path="x", created_at="", ok=False, clips=["/nope"], spec={"items": [{"scene_index": 0}]})
+    assert assembly.is_stale(job, failed) is False

@@ -71,6 +71,8 @@ class Variant:
     verdict: Verdict | None = None
     swapped_path: str | None = None
     post_paths: list[str] = field(default_factory=list)
+    source: str = "generated"      # "generated" | "user" (an image the user chose as the keyframe)
+    asset_id: str | None = None    # the project asset behind a user keyframe
 
 
 @dataclass
@@ -214,6 +216,8 @@ def _variant_to_dict(v: Variant) -> dict:
         "verdict": _verdict_to_dict(v.verdict),
         "swapped_path": v.swapped_path,
         "post_paths": list(v.post_paths),
+        "source": v.source,
+        "asset_id": v.asset_id,
     }
 
 
@@ -224,6 +228,8 @@ def _variant_from_dict(d: dict) -> Variant:
         verdict=_verdict_from_dict(d.get("verdict")),
         swapped_path=d.get("swapped_path"),
         post_paths=list(d.get("post_paths", []) or []),
+        source=d.get("source", "generated") or "generated",
+        asset_id=d.get("asset_id"),
     )
 
 

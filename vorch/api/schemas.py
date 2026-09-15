@@ -71,6 +71,8 @@ class SceneRegenerate(BaseModel):
     reference_asset_ids: list[str] | None = None
     identity_asset_id: str | None = None           # "" = no swap for this scene
     apply_suggestion: bool = False   # append the evaluator's last fix suggestion to the keyframe prompt
+    # Use this project asset as the keyframe instead of generating one (what="keyframe").
+    keyframe_asset_id: str | None = None
 
 
 # --- responses ---------------------------------------------------------------
@@ -100,6 +102,8 @@ class VariantOut(BaseModel):
     swapped_path: str | None = None
     swapped_url: str | None = None
     post_paths: list[str] = []
+    source: str = "generated"   # "user" = an image the user chose, not generated
+    asset_id: str | None = None
 
 
 class ScenePublic(BaseModel):
@@ -132,6 +136,9 @@ class ScenePublic(BaseModel):
     variants: list[VariantOut] = []
     raw_video_path: str | None = None
     post_paths: list[str] = []
+    # "user" when the chosen keyframe is an image the user picked instead of a generated one.
+    keyframe_source: str = "generated"
+    keyframe_asset_id: str | None = None
 
 
 class JobPublic(BaseModel):
@@ -274,6 +281,8 @@ class AssemblyRecordOut(BaseModel):
     exists: bool = False
     exported: bool = False
     version: int = 0
+    clips: list[str] = []
+    stale: bool = False   # a joined clip is no longer its scene's clip: assemble again
 
 
 class AssemblyVersionOut(BaseModel):

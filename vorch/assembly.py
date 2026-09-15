@@ -99,6 +99,7 @@ class AssemblyRecord:
     width: int | None = None
     height: int | None = None
     version: int = 0                 # 1-based; versions keep their own file assembly_v<N>.mp4
+    clips: list[str] = field(default_factory=list)  # the clip files joined, in item order (stale check)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -377,7 +378,7 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
         rec = AssemblyRecord(
             path=str(dest), created_at=created, duration=round(info.frame_duration, 3), n_clips=len(paths),
             spec=spec.to_dict(), ok=True, size_bytes=dest.stat().st_size, fps=info.fps,
-            width=info.width, height=info.height, version=version,
+            width=info.width, height=info.height, version=version, clips=[str(p) for p in paths],
         )
         provenance.write_manifest(dest, "assemble", {
             "spec": spec.to_dict(), "clips": [str(p) for p in paths], "fps": fps, "width": width,
@@ -395,6 +396,25 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
                               ok=False, error=str(e), version=version)
 
 
+def is_stale(job: Job, record: AssemblyRecord) -> bool:
+    """True when a clip the assembly joined is no longer the scene's clip (regenerated,
+    replaced keyframe, removed). New clips always get new file names, so comparing paths
+    is enough. Records made before ``clips`` was stored fall back to the sidecar manifest;
+    when the clips cannot be known the assembly is not flagged."""
+    if not record.ok:
+        return False
+    clips = record.clips or ((provenance.read_manifest(record.path) or {}).get("params") or {}).get("clips") or []
+    items = (record.spec or {}).get("items") or []
+    if not clips or len(clips) != len(items):
+        return False
+    by_index = {s.index: s for s in job.scenes}
+    for item, clip in zip(items, clips):
+        scene = by_index.get(int(item["scene_index"]))
+        if scene is None or _clip_path(scene, str(item.get("source", "final"))) != clip:
+            return True
+    return False
+
+
 def status(job: Job, *, active: bool = False) -> dict:
     """Everything the Assemble panel needs in one payload."""
     scenes = clips_of(job)
@@ -402,7 +422,8 @@ def status(job: Job, *, active: bool = False) -> dict:
     exported = "assembly.mp4" in ((job.export or {}).get("files") or [])
     rec_out = None
     if record is not None:
-        rec_out = {**record.to_dict(), "exists": Path(record.path).is_file(), "exported": exported}
+        rec_out = {**record.to_dict(), "exists": Path(record.path).is_file(), "exported": exported,
+                   "stale": is_stale(job, record)}
     current_version = int((job.assembly or {}).get("version", 0) or 0)
     versions = [
         {**v, "exists": Path(v.get("path", "")).is_file(), "current": int(v.get("version", 0)) == current_version}

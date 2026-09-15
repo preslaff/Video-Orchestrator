@@ -16,6 +16,7 @@ import copy
 import logging
 import threading
 from collections import deque
+from pathlib import Path
 from collections.abc import Callable
 
 from . import assembly as assembly_mod
@@ -287,6 +288,18 @@ class JobManager:
             raise ValueError("what must be 'keyframe' or 'video'")
         if what == "video" and job.kind != "video":
             raise ValueError("stills jobs have no clip to regenerate")
+        asset_id = edits.get("keyframe_asset_id")
+        if asset_id is not None:
+            if what != "keyframe":
+                raise ValueError("an image as keyframe needs what='keyframe'")
+            project = projects_mod.load(self.store, job.project_id) if job.project_id else None
+            if project is None:
+                raise ValueError("the job has no project: add the image to a project first")
+            asset = project.asset(asset_id)
+            if asset is None:
+                raise ValueError(f"unknown project asset {asset_id!r}")
+            if not Path(asset.path).is_file():
+                raise ValueError(f"the asset's file is missing: {asset.path}")
         trial = copy.deepcopy(scene)
         for field_name in Orchestrator.SCENE_EDIT_FIELDS:
             if edits.get(field_name) is not None:
@@ -294,7 +307,7 @@ class JobManager:
         if scene_assets.has_asset_edits(edits):
             project = projects_mod.load(self.store, job.project_id) if job.project_id else None
             scene_assets.apply_asset_edits(trial, edits, project)
-        if what == "keyframe":
+        if what == "keyframe" and asset_id is None:  # a chosen image is not generated: mode is moot
             scene_assets.validate_scene(trial)
 
     def events(self, job_id: str, *, after: int | None = None) -> asyncio.Queue:

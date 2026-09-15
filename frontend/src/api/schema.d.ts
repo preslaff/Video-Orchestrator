@@ -639,6 +639,16 @@ export interface components {
              * @default 0
              */
             version: number;
+            /**
+             * Clips
+             * @default []
+             */
+            clips: string[];
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
         };
         /**
          * AssemblySpecIn
@@ -1434,6 +1444,13 @@ export interface components {
              * @default []
              */
             post_paths: string[];
+            /**
+             * Keyframe Source
+             * @default generated
+             */
+            keyframe_source: string;
+            /** Keyframe Asset Id */
+            keyframe_asset_id?: string | null;
         };
         /**
          * SceneRegenerate
@@ -1470,6 +1487,8 @@ export interface components {
              * @default false
              */
             apply_suggestion: boolean;
+            /** Keyframe Asset Id */
+            keyframe_asset_id?: string | null;
         };
         /** StillsSettings */
         StillsSettings: {
@@ -1533,6 +1552,13 @@ export interface components {
              * @default []
              */
             post_paths: string[];
+            /**
+             * Source
+             * @default generated
+             */
+            source: string;
+            /** Asset Id */
+            asset_id?: string | null;
         };
         /** VerdictOut */
         VerdictOut: {

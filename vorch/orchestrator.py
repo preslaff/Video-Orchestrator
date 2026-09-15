@@ -24,7 +24,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from . import cancel, config, pipeline, profiles, provenance, storyboard
+from . import cancel, config, media, pipeline, profiles, provenance, storyboard
 from . import projects as projects_mod
 from . import scene_assets
 from .genparams import DEFAULT, GenParams
@@ -237,6 +237,13 @@ class Orchestrator:
         the scene is regenerated from the keyframes phase; ``what="video"``: only the
         clip/post outputs are cleared (video jobs). The job's export is cleared so the
         handoff folder is rebuilt when the job completes again.
+
+        ``edits["keyframe_asset_id"]`` (with ``what="keyframe"``) uses that project image
+        as the keyframe instead of generating one: it is fitted to the job's keyframe
+        size inside COMFY_OUTPUT and **appended** as a ``source="user"`` variant (the
+        generated candidates stay selectable), everything built on the old keyframe is
+        cleared, and the gate is reopened exactly as for a regenerated keyframe. The
+        keyframes phase never generates over it and the evaluator never judges it.
         """
         scene = next((s for s in job.scenes if s.index == index), None)
         if scene is None:
@@ -252,6 +259,7 @@ class Orchestrator:
         if scene_assets.has_asset_edits(edits):
             project = projects_mod.load(self.store, job.project_id) if job.project_id else None
             asset_changes = scene_assets.apply_asset_edits(scene, edits or {}, project)
+        user_asset = (edits or {}).get("keyframe_asset_id") if what == "keyframe" else None
         applied = ""
         if what == "keyframe" and edits and edits.get("apply_suggestion"):
             fix = self.last_fix_suggestion(job, scene)
@@ -259,11 +267,16 @@ class Orchestrator:
                 scene.keyframe_prompt = f"{scene.keyframe_prompt.rstrip('. ')}. Correction: {fix}"
                 applied = fix
         if what == "keyframe":
-            scene.keyframe_path = None
             scene.keyframe_verdict = None
-            scene.variants = []
             scene.swapped_path = None
             scene.swap_verdict = None
+            if user_asset:
+                path, asset = self._install_user_keyframe(job, scene, user_asset)
+                scene.variants.append(Variant(path=str(path), source="user", asset_id=user_asset))
+                scene.keyframe_path = str(path)
+            else:
+                scene.keyframe_path = None
+                scene.variants = []
         if what == "video":
             scene.swapped_path = None   # the swap is part of the video phase: redo it with the current identity
             scene.swap_verdict = None
@@ -271,22 +284,48 @@ class Orchestrator:
         scene.raw_video_path = None
         scene.video_verdict = None
         scene.post_paths = []
-        scene.status = SceneStatus.PENDING if what == "keyframe" else SceneStatus.KEYFRAME
+        scene.status = SceneStatus.PENDING if (what == "keyframe" and not user_asset) else SceneStatus.KEYFRAME
         scene.regenerations += 1
         job.export = None
         changed = [k for k in self.SCENE_EDIT_FIELDS if edits and edits.get(k) is not None] + asset_changes
         if applied:
             changed.append("applied evaluator suggestion")
-        self.store.log_decision(Decision(
-            job_id=job.id, scene_index=index, phase=what, attempt=scene.regenerations,
-            action="regenerate", reason=f"edited: {', '.join(changed)}" if changed else "same prompts, new seed",
-        ))
+        if user_asset:
+            self.store.log_decision(Decision(
+                job_id=job.id, scene_index=index, phase="keyframe", attempt=scene.regenerations,
+                action="user_keyframe", reason=f"image: {asset.label or asset.name}",
+            ))
+        else:
+            self.store.log_decision(Decision(
+                job_id=job.id, scene_index=index, phase=what, attempt=scene.regenerations,
+                action="regenerate", reason=f"edited: {', '.join(changed)}" if changed else "same prompts, new seed",
+            ))
         if what == "keyframe" and job.kind == "video" and job.autonomy != "full":
             # The keyframes gate must be passed again for the new frame.
             self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase=GATE_KEYFRAMES,
                                              attempt=1, action="reopened"))
         self.store.save_job(job)
         return scene
+
+    def _install_user_keyframe(self, job: Job, scene: Scene, asset_id: str):
+        """Fit a project image to the job's keyframe size as this scene's next keyframe file.
+
+        Written under COMFY_OUTPUT (the only tree ``/media`` serves) and at the keyframe
+        size, so the UI can show it and Wan never has to crop it. ffmpeg reads WebP/AVIF
+        directly — no ``ensure_png`` round trip, which would shrink it first.
+        """
+        project = projects_mod.load(self.store, job.project_id) if job.project_id else None
+        asset = project.asset(asset_id) if project is not None else None
+        if asset is None:
+            raise ValueError(f"unknown project asset {asset_id!r}")
+        dest = config.COMFY_OUTPUT / f"{output_prefix(job, scene.index, 'keyframe')}_user_{scene.regenerations + 1}.png"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        path = media.fit_image(asset.path, *self.params.keyframe_size, dest)
+        # The provenance context is not bound outside run(): name the job explicitly.
+        provenance.write_manifest(path, "user_keyframe", {"asset_id": asset_id, "source": asset.path},
+                                  {"job_id": job.id, "scene": scene.index, "kind": "user_keyframe"})
+        log.info("job %s: scene %d keyframe <- %s", job.id, scene.index, asset.label or asset.name)
+        return path, asset
 
     def last_fix_suggestion(self, job: Job, scene: Scene) -> str:
         """The evaluator's most recent fix suggestion for a scene: the stored verdict,
@@ -489,6 +528,8 @@ class Orchestrator:
 
     @staticmethod
     def _scene_needs_keyframes(scene: Scene, n: int) -> bool:
+        if scene.keyframe_path and any(v.source == "user" for v in scene.variants):
+            return False  # the user chose the keyframe: never generate over it or re-choose
         if scene.keyframe_path is None or scene.status is SceneStatus.PENDING:
             return True
         return n > 1 and len(scene.variants) < n

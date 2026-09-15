@@ -38,12 +38,16 @@ def variant_out(v: Variant) -> VariantOut:
     return VariantOut(
         path=v.path, url=media_url(v.path), seed=v.seed, verdict=verdict_out(v.verdict),
         swapped_path=v.swapped_path, swapped_url=media_url(v.swapped_path), post_paths=list(v.post_paths),
+        source=v.source, asset_id=v.asset_id,
     )
 
 
 def scene_to_public(s: Scene, project_id: str | None = None) -> ScenePublic:
     d = _scene_to_dict(s)
     d["variants"] = [variant_out(v) for v in s.variants]
+    chosen = next((v for v in s.variants if v.path == s.keyframe_path), None)
+    if chosen is not None and chosen.source == "user":
+        d["keyframe_source"], d["keyframe_asset_id"] = "user", chosen.asset_id
     d.update(
         identity_url=(f"/api/projects/{project_id}/assets/{s.identity_asset_id}/file"
                       if project_id and s.identity_asset_id else None),
