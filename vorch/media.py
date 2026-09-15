@@ -124,6 +124,52 @@ def ensure_png(src: str | Path, *, max_side: int = 1024) -> Path:
     return dest
 
 
+def downscale(src: str | Path, *, max_side: int = 768, dest: str | Path | None = None) -> Path:
+    """Bound an image's long side to ``max_side``; return ``src`` unchanged when it already fits.
+
+    ``ensure_png`` only resizes on the transcode path, so a PNG/JPEG straight from a
+    camera reaches the vision model at full resolution. On CPU Gemma the mmproj
+    prefill dominates and scales with image tokens, so captioning a bounded copy is
+    several times faster for no useful loss of detail.
+
+    Aspect ratio is preserved; ``dest`` defaults to ``<stem>.small.png`` beside the
+    source, falling back to the temp dir when that directory is not writable.
+    """
+    src = Path(src).expanduser()
+    if not src.is_file():
+        raise FileNotFoundError(f"image not found: {src}")
+    try:
+        info = probe(src)
+    except MediaError:
+        return src  # not probeable (not an image?): leave it to the caller/server
+    if info.width and info.height and max(info.width, info.height) <= max_side:
+        return src
+    if dest is not None:
+        dest = Path(dest)
+    else:
+        dest = src.with_name(f"{src.stem}.small.png")
+        try:
+            if dest.is_file() and dest.stat().st_mtime_ns >= src.stat().st_mtime_ns:
+                return dest
+            writable = os.access(dest.parent, os.W_OK)
+        except OSError:
+            writable = False
+        if not writable:
+            dest = Path(tempfile.gettempdir()) / f"vorch-small-{abs(hash(str(src)))}.png"
+            if dest.is_file():
+                return dest
+    vf = f"scale='min({max_side},iw)':'min({max_side},ih)':force_original_aspect_ratio=decrease"
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(src),
+           "-vf", vf, "-frames:v", "1", str(dest)]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+        raise MediaError(f"cannot downscale {src.name}: {e}") from e
+    if not dest.is_file():
+        raise MediaError(f"ffmpeg produced no image for {src}")
+    return dest
+
+
 def fit_image(src: str | Path, width: int, height: int, dest: str | Path | None = None) -> Path:
     """Cover-fit ``src`` to exactly ``width``x``height`` (scale up/down, centre crop).
 

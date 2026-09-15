@@ -69,3 +69,28 @@ def test_ensure_png_transcodes_disguised_formats(tmp_path):
     assert media.ensure_png(real) == real                      # PNG untouched
     url = gemma.encode_image(fake)
     assert url.startswith("data:image/png;base64,") and base64.b64decode(url.split(",", 1)[1])[:4] == b"\x89PNG"
+
+
+def _make(tmp_path, name, size):
+    p = tmp_path / name
+    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=blue:s={size}", "-frames:v", "1", str(p)],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return p
+
+
+def test_downscale_bounds_the_long_side_and_keeps_aspect(tmp_path):
+    src = _make(tmp_path, "big.png", "2000x1000")
+    out = media.downscale(src, max_side=768)
+    assert out != src and _dims(out) == (768, 384)
+
+
+def test_downscale_returns_small_images_untouched(tmp_path):
+    src = _make(tmp_path, "small.png", "640x480")
+    assert media.downscale(src, max_side=768) == src
+
+
+def test_downscale_honours_an_explicit_dest(tmp_path):
+    src = _make(tmp_path, "tall.png", "500x1500")
+    dest = tmp_path / "out.png"
+    assert media.downscale(src, max_side=300, dest=dest) == dest
+    assert _dims(dest) == (100, 300)

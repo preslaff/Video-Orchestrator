@@ -1693,7 +1693,7 @@
           "projects"
         ],
         "summary": "Update Asset",
-        "description": "Rename an asset's label (e.g. a face as \"Maria, age 8\") — labels are what the\nstoryboard reads when it assigns identities and references to scenes.",
+        "description": "Rename an asset's label (e.g. a face as \"Maria, age 8\") — labels are what the\nstoryboard reads when it assigns identities and references to scenes.\n\nSaving here marks the label ``human``, which both clears the \"AI\" flag in the UI and\nmakes the label immune to later `vorch project label-assets` runs. Confirming an\nunchanged suggestion is the same call.",
         "operationId": "update_asset_api_projects__project_id__assets__asset_id__patch",
         "parameters": [
           {
@@ -2323,6 +2323,16 @@
           "label": {
             "type": "string",
             "title": "Label",
+            "default": ""
+          },
+          "label_source": {
+            "type": "string",
+            "title": "Label Source",
+            "default": ""
+          },
+          "note_caption": {
+            "type": "string",
+            "title": "Note Caption",
             "default": ""
           },
           "sha256": {

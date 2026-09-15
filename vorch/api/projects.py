@@ -23,6 +23,12 @@ class AssetOut(BaseModel):
     kind: str
     name: str
     label: str = ""
+    # "" never labelled | "auto" suggested by Gemma, awaiting review | "human" confirmed.
+    # The UI flags "auto" so the reviewer can see which labels nobody has checked.
+    label_source: str = ""
+    # The one-sentence description behind the label — shown under the thumbnail in the
+    # asset list and the per-scene pickers. The rest of the note stays server-side.
+    note_caption: str = ""
     sha256: str = ""
     created_at: str = ""
     path: str
@@ -73,7 +79,9 @@ class ProjectPatch(BaseModel):
 
 
 def _asset_out(project: Project, a) -> AssetOut:
-    return AssetOut(id=a.id, kind=a.kind, name=a.name, label=a.label, sha256=a.sha256, created_at=a.created_at,
+    return AssetOut(id=a.id, kind=a.kind, name=a.name, label=a.label, label_source=a.label_source,
+                    note_caption=str((a.note or {}).get("caption", "")),
+                    sha256=a.sha256, created_at=a.created_at,
                     path=a.path, url=f"/api/projects/{project.id}/assets/{a.id}/file")
 
 
@@ -204,7 +212,11 @@ class AssetPatch(BaseModel):
 @router.patch("/{project_id}/assets/{asset_id}", response_model=AssetOut)
 async def update_asset(project_id: str, asset_id: str, body: AssetPatch, store: Store = Depends(get_store)) -> AssetOut:
     """Rename an asset's label (e.g. a face as "Maria, age 8") — labels are what the
-    storyboard reads when it assigns identities and references to scenes."""
+    storyboard reads when it assigns identities and references to scenes.
+
+    Saving here marks the label ``human``, which both clears the "AI" flag in the UI and
+    makes the label immune to later `vorch project label-assets` runs. Confirming an
+    unchanged suggestion is the same call."""
     p = _load(store, project_id)
     try:
         a = projects.set_asset_label(p, asset_id, body.label)

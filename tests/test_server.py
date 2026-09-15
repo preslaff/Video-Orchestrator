@@ -542,6 +542,27 @@ def test_asset_label_patch(client):
     assert {a["id"]: a["label"] for a in got["assets"]}[young.id] == "Maria, age 9"
 
 
+def test_asset_out_carries_the_suggestion_and_patching_confirms_it(client):
+    """The review loop: Gemma suggests ("auto"), the UI flags it, saving makes it "human"."""
+    from vorch import projects as projects_mod
+
+    p, young, _old, _ref = _project_with_faces(client.store)
+    projects_mod.set_asset_note(p, young.id, {"caption": "a girl with dark hair"},
+                                label="girl, dark hair")
+    projects_mod.save(client.store, p)
+
+    assets = {a["id"]: a for a in client.get(f"/api/projects/{p.id}").json()["assets"]}
+    assert assets[young.id]["label_source"] == "auto"
+    assert assets[young.id]["note_caption"] == "a girl with dark hair"
+    # An asset nobody has described carries empty strings, not nulls.
+    assert assets[_ref.id]["label_source"] == "" and assets[_ref.id]["note_caption"] == ""
+
+    r = client.patch(f"/api/projects/{p.id}/assets/{young.id}", json={"label": "Maria, age 8"})
+    assert r.status_code == 200 and r.json()["label_source"] == "human"
+    # ...and the caption survives, so the reviewer keeps their context.
+    assert r.json()["note_caption"] == "a girl with dark hair"
+
+
 def test_update_scenes_assigns_identity_and_references_by_asset_id(client):
     from vorch.state import Scene, new_job
 

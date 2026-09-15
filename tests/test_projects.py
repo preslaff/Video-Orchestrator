@@ -102,3 +102,45 @@ def test_identity_assets_resolve_paths_and_labels(tmp_path, monkeypatch):
     assert projects.set_asset_label(p, old.id, "  Maria, age 70 ").label == "Maria, age 70"
     with pytest.raises(KeyError):
         projects.set_asset_label(p, "nope", "x")
+
+
+# --- asset notes and label provenance -------------------------------------------------
+
+
+def test_label_provenance_human_vs_auto(tmp_path, monkeypatch):
+    """Who wrote a label decides whether a captioning run may replace it."""
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects.new_project("Notes")
+    a = projects.add_asset(p, b"a", kind="reference", name="fb_780482127.jpg")
+    assert a.label_source == "" and a.note is None
+
+    note = {"caption": "a lighthouse on a headland", "tags": ["exterior"]}
+    projects.set_asset_note(p, a.id, note, label="coastal headland — a lighthouse")
+    assert a.label_source == "auto" and a.note == note
+
+    projects.set_asset_label(p, a.id, " Fanad Head, evening ")
+    assert a.label == "Fanad Head, evening" and a.label_source == "human"
+
+    # A later run may refresh the description without touching the person's wording.
+    projects.set_asset_note(p, a.id, {"caption": "redescribed"})
+    assert a.note == {"caption": "redescribed"}
+    assert a.label == "Fanad Head, evening" and a.label_source == "human"
+
+    with pytest.raises(KeyError):
+        projects.set_asset_note(p, "nope", {})
+
+
+def test_asset_note_round_trips_and_old_assets_load(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects.new_project("Round")
+    a = projects.add_asset(p, b"a", kind="reference", name="x.png")
+    projects.set_asset_note(p, a.id, {"caption": "нещо на брега"}, label="брегът")
+    back = projects.project_from_dict(projects.project_to_dict(p))
+    assert back.assets[0].note == {"caption": "нещо на брега"}
+    assert back.assets[0].label_source == "auto" and back.assets[0].label == "брегът"
+
+    # Stored before this feature existed: no note, no provenance, still loads.
+    legacy = {"id": "abc", "kind": "reference", "name": "old.png", "path": "/tmp/old.png",
+              "label": "hand typed", "sha256": "", "created_at": ""}
+    old = projects.asset_from_dict(legacy)
+    assert old.note is None and old.label_source == "" and old.label == "hand typed"

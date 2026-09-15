@@ -61,15 +61,31 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
           </form>
           {p.assets.length === 0 && <Empty>No assets. Add a <b>master_face</b> for identity, <b>reference</b>/<b>product</b> images for edit mode.</Empty>}
           {p.assets.some((a) => a.kind === 'master_face') && <p className="mb-2 text-xs text-neutral-500">Label faces by who and when (e.g. “Maria, age 8”) — the storyboard reads the labels to assign a face to each scene.</p>}
+          {p.assets.some((a) => a.label_source === 'auto') && (
+            <p className="mb-2 text-xs text-amber-800">
+              {p.assets.filter((a) => a.label_source === 'auto').length} label(s) suggested by Gemma and not yet reviewed. Edit or confirm each one — the storyboard reads these.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {p.assets.map((a) => (
               <div key={a.id} className="rounded border border-neutral-200 p-1">
                 {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
                 <img src={a.url} alt={a.name} className="aspect-square w-full rounded object-cover" />
                 <div className="mt-1 flex items-center justify-between text-xs">
-                  <span><span className="rounded bg-neutral-100 px-1">{a.kind}</span> <button type="button" className="hover:underline" title="edit label" onClick={() => { const v = prompt(`Label for “${a.name}”`, a.label || ''); if (v !== null) relabel.mutate({ assetId: a.id, label: v }) }}>{a.label || a.name}</button></span>
+                  <span>
+                    <span className="rounded bg-neutral-100 px-1">{a.kind}</span>{' '}
+                    {a.label_source === 'auto' && <span className="rounded bg-amber-100 px-1 text-amber-800" title="suggested by Gemma — review it">AI</span>}{' '}
+                    <button type="button" className="hover:underline" title="edit label" onClick={() => { const v = prompt(`Label for “${a.name}”`, a.label || ''); if (v !== null) relabel.mutate({ assetId: a.id, label: v }) }}>{a.label || a.name}</button>
+                  </span>
                   <button type="button" className="text-red-700 hover:underline" onClick={() => { if (confirm(`Remove asset “${a.name}”?`)) delAsset.mutate(a.id) }}>remove</button>
                 </div>
+                {/* What Gemma saw: context while deciding whether the label is right. */}
+                {a.note_caption && <p className="mt-0.5 line-clamp-2 px-1 text-[11px] text-neutral-500">{a.note_caption}</p>}
+                {a.label_source === 'auto' && (
+                  <button type="button" className="mt-0.5 px-1 text-[11px] text-neutral-600 hover:underline"
+                    title="keep this label as written and clear the AI flag"
+                    onClick={() => relabel.mutate({ assetId: a.id, label: a.label })}>confirm</button>
+                )}
               </div>
             ))}
           </div>

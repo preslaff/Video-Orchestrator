@@ -480,6 +480,10 @@ export interface paths {
          * Update Asset
          * @description Rename an asset's label (e.g. a face as "Maria, age 8") — labels are what the
          *     storyboard reads when it assigns identities and references to scenes.
+         *
+         *     Saving here marks the label ``human``, which both clears the "AI" flag in the UI and
+         *     makes the label immune to later `vorch project label-assets` runs. Confirming an
+         *     unchanged suggestion is the same call.
          */
         patch: operations["update_asset_api_projects__project_id__assets__asset_id__patch"];
         trace?: never;
@@ -736,6 +740,16 @@ export interface components {
              * @default
              */
             label: string;
+            /**
+             * Label Source
+             * @default
+             */
+            label_source: string;
+            /**
+             * Note Caption
+             * @default
+             */
+            note_caption: string;
             /**
              * Sha256
              * @default

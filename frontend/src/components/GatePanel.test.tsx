@@ -18,7 +18,7 @@ const job = {
   kind: 'video', export: null, status: 'needs_approval', pending_gate: 'storyboard', created_at: '', updated_at: '',
   scenes: [scene(0, { identity: '/faces/young.png', identity_asset_id: 'young' }), scene(1)],
 } as unknown as JobPublic
-const asset = (id: string, kind: string, label: string): AssetOut => ({ id, kind, name: `${id}.png`, label, sha256: '', created_at: '', path: `/faces/${id}.png`, url: `/api/projects/p1/assets/${id}/file` })
+const asset = (id: string, kind: string, label: string, extra: Partial<AssetOut> = {}): AssetOut => ({ id, kind, name: `${id}.png`, label, label_source: 'human', note_caption: '', sha256: '', created_at: '', path: `/faces/${id}.png`, url: `/api/projects/p1/assets/${id}/file`, ...extra })
 const assets = [asset('young', 'master_face', 'Maria, age 8'), asset('old', 'master_face', 'Maria, age 70'), asset('room', 'reference', 'the room')]
 
 /** fetch stub: records PUT /api/jobs/j1/scenes bodies (openapi-fetch passes a Request object). */

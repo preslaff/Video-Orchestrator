@@ -447,6 +447,77 @@ def _cmd_projects(args) -> int:
     return 0
 
 
+def _select_for_labelling(assets, args) -> tuple[list, int]:
+    """Assets to (re)label, plus how many human-authored labels were left alone.
+
+    Default is the cheap, resumable case: only assets nobody and nothing has labelled.
+    ``--force`` also redoes machine suggestions; a person's wording is replaced only
+    under the explicit ``--overwrite-human``.
+    """
+    todo, skipped_human = [], 0
+    for a in assets:
+        if args.kind and a.kind != args.kind:
+            continue
+        if a.label_source == "human" and not args.overwrite_human:
+            if a.label.strip():
+                skipped_human += 1
+            continue
+        if args.relabel:
+            if a.note:
+                todo.append(a)
+            continue
+        if not args.force and a.label.strip():
+            continue
+        todo.append(a)
+    if args.limit:
+        todo = todo[: args.limit]
+    return todo, skipped_human
+
+
+def _label_assets(project, args, store) -> int:
+    """Describe project assets with Gemma and propose labels for human review."""
+    import time
+
+    from . import asset_vision, projects
+
+    todo, skipped_human = _select_for_labelling(project.assets, args)
+    if skipped_human:
+        print(f"skipping {skipped_human} label(s) edited by hand (use --overwrite-human to replace)")
+    if not todo:
+        print("nothing to label" + ("" if args.force or args.relabel else " (all assets already have labels; --force to redo)"))
+        return 0
+    verb = "relabelling" if args.relabel else "describing"
+    print(f"{verb} {len(todo)} asset(s)" + (" [dry run]" if args.dry_run else ""))
+
+    started, failed = time.monotonic(), 0
+    for i, a in enumerate(todo, 1):
+        eta = ""
+        if i > 1 and not args.relabel:
+            per = (time.monotonic() - started) / (i - 1)
+            eta = f"  eta {int(per * (len(todo) - i + 1)) // 60}m"
+        try:
+            if args.relabel:
+                note = asset_vision.AssetNote.model_validate(a.note)
+            else:
+                note = asset_vision.describe(a.path, hint=args.hint or "", kind=a.kind)
+        except Exception as e:   # one bad file must not end a 40-minute run
+            failed += 1
+            print(f"[{i}/{len(todo)}] {a.name}: FAILED — {e}")
+            continue
+        label = asset_vision.label_for(note, kind=a.kind, fallback=Path(a.name).stem)
+        print(f"[{i}/{len(todo)}]{eta}  {a.name}\n    {a.label or '(no label)'}\n  → {label}")
+        if a.kind == "master_face" and not note.is_portrait:
+            print("    warning: no clear single face — this may be the wrong file for an identity")
+        if not args.dry_run:
+            projects.set_asset_note(project, a.id, note.model_dump(), label=label)
+            projects.save(store, project)   # per asset: Ctrl-C loses at most one
+    if args.dry_run:
+        print("dry run: nothing written")
+    else:
+        print(f"labelled {len(todo) - failed} asset(s); review them in the UI or with `vorch project show {project.slug}`")
+    return 1 if failed else 0
+
+
 def _cmd_project(args) -> int:
     from . import profiles, projects
 
@@ -466,10 +537,13 @@ def _cmd_project(args) -> int:
             projects.save(store, p)
             print(f"added {a.kind} asset {a.id}: {a.path}")
             return 0
+        if args.project_command == "label-assets":
+            return _label_assets(p, args, store)
         if args.project_command == "show":
             print(f"{p.name} [{p.slug}]  profile={p.default_profile_id}  export={projects.export_root(p)}")
             for a in p.assets:
-                print(f"  {a.kind:<12} {a.id}  {a.name}  {a.label}")
+                mark = {"auto": " [AI]", "human": ""}.get(a.label_source, "")
+                print(f"  {a.kind:<12} {a.id}  {a.name}  {a.label}{mark}")
             for s in store.list_jobs(project_id=p.id):
                 print(f"  job {s.id[:8]}  [{s.status.value}]  {s.idea!r}")
             return 0
@@ -800,7 +874,10 @@ def build_parser() -> argparse.ArgumentParser:
     pj = sub.add_parser("projects", help="list projects")
     pj.set_defaults(func=_cmd_projects)
 
-    pr = sub.add_parser("project", help="project: add <name> | add-asset <slug> <path> --kind | show <slug>")
+    pr = sub.add_parser(
+        "project",
+        help="project: add <name> | add-asset <slug> <path> --kind | label-assets <slug> | show <slug>",
+    )
     prs = pr.add_subparsers(dest="project_command", required=True)
     pa = prs.add_parser("add")
     pa.add_argument("name")
@@ -811,6 +888,16 @@ def build_parser() -> argparse.ArgumentParser:
     pas.add_argument("path")
     pas.add_argument("--kind", default="master_face", choices=["master_face", "reference", "product", "logo", "other"])
     pas.add_argument("--label", default=None)
+    pla = prs.add_parser("label-assets", help="describe assets with Gemma and propose labels for review")
+    pla.add_argument("slug")
+    pla.add_argument("--kind", default=None, choices=["master_face", "reference", "product", "logo", "other"])
+    pla.add_argument("--hint", default=None,
+                     help="what this collection is, and the tag vocabulary to use (steers `tags`)")
+    pla.add_argument("--force", action="store_true", help="redo assets that already have a suggested label")
+    pla.add_argument("--overwrite-human", action="store_true", help="also replace labels a person wrote")
+    pla.add_argument("--relabel", action="store_true", help="rebuild labels from stored notes; no model calls")
+    pla.add_argument("--dry-run", action="store_true", help="print proposals, write nothing")
+    pla.add_argument("--limit", type=int, default=None)
     psh = prs.add_parser("show")
     psh.add_argument("slug")
     pr.set_defaults(func=_cmd_project)

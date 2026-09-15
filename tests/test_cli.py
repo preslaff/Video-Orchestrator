@@ -190,3 +190,115 @@ def test_assemble_command(cli_store, tmp_path, monkeypatch, capsys):
     job.status = JobStatus.NEEDS_APPROVAL
     cli_store.save_job(job)
     assert cli.main(["assemble", job.id]) == 1  # not done, no --force
+
+
+# --- project label-assets -------------------------------------------------------------
+
+
+@pytest.fixture
+def labelled_project(cli_store, tmp_path, monkeypatch):
+    """A project with three reference assets and a stubbed vision model."""
+    import json as _json
+
+    from vorch import asset_vision
+
+    monkeypatch.setattr(asset_vision.media, "downscale", lambda src, **kw: src)
+    monkeypatch.setattr(
+        asset_vision.gemma, "complete_vision",
+        lambda system, user, images, **kw: _json.dumps(
+            {"caption": "a lighthouse above grey sea", "setting": "headland"}),
+    )
+    assert cli.main(["project", "add", "Bela Ireland"]) == 0
+    for i in range(3):
+        src = tmp_path / f"fb_{i}.png"
+        src.write_bytes(b"x")
+        assert cli.main(["project", "add-asset", "bela-ireland", str(src), "--kind", "reference"]) == 0
+    return cli_store
+
+
+def _labels(store):
+    from vorch import projects
+
+    p = projects.load_by_slug(store, "bela-ireland")
+    return {a.name: (a.label, a.label_source) for a in p.assets}
+
+
+def test_label_assets_suggests_then_defers_to_the_human(labelled_project, capsys):
+    store = labelled_project
+
+    # dry run writes nothing
+    assert cli.main(["project", "label-assets", "bela-ireland", "--dry-run"]) == 0
+    assert "dry run" in capsys.readouterr().out
+    assert all(src == "" for _, src in _labels(store).values())
+
+    assert cli.main(["project", "label-assets", "bela-ireland"]) == 0
+    capsys.readouterr()
+    assert all(src == "auto" and "headland" in label for label, src in _labels(store).values())
+
+    # a person rewrites one label
+    from vorch import projects
+    p = projects.load_by_slug(store, "bela-ireland")
+    projects.set_asset_label(p, p.assets[0].id, "Fanad Head, evening")
+    projects.save(store, p)
+
+    # --force redoes the suggestions but must not touch the human one
+    assert cli.main(["project", "label-assets", "bela-ireland", "--force"]) == 0
+    out = capsys.readouterr().out
+    assert "skipping 1 label" in out
+    labels = _labels(store)
+    assert labels["fb_0.png"] == ("Fanad Head, evening", "human")
+    assert all(src == "auto" for name, (_, src) in labels.items() if name != "fb_0.png")
+
+    # ...unless asked explicitly
+    assert cli.main(["project", "label-assets", "bela-ireland", "--force", "--overwrite-human"]) == 0
+    capsys.readouterr()
+    assert _labels(store)["fb_0.png"][1] == "auto"
+
+
+def test_label_assets_default_run_skips_labelled_and_limit_caps(labelled_project, capsys):
+    store = labelled_project
+    assert cli.main(["project", "label-assets", "bela-ireland", "--limit", "1"]) == 0
+    capsys.readouterr()
+    assert sum(1 for _, src in _labels(store).values() if src == "auto") == 1
+
+    # the default run only picks up what has no label at all
+    assert cli.main(["project", "label-assets", "bela-ireland"]) == 0
+    capsys.readouterr()
+    assert sum(1 for _, src in _labels(store).values() if src == "auto") == 3
+
+    assert cli.main(["project", "label-assets", "bela-ireland"]) == 0
+    assert "nothing to label" in capsys.readouterr().out
+
+
+def test_label_assets_relabel_uses_stored_notes_without_the_model(labelled_project, monkeypatch, capsys):
+    from vorch import asset_vision
+
+    store = labelled_project
+    assert cli.main(["project", "label-assets", "bela-ireland"]) == 0
+    capsys.readouterr()
+
+    def boom(*a, **kw):
+        raise AssertionError("relabel must not call the model")
+
+    monkeypatch.setattr(asset_vision.gemma, "complete_vision", boom)
+    assert cli.main(["project", "label-assets", "bela-ireland", "--relabel"]) == 0
+    assert all(src == "auto" for _, src in _labels(store).values())
+
+
+def test_label_assets_survives_one_bad_asset(labelled_project, monkeypatch, capsys):
+    from vorch import asset_vision
+
+    store = labelled_project
+    calls = {"n": 0}
+
+    def flaky(system, user, images, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise asset_vision.gemma.GemmaError("vision server fell over")
+        return '{"caption": "a lighthouse", "setting": "headland"}'
+
+    monkeypatch.setattr(asset_vision.gemma, "complete_vision", flaky)
+    assert cli.main(["project", "label-assets", "bela-ireland"]) == 1  # non-zero: something failed
+    out = capsys.readouterr().out
+    assert "FAILED" in out
+    assert sum(1 for _, src in _labels(store).values() if src == "auto") == 2

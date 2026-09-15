@@ -166,6 +166,23 @@ A project groups jobs and owns shared files: the **master face** used for identi
 `~/vorch/projects/<slug>/assets/` and content-hashed. A project also sets the default profile and
 an optional export root. Deleting a project keeps its jobs (unlinked).
 
+**Labels matter**, because the storyboard assigns a face and references to each scene by reading
+them. Rather than typing them all, let Gemma look at the assets and propose one each:
+
+```bash
+vorch project label-assets <slug> --limit 3 --dry-run \
+  --hint "a bicycle trip around Irish lighthouses; tag shots as lamp_room, fog_horn, camp, road"
+vorch project label-assets <slug> --hint "…"          # ~20-40 s per asset on CPU Gemma
+```
+
+`--hint` says what the collection is and which tag vocabulary to use, so the schema stays
+general-purpose while the tags fit the project. A suggestion is recorded as `label_source="auto"`
+and flagged **AI** in the UI; editing or confirming it in `/projects` (or at a gate) makes it
+`"human"`, after which no later run overwrites it — `--force` redoes only the suggestions, and
+replacing a person's wording needs `--overwrite-human`. The full description is kept on the asset
+and shown under the thumbnail in the per-scene pickers, so choosing a reference is informed rather
+than a guess. `--relabel` rebuilds labels from the stored descriptions without calling the model.
+
 ### Output profiles
 
 A profile is the complete generation preset for a job and is **snapshotted onto the job** at

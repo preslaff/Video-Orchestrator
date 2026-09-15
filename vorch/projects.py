@@ -55,6 +55,8 @@ class Asset:
     label: str = ""
     sha256: str = ""
     created_at: str = ""
+    note: dict | None = None   # last asset_vision.AssetNote, as a plain dict (the caption cache)
+    label_source: str = ""     # "" never labelled | "auto" Gemma suggested | "human" confirmed/edited
 
 
 @dataclass
@@ -122,10 +124,33 @@ def resolve_asset_paths(project: Project | None, asset_ids: Sequence[str]) -> li
 
 
 def set_asset_label(project: Project, asset_id: str, label: str) -> Asset:
+    """The human path: whatever a person types (or confirms) is authoritative.
+
+    Marking the label ``"human"`` is what makes re-running the captioner safe — a
+    suggestion can be regenerated, a decision cannot be silently overwritten.
+    """
     a = project.asset(asset_id)
     if a is None:
         raise KeyError(asset_id)
     a.label = label.strip()
+    a.label_source = "human"
+    project.updated_at = _now()
+    return a
+
+
+def set_asset_note(project: Project, asset_id: str, note: dict, *, label: str | None = None) -> Asset:
+    """Record a machine-generated description, and optionally the label derived from it.
+
+    The label is only ever written as ``"auto"``: a suggestion awaiting review. Callers
+    that must not clobber a person's wording check ``label_source`` before calling.
+    """
+    a = project.asset(asset_id)
+    if a is None:
+        raise KeyError(asset_id)
+    a.note = dict(note) if note is not None else None
+    if label is not None:
+        a.label = label.strip()
+        a.label_source = "auto"
     project.updated_at = _now()
     return a
 
@@ -181,12 +206,16 @@ def remove_asset(project: Project, asset_id: str, *, delete_file: bool = True) -
 
 def asset_to_dict(a: Asset) -> dict:
     return {"id": a.id, "kind": a.kind, "name": a.name, "path": a.path, "label": a.label,
-            "sha256": a.sha256, "created_at": a.created_at}
+            "sha256": a.sha256, "created_at": a.created_at, "note": a.note,
+            "label_source": a.label_source}
 
 
 def asset_from_dict(d: dict) -> Asset:
+    # `note`/`label_source` post-date the first projects; assets stored before them load
+    # as an unreviewed-but-unlabelled asset, which is exactly what they are.
     return Asset(id=d["id"], kind=d.get("kind", "other"), name=d.get("name", ""), path=d["path"],
-                 label=d.get("label", ""), sha256=d.get("sha256", ""), created_at=d.get("created_at", ""))
+                 label=d.get("label", ""), sha256=d.get("sha256", ""), created_at=d.get("created_at", ""),
+                 note=d.get("note"), label_source=d.get("label_source", ""))
 
 
 def project_to_dict(p: Project) -> dict:
