@@ -1635,6 +1635,7 @@
           "projects"
         ],
         "summary": "Upload Asset",
+        "description": "Add a file to the project. Unless a label was given (a person already named it), the\nasset is queued for background description and gets a suggested label when Gemma is done.",
         "operationId": "upload_asset_api_projects__project_id__assets_post",
         "parameters": [
           {
@@ -1664,6 +1665,59 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AssetOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/assets/describe": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Describe Assets",
+        "description": "Queue assets for background description: unlabelled ones by default, suggested (``auto``)\nones too with ``force``. Labels a person wrote are never touched.",
+        "operationId": "describe_assets_api_projects__project_id__assets_describe_post",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DescribeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DescribeResult"
                 }
               }
             }
@@ -1730,13 +1784,63 @@
         }
       }
     },
+    "/api/projects/{project_id}/assets/{asset_id}/thumb": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Asset Thumb",
+        "description": "A small cached JPEG of the asset for pickers and grids (320 px long side).\n\nA plain ``def`` route: FastAPI runs it in its threadpool, so the one-time ffmpeg call\nnever blocks the event loop. Built under a temporary name and renamed into place, so a\nburst of first requests never serves a half-written file. Assets never change (a new\nupload is a new id), so the response may be cached forever. Anything ffmpeg cannot\nshrink (already small, not an image) is served as the original file.",
+        "operationId": "asset_thumb_api_projects__project_id__assets__asset_id__thumb_get",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Asset Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{project_id}/assets/{asset_id}": {
       "patch": {
         "tags": [
           "projects"
         ],
         "summary": "Update Asset",
-        "description": "Rename an asset's label (e.g. a face as \"Maria, age 8\") — labels are what the\nstoryboard reads when it assigns identities and references to scenes.\n\nSaving here marks the label ``human``, which both clears the \"AI\" flag in the UI and\nmakes the label immune to later `vorch project label-assets` runs. Confirming an\nunchanged suggestion is the same call.",
+        "description": "Rename an asset's label (e.g. a face as \"Maria, age 8\") and/or change its kind — labels\nand kinds are what the storyboard reads when it assigns identities and references to scenes.\n\nSaving a label marks it ``human``, which both clears the \"AI\" flag in the UI and makes the\nlabel immune to later descriptions. Confirming an unchanged suggestion is the same call.\nChanging the kind rebuilds a still-suggested label for that kind; scenes already using the\nasset are not changed.",
         "operationId": "update_asset_api_projects__project_id__assets__asset_id__patch",
         "parameters": [
           {
@@ -2391,6 +2495,29 @@
             "title": "Note Caption",
             "default": ""
           },
+          "note_tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Note Tags",
+            "default": []
+          },
+          "note_text": {
+            "type": "string",
+            "title": "Note Text",
+            "default": ""
+          },
+          "describe_state": {
+            "type": "string",
+            "title": "Describe State",
+            "default": ""
+          },
+          "describe_error": {
+            "type": "string",
+            "title": "Describe Error",
+            "default": ""
+          },
           "sha256": {
             "type": "string",
             "title": "Sha256",
@@ -2408,6 +2535,10 @@
           "url": {
             "type": "string",
             "title": "Url"
+          },
+          "thumb_url": {
+            "type": "string",
+            "title": "Thumb Url"
           }
         },
         "type": "object",
@@ -2416,21 +2547,44 @@
           "kind",
           "name",
           "path",
-          "url"
+          "url",
+          "thumb_url"
         ],
         "title": "AssetOut"
       },
       "AssetPatch": {
         "properties": {
           "label": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Label"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "master_face",
+                  "reference",
+                  "product",
+                  "logo",
+                  "other"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
           }
         },
         "type": "object",
-        "required": [
-          "label"
-        ],
         "title": "AssetPatch"
       },
       "Body_upload_asset_api_projects__project_id__assets_post": {
@@ -2513,6 +2667,44 @@
           "created_at"
         ],
         "title": "DecisionOut"
+      },
+      "DescribeRequest": {
+        "properties": {
+          "asset_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Ids"
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "DescribeRequest"
+      },
+      "DescribeResult": {
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "title": "Queued"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queued"
+        ],
+        "title": "DescribeResult"
       },
       "EvalSettings": {
         "properties": {
@@ -3277,6 +3469,11 @@
             "type": "string",
             "title": "Export Root",
             "default": ""
+          },
+          "describe_hint": {
+            "type": "string",
+            "title": "Describe Hint",
+            "default": ""
           }
         },
         "type": "object",
@@ -3321,6 +3518,11 @@
           "export_root_effective": {
             "type": "string",
             "title": "Export Root Effective"
+          },
+          "describe_hint": {
+            "type": "string",
+            "title": "Describe Hint",
+            "default": ""
           },
           "assets": {
             "items": {
@@ -3412,6 +3614,17 @@
               }
             ],
             "title": "Export Root"
+          },
+          "describe_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Describe Hint"
           }
         },
         "type": "object",

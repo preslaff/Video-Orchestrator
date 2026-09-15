@@ -366,3 +366,23 @@ Validated in `JobManager.regenerate` before the job starts (the job has a projec
 its file exist). **Assemblies go stale visibly**: records store the joined `clips`, and
 `assembly.is_stale` compares them with each scene's current clip (older records fall back to the
 sidecar manifest).
+
+## 15. Assets at scale
+
+- **Thumbnails**: `GET /api/projects/{id}/assets/{asset_id}/thumb` serves a 320 px JPEG cached in
+  `<project>/thumbs/<asset_id>.jpg` (made once with `media.downscale`, renamed into place,
+  `Cache-Control: immutable` — assets never change; a new upload is a new id). Pickers and grids
+  use it instead of the original file.
+- **Kind is editable** (`PATCH …/assets/{id}` `{kind}`, `vorch project set-kind`). Labels are
+  kind-aware, so a still-suggested label is rebuilt from the stored note for the new kind without
+  calling the model; a person's label is kept. Scenes already using the asset are unchanged.
+- **Background description** (`vorch/describer.py`): uploads return at once and are queued; one
+  worker describes them with CPU Gemma, waiting while any job segment runs
+  (`JobManager.busy`). The note and an `auto` label are saved only if the asset still exists and
+  nobody labelled it meanwhile. State (queued/describing/failed) is in memory and reported on
+  `AssetOut`; `POST …/assets/describe` re-queues unlabelled assets (or suggestions, with `force`).
+  `Project.describe_hint` carries the tag vocabulary. `VORCH_AUTO_DESCRIBE=0` turns it off.
+- **Project writes are serialized** with `projects.editing(store, id)` — load → change → save under a
+  per-project lock — because a project is saved whole and the describer writes concurrently with
+  uploads and edits. In-process only: running `label-assets` from the CLI against a project the
+  server is describing is unsupported.

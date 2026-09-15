@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from .. import __version__, config
+from ..describer import AssetDescriber
 from ..queue import JobManager
 from ..state import Store
 from . import assembly, events, export, jobs, profiles, projects, setup, workflows
@@ -27,10 +28,12 @@ __all__ = ["ApiError", "JobSpec", "SceneEdit", "SceneEdits", "create_app", "open
 log = logging.getLogger("vorch.api")
 
 
-def register_routes(app: FastAPI, manager: JobManager, store: Store) -> None:
+def register_routes(app: FastAPI, manager: JobManager, store: Store,
+                    describer: AssetDescriber | None = None) -> None:
     """Attach the /api routes (and SSE) to an existing FastAPI app."""
     app.state.store = store
     app.state.manager = manager
+    app.state.describer = describer
     app.include_router(jobs.router)
     app.include_router(events.router)
     app.include_router(export.router)
@@ -57,6 +60,7 @@ def create_app(
     manager: JobManager | None = None,
     *,
     media_dir: Path | None = None,
+    describer: AssetDescriber | None = None,
 ) -> FastAPI:
     """Build a standalone FastAPI app: job API + SSE + ``/media`` static files.
 
@@ -71,7 +75,9 @@ def create_app(
     app = FastAPI(title="Video Orchestrator")
     install_cors(app)
     install_error_handlers(app)
-    register_routes(app, manager, store)
+    if describer is None:
+        describer = AssetDescriber(store, busy=manager.busy)
+    register_routes(app, manager, store, describer)
     media_dir = media_dir or config.COMFY_OUTPUT
     if not media_dir.exists():
         log.warning("media dir %s does not exist yet; /media will 404 until ComfyUI writes there", media_dir)

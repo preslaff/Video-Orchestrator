@@ -302,3 +302,22 @@ def test_label_assets_survives_one_bad_asset(labelled_project, monkeypatch, caps
     out = capsys.readouterr().out
     assert "FAILED" in out
     assert sum(1 for _, src in _labels(store).values() if src == "auto") == 2
+
+
+def test_project_set_kind_and_the_project_hint_steers_label_assets(labelled_project, capsys, monkeypatch):
+    from vorch import asset_vision, projects
+
+    store = labelled_project
+    p = projects.load_by_slug(store, "bela-ireland")
+    p.describe_hint = "lighthouses; tag as lamp_room"
+    projects.save(store, p)
+    seen = []
+    monkeypatch.setattr(asset_vision.gemma, "complete_vision",
+                        lambda system, user, images, **kw: seen.append(user) or '{"caption": "a tower"}')
+    assert cli.main(["project", "label-assets", "bela-ireland", "--limit", "1"]) == 0
+    assert "lamp_room" in seen[0]  # no --hint given: the project's hint is used
+
+    aid = p.assets[0].id
+    assert cli.main(["project", "set-kind", "bela-ireland", aid, "logo"]) == 0
+    assert projects.load_by_slug(store, "bela-ireland").asset(aid).kind == "logo"
+    assert cli.main(["project", "set-kind", "bela-ireland", "nope", "logo"]) == 1

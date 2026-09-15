@@ -194,6 +194,14 @@ class JobManager:
             self.broker.publish(job_id, {"job_id": job_id, "type": "stopping"})
         return job
 
+    def busy(self) -> bool:
+        """True while any job run segment is queued or in flight (not counting assemblies).
+
+        Background work that shares Gemma — the asset describer — waits for this to clear,
+        so it never slows a storyboard or the evaluator on the CPU-pinned model.
+        """
+        return bool(self._stop)
+
     def is_stopping(self, job_id: str) -> bool:
         """True between a stop request and the segment actually ending."""
         ev = self._stop.get(job_id)

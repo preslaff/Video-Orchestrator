@@ -18,7 +18,7 @@ const job = (over: Record<string, unknown> = {}) => ({
   edit_reference_slots: 2, pending_gate: null, scenes: [scene(0)], ...over,
 }) as unknown as JobPublic
 const asset = (id: string, label: string): AssetOut => ({
-  id, kind: 'reference', name: `${id}.jpg`, label, label_source: 'human', note_caption: '', sha256: '', created_at: '',
+  id, kind: 'reference', name: `${id}.jpg`, label, label_source: 'human', note_caption: '', note_tags: [], note_text: '', describe_state: '', describe_error: '', thumb_url: `/api/projects/p1/assets/${id}/thumb`, sha256: '', created_at: '',
   path: `/a/${id}.jpg`, url: `/api/projects/p1/assets/${id}/file`,
 })
 const assets = [asset('tower', 'striped tower'), asset('bela', 'Bela portrait'), asset('choc', 'chocolate')]

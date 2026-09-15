@@ -9,9 +9,11 @@ unique and doubles as the export folder name.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 import shutil
+import threading
 import unicodedata
 import uuid
 from collections.abc import Sequence
@@ -68,6 +70,9 @@ class Project:
     style_notes: str = ""
     default_profile_id: str = "cinematic_16x9"
     export_root: str = ""             # "" -> config.EXPORT_ROOT
+    # What the collection is and which tag vocabulary to use when Gemma describes assets
+    # (the `--hint` of `vorch project label-assets`, and the background describer's).
+    describe_hint: str = ""
     assets: list[Asset] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
@@ -87,6 +92,14 @@ def new_project(name: str, **kw: Any) -> Project:
 
 def project_dir(project: Project) -> Path:
     return config.PROJECTS_ROOT / project.slug
+
+
+THUMB_SIDE = 320
+
+
+def thumb_path(project: Project, asset_id: str) -> Path:
+    """Cached picker thumbnail of an asset (assets are immutable, so it never goes stale)."""
+    return project_dir(project) / "thumbs" / f"{asset_id}.jpg"
 
 
 def export_root(project: Project | None) -> Path:
@@ -138,6 +151,31 @@ def set_asset_label(project: Project, asset_id: str, label: str) -> Asset:
     return a
 
 
+def set_asset_kind(project: Project, asset_id: str, kind: str) -> Asset:
+    """Change what an asset is used as (face / reference / product / logo / other).
+
+    Labels are kind-aware — a face is described as a person, a reference by its setting — so
+    a label that is still Gemma's suggestion is rebuilt from the stored note for the new kind,
+    without calling the model. A label a person wrote is kept. Scenes already using the
+    asset are not changed: kind only filters what the storyboard and the pickers offer.
+    """
+    if kind not in ASSET_KINDS:
+        raise ValueError(f"asset kind must be one of {ASSET_KINDS}, got {kind!r}")
+    a = project.asset(asset_id)
+    if a is None:
+        raise KeyError(asset_id)
+    if a.kind == kind:
+        return a
+    a.kind = kind
+    if a.label_source == "auto" and a.note:
+        from . import asset_vision  # local: pulls in the Gemma client
+
+        note = asset_vision.AssetNote.model_validate(a.note)
+        a.label = asset_vision.label_for(note, kind=kind, fallback=Path(a.name).stem)
+    project.updated_at = _now()
+    return a
+
+
 def set_asset_note(project: Project, asset_id: str, note: dict, *, label: str | None = None) -> Asset:
     """Record a machine-generated description, and optionally the label derived from it.
 
@@ -180,8 +218,9 @@ def add_asset(
             raise FileNotFoundError(f"asset source not found: {src}")
         shutil.copy2(src, dest)
     digest = hashlib.sha256(dest.read_bytes()).hexdigest()
-    asset = Asset(id=aid, kind=kind, name=Path(name).name, path=str(dest), label=label,
-                  sha256=digest, created_at=_now())
+    # A label given at upload was written by a person: the describer must not replace it.
+    asset = Asset(id=aid, kind=kind, name=Path(name).name, path=str(dest), label=label.strip(),
+                  sha256=digest, created_at=_now(), label_source="human" if label.strip() else "")
     project.assets.append(asset)
     project.updated_at = _now()
     return asset
@@ -193,10 +232,11 @@ def remove_asset(project: Project, asset_id: str, *, delete_file: bool = True) -
         return False
     project.assets.remove(a)
     if delete_file:
-        try:
-            Path(a.path).unlink()
-        except OSError:
-            pass
+        for f in (Path(a.path), thumb_path(project, a.id)):
+            try:
+                f.unlink()
+            except OSError:
+                pass
     project.updated_at = _now()
     return True
 
@@ -222,7 +262,8 @@ def project_to_dict(p: Project) -> dict:
     return {
         "id": p.id, "slug": p.slug, "name": p.name, "brand_notes": p.brand_notes,
         "style_notes": p.style_notes, "default_profile_id": p.default_profile_id,
-        "export_root": p.export_root, "assets": [asset_to_dict(a) for a in p.assets],
+        "export_root": p.export_root, "describe_hint": p.describe_hint,
+        "assets": [asset_to_dict(a) for a in p.assets],
         "created_at": p.created_at, "updated_at": p.updated_at,
     }
 
@@ -231,12 +272,32 @@ def project_from_dict(d: dict) -> Project:
     return Project(
         id=d["id"], slug=d["slug"], name=d.get("name", ""), brand_notes=d.get("brand_notes", ""),
         style_notes=d.get("style_notes", ""), default_profile_id=d.get("default_profile_id", "cinematic_16x9"),
-        export_root=d.get("export_root", ""), assets=[asset_from_dict(a) for a in d.get("assets", []) or []],
+        export_root=d.get("export_root", ""), describe_hint=d.get("describe_hint", ""),
+        assets=[asset_from_dict(a) for a in d.get("assets", []) or []],
         created_at=d.get("created_at", ""), updated_at=d.get("updated_at", ""),
     )
 
 
 # --- store access ----------------------------------------------------------------------
+
+
+_edit_locks: dict[str, threading.Lock] = {}
+_edit_locks_guard = threading.Lock()
+
+
+@contextlib.contextmanager
+def editing(store: Any, project_id: str):
+    """Hold the project's edit lock and yield it freshly loaded (None when it does not exist).
+
+    A project is saved whole, so two writers that each load, change and save would silently
+    drop each other's change — e.g. the background describer saving a label while an upload
+    adds an asset. Every mutation (API routes, the describer) goes through this, and the
+    caller saves inside the block. In-process only: one server owns a project's writes.
+    """
+    with _edit_locks_guard:
+        lock = _edit_locks.setdefault(project_id, threading.Lock())
+    with lock:
+        yield load(store, project_id)
 
 
 class SlugTaken(ValueError):

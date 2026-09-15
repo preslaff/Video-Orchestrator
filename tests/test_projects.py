@@ -144,3 +144,40 @@ def test_asset_note_round_trips_and_old_assets_load(tmp_path, monkeypatch):
               "label": "hand typed", "sha256": "", "created_at": ""}
     old = projects.asset_from_dict(legacy)
     assert old.note is None and old.label_source == "" and old.label == "hand typed"
+
+
+def test_changing_kind_rebuilds_a_suggested_label_but_keeps_a_human_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects.new_project("Kinds")
+    face = projects.add_asset(p, b"f", kind="reference", name="bela.jpg")
+    note = {"caption": "a woman in a green cap smiling", "setting": "harbour wall", "is_portrait": True}
+    projects.set_asset_note(p, face.id, note, label="harbour wall — a woman in a green cap smiling")
+    projects.set_asset_kind(p, face.id, "master_face")
+    assert face.kind == "master_face" and face.label == "a woman in a green cap smiling"  # a person, not a place
+    assert face.label_source == "auto"
+
+    named = projects.add_asset(p, b"n", kind="reference", name="n.jpg", label="Bela, day 1")
+    assert named.label_source == "human"  # a label typed at upload is a person's
+    projects.set_asset_kind(p, named.id, "master_face")
+    assert named.label == "Bela, day 1"
+
+    plain = projects.add_asset(p, b"p", kind="other", name="p.jpg")
+    projects.set_asset_kind(p, plain.id, "logo")
+    assert (plain.kind, plain.label) == ("logo", "")  # never described: nothing to rebuild
+
+    with pytest.raises(ValueError):
+        projects.set_asset_kind(p, plain.id, "poster")
+    with pytest.raises(KeyError):
+        projects.set_asset_kind(p, "nope", "logo")
+
+
+def test_describe_hint_round_trips_and_removing_an_asset_removes_its_thumbnail(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects.new_project("Hint", describe_hint="lighthouses")
+    a = projects.add_asset(p, b"x", kind="reference", name="x.jpg")
+    assert projects.project_from_dict(projects.project_to_dict(p)).describe_hint == "lighthouses"
+    thumb = projects.thumb_path(p, a.id)
+    thumb.parent.mkdir(parents=True)
+    thumb.write_bytes(b"jpg")
+    projects.remove_asset(p, a.id)
+    assert not thumb.exists()

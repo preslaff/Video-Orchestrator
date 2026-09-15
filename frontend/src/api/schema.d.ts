@@ -462,8 +462,33 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Upload Asset */
+        /**
+         * Upload Asset
+         * @description Add a file to the project. Unless a label was given (a person already named it), the
+         *     asset is queued for background description and gets a suggested label when Gemma is done.
+         */
         post: operations["upload_asset_api_projects__project_id__assets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/assets/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe Assets
+         * @description Queue assets for background description: unlabelled ones by default, suggested (``auto``)
+         *     ones too with ``force``. Labels a person wrote are never touched.
+         */
+        post: operations["describe_assets_api_projects__project_id__assets_describe_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -479,6 +504,32 @@ export interface paths {
         };
         /** Asset File */
         get: operations["asset_file_api_projects__project_id__assets__asset_id__file_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{project_id}/assets/{asset_id}/thumb": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Asset Thumb
+         * @description A small cached JPEG of the asset for pickers and grids (320 px long side).
+         *
+         *     A plain ``def`` route: FastAPI runs it in its threadpool, so the one-time ffmpeg call
+         *     never blocks the event loop. Built under a temporary name and renamed into place, so a
+         *     burst of first requests never serves a half-written file. Assets never change (a new
+         *     upload is a new id), so the response may be cached forever. Anything ffmpeg cannot
+         *     shrink (already small, not an image) is served as the original file.
+         */
+        get: operations["asset_thumb_api_projects__project_id__assets__asset_id__thumb_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -503,12 +554,13 @@ export interface paths {
         head?: never;
         /**
          * Update Asset
-         * @description Rename an asset's label (e.g. a face as "Maria, age 8") — labels are what the
-         *     storyboard reads when it assigns identities and references to scenes.
+         * @description Rename an asset's label (e.g. a face as "Maria, age 8") and/or change its kind — labels
+         *     and kinds are what the storyboard reads when it assigns identities and references to scenes.
          *
-         *     Saving here marks the label ``human``, which both clears the "AI" flag in the UI and
-         *     makes the label immune to later `vorch project label-assets` runs. Confirming an
-         *     unchanged suggestion is the same call.
+         *     Saving a label marks it ``human``, which both clears the "AI" flag in the UI and makes the
+         *     label immune to later descriptions. Confirming an unchanged suggestion is the same call.
+         *     Changing the kind rebuilds a still-suggested label for that kind; scenes already using the
+         *     asset are not changed.
          */
         patch: operations["update_asset_api_projects__project_id__assets__asset_id__patch"];
         trace?: never;
@@ -786,6 +838,26 @@ export interface components {
              */
             note_caption: string;
             /**
+             * Note Tags
+             * @default []
+             */
+            note_tags: string[];
+            /**
+             * Note Text
+             * @default
+             */
+            note_text: string;
+            /**
+             * Describe State
+             * @default
+             */
+            describe_state: string;
+            /**
+             * Describe Error
+             * @default
+             */
+            describe_error: string;
+            /**
              * Sha256
              * @default
              */
@@ -799,11 +871,15 @@ export interface components {
             path: string;
             /** Url */
             url: string;
+            /** Thumb Url */
+            thumb_url: string;
         };
         /** AssetPatch */
         AssetPatch: {
             /** Label */
-            label: string;
+            label?: string | null;
+            /** Kind */
+            kind?: ("master_face" | "reference" | "product" | "logo" | "other") | null;
         };
         /** Body_upload_asset_api_projects__project_id__assets_post */
         Body_upload_asset_api_projects__project_id__assets_post: {
@@ -836,6 +912,21 @@ export interface components {
             reason: string;
             /** Created At */
             created_at: string;
+        };
+        /** DescribeRequest */
+        DescribeRequest: {
+            /** Asset Ids */
+            asset_ids?: string[] | null;
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+        };
+        /** DescribeResult */
+        DescribeResult: {
+            /** Queued */
+            queued: number;
         };
         /** EvalSettings */
         EvalSettings: {
@@ -1206,6 +1297,11 @@ export interface components {
              * @default
              */
             export_root: string;
+            /**
+             * Describe Hint
+             * @default
+             */
+            describe_hint: string;
         };
         /** ProjectOut */
         ProjectOut: {
@@ -1234,6 +1330,11 @@ export interface components {
             export_root: string;
             /** Export Root Effective */
             export_root_effective: string;
+            /**
+             * Describe Hint
+             * @default
+             */
+            describe_hint: string;
             /**
              * Assets
              * @default []
@@ -1267,6 +1368,8 @@ export interface components {
             default_profile_id?: string | null;
             /** Export Root */
             export_root?: string | null;
+            /** Describe Hint */
+            describe_hint?: string | null;
         };
         /** ProjectSummaryOut */
         ProjectSummaryOut: {
@@ -2767,7 +2870,74 @@ export interface operations {
             };
         };
     };
+    describe_assets_api_projects__project_id__assets_describe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DescribeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DescribeResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     asset_file_api_projects__project_id__assets__asset_id__file_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    asset_thumb_api_projects__project_id__assets__asset_id__thumb_get: {
         parameters: {
             query?: never;
             header?: never;

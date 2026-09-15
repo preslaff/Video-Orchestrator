@@ -84,6 +84,8 @@ def _isolated_user_workflows(tmp_path, monkeypatch):
     # Same for ~/vorch/backends.yaml: tests see only the local backend unless they
     # point config.BACKENDS_FILE at their own file.
     monkeypatch.setattr(config, "BACKENDS_FILE", tmp_path / "_isolated_backends.yaml")
+    # Uploads never start a real Gemma description in tests (test_describer injects a fake).
+    monkeypatch.setattr(config, "AUTO_DESCRIBE", False)
     registry.reset_cache()
     backends.reset_cache()
     comfy.reset_cache()

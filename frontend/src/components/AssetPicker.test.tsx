@@ -5,7 +5,7 @@ import { AssetPicker } from './AssetPicker'
 import type { AssetOut } from '@/api/types'
 
 const asset = (id: string, label: string, extra: Partial<AssetOut> = {}): AssetOut => ({
-  id, kind: 'reference', name: `${id}.png`, label, label_source: 'human', note_caption: '',
+  id, kind: 'reference', name: `${id}.png`, label, label_source: 'human', note_caption: '', note_tags: [], note_text: '', describe_state: '', describe_error: '', thumb_url: `/api/projects/p1/assets/${id}/thumb`,
   sha256: '', created_at: '', path: `/a/${id}.png`, url: `/api/projects/p1/assets/${id}/file`, ...extra,
 })
 

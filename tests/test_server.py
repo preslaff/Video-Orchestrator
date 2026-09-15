@@ -756,3 +756,85 @@ def test_assembly_speed_validation_routes(client, stub_media):
 def test_job_reports_how_many_references_its_edit_workflow_uses(client):
     job = _paused_job_with_scene(client.store)
     assert client.get(f"/api/jobs/{job.id}").json()["edit_reference_slots"] == 2  # identity_edit: two images
+
+
+# --- asset thumbnails, kind changes ---------------------------------------------------
+
+
+def _project_with_image(client, tmp_path, size="1200x800"):
+    import shutil
+    import subprocess
+
+    from vorch import projects as projects_mod
+
+    p = projects_mod.save(client.store, projects_mod.new_project(name="Thumbs"))
+    src = tmp_path / "big.jpg"
+    if shutil.which("ffmpeg"):
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=teal:s={size}", "-frames:v", "1", str(src)],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        src.write_bytes(b"\xff\xd8\xff")
+    a = projects_mod.add_asset(p, src, kind="reference", name="big.jpg")
+    junk = projects_mod.add_asset(p, b"not an image", kind="other", name="notes.txt")
+    projects_mod.save(client.store, p)
+    return p, a, junk
+
+
+@pytest.mark.skipif(__import__("shutil").which("ffmpeg") is None, reason="ffmpeg not installed")
+def test_asset_thumbnail_is_small_cached_and_immutable(client, tmp_path, monkeypatch):
+    import subprocess
+
+    from vorch import config, media, projects as projects_mod
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p, a, junk = _project_with_image(client, tmp_path)
+    got = client.get(f"/api/projects/{p.id}").json()["assets"][0]
+    assert got["thumb_url"] == f"/api/projects/{p.id}/assets/{a.id}/thumb"
+
+    r = client.get(got["thumb_url"])
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert "immutable" in r.headers["cache-control"]
+    thumb = projects_mod.thumb_path(p, a.id)
+    out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "stream=width,height",
+                                   "-of", "csv=p=0", str(thumb)]).decode().strip()
+    assert out == "320,213"
+
+    calls = []
+    monkeypatch.setattr(media, "downscale", lambda *a_, **k: calls.append(1))
+    assert client.get(got["thumb_url"]).content == thumb.read_bytes() and calls == []  # served from cache
+
+    fallback = client.get(f"/api/projects/{p.id}/assets/{junk.id}/thumb")
+    assert fallback.status_code == 200 and fallback.content == b"not an image"  # not shrinkable: the original
+    assert client.get(f"/api/projects/{p.id}/assets/nope/thumb").status_code == 404
+    assert not list(thumb.parent.glob(".*"))  # no temp files left behind
+
+
+def test_patch_asset_kind_label_or_both(client, tmp_path, monkeypatch):
+    from vorch import config, projects as projects_mod
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects_mod.save(client.store, projects_mod.new_project(name="Patch"))
+    a = projects_mod.add_asset(p, b"x", kind="reference", name="x.jpg")
+    projects_mod.set_asset_note(p, a.id, {"caption": "a smiling woman", "setting": "beach", "text_in_image": "MIZEN HEAD",
+                                          "tags": ["portrait"], "is_portrait": True}, label="beach — a smiling woman")
+    projects_mod.save(client.store, p)
+    url = f"/api/projects/{p.id}/assets/{a.id}"
+
+    r = client.patch(url, json={"kind": "master_face"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "master_face" and body["label"] == "a smiling woman" and body["label_source"] == "auto"
+    assert body["note_tags"] == ["portrait"] and body["note_text"] == "MIZEN HEAD"
+
+    r = client.patch(url, json={"kind": "reference", "label": "Bela on the beach"})
+    assert r.json()["kind"] == "reference" and r.json()["label"] == "Bela on the beach" and r.json()["label_source"] == "human"
+    assert client.patch(url, json={}).status_code == 422
+    assert client.patch(url, json={"kind": "poster"}).status_code == 422
+    assert client.patch(f"/api/projects/{p.id}/assets/nope", json={"kind": "logo"}).status_code == 404
+
+
+def test_project_describe_hint_is_editable(client):
+    pid = client.post("/api/projects", json={"name": "H", "describe_hint": "lighthouses"}).json()["id"]
+    assert client.get(f"/api/projects/{pid}").json()["describe_hint"] == "lighthouses"
+    r = client.put(f"/api/projects/{pid}", json={"describe_hint": "lighthouses; tag as fog_horn"})
+    assert r.json()["describe_hint"] == "lighthouses; tag as fog_horn"

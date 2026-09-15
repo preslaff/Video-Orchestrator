@@ -481,6 +481,7 @@ def _label_assets(project, args, store) -> int:
     from . import asset_vision, projects
 
     todo, skipped_human = _select_for_labelling(project.assets, args)
+    hint = args.hint if args.hint is not None else project.describe_hint  # the project's vocabulary by default
     if skipped_human:
         print(f"skipping {skipped_human} label(s) edited by hand (use --overwrite-human to replace)")
     if not todo:
@@ -499,7 +500,7 @@ def _label_assets(project, args, store) -> int:
             if args.relabel:
                 note = asset_vision.AssetNote.model_validate(a.note)
             else:
-                note = asset_vision.describe(a.path, hint=args.hint or "", kind=a.kind)
+                note = asset_vision.describe(a.path, hint=hint, kind=a.kind)
         except Exception as e:   # one bad file must not end a 40-minute run
             failed += 1
             print(f"[{i}/{len(todo)}] {a.name}: FAILED — {e}")
@@ -539,6 +540,11 @@ def _cmd_project(args) -> int:
             return 0
         if args.project_command == "label-assets":
             return _label_assets(p, args, store)
+        if args.project_command == "set-kind":
+            a = projects.set_asset_kind(p, args.asset_id, args.kind)  # KeyError -> ValueError below
+            projects.save(store, p)
+            print(f"{a.id} is now {a.kind}: {a.label or a.name}")
+            return 0
         if args.project_command == "show":
             print(f"{p.name} [{p.slug}]  profile={p.default_profile_id}  export={projects.export_root(p)}")
             for a in p.assets:
@@ -876,7 +882,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pr = sub.add_parser(
         "project",
-        help="project: add <name> | add-asset <slug> <path> --kind | label-assets <slug> | show <slug>",
+        help="project: add <name> | add-asset <slug> <path> --kind | label-assets <slug> | set-kind <slug> <asset> <kind> | show <slug>",
     )
     prs = pr.add_subparsers(dest="project_command", required=True)
     pa = prs.add_parser("add")
@@ -892,12 +898,17 @@ def build_parser() -> argparse.ArgumentParser:
     pla.add_argument("slug")
     pla.add_argument("--kind", default=None, choices=["master_face", "reference", "product", "logo", "other"])
     pla.add_argument("--hint", default=None,
-                     help="what this collection is, and the tag vocabulary to use (steers `tags`)")
+                     help="what this collection is, and the tag vocabulary to use (steers `tags`); "
+                          "defaults to the project's describe hint")
     pla.add_argument("--force", action="store_true", help="redo assets that already have a suggested label")
     pla.add_argument("--overwrite-human", action="store_true", help="also replace labels a person wrote")
     pla.add_argument("--relabel", action="store_true", help="rebuild labels from stored notes; no model calls")
     pla.add_argument("--dry-run", action="store_true", help="print proposals, write nothing")
     pla.add_argument("--limit", type=int, default=None)
+    psk = prs.add_parser("set-kind", help="change what an asset is used as; a suggested label is rebuilt")
+    psk.add_argument("slug")
+    psk.add_argument("asset_id")
+    psk.add_argument("kind", choices=["master_face", "reference", "product", "logo", "other"])
     psh = prs.add_parser("show")
     psh.add_argument("slug")
     pr.set_defaults(func=_cmd_project)

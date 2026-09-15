@@ -183,8 +183,8 @@ function invalidateProjects(qc: ReturnType<typeof useQueryClient>, id?: string) 
 export function useCreateProject() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (input: { name: string; slug?: string | null; brand_notes?: string; style_notes?: string; default_profile_id?: string; export_root?: string }) => {
-      const body = { brand_notes: '', style_notes: '', default_profile_id: 'cinematic_16x9', export_root: '', slug: null, ...input }
+    mutationFn: async (input: { name: string; slug?: string | null; brand_notes?: string; style_notes?: string; default_profile_id?: string; export_root?: string; describe_hint?: string }) => {
+      const body = { brand_notes: '', style_notes: '', default_profile_id: 'cinematic_16x9', export_root: '', describe_hint: '', slug: null, ...input }
       const { data, error } = await api.POST('/api/projects', { body })
       if (error) throw error
       return data

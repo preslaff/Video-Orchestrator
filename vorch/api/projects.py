@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
-from .. import profiles, projects
+from .. import media, profiles, projects
+from ..describer import AssetDescriber
 from ..projects import ASSET_KINDS, Project
 from ..state import Store
-from .deps import get_store
+from .deps import get_describer, get_store
 from .errors import ApiError
 from .schemas import JobSummaryOut
 
@@ -29,10 +33,16 @@ class AssetOut(BaseModel):
     # The one-sentence description behind the label — shown under the thumbnail in the
     # asset list and the per-scene pickers. The rest of the note stays server-side.
     note_caption: str = ""
+    note_tags: list[str] = []    # tags from the description, for filtering pickers
+    note_text: str = ""          # legible sign / plaque text, for search ("mizen")
+    # Background description: "queued" | "describing" | "failed" | "" (idle), with the error.
+    describe_state: str = ""
+    describe_error: str = ""
     sha256: str = ""
     created_at: str = ""
     path: str
     url: str
+    thumb_url: str               # small cached JPEG for pickers and grids
 
 
 class ProjectOut(BaseModel):
@@ -44,6 +54,7 @@ class ProjectOut(BaseModel):
     default_profile_id: str
     export_root: str = ""
     export_root_effective: str
+    describe_hint: str = ""
     assets: list[AssetOut] = []
     created_at: str = ""
     updated_at: str = ""
@@ -68,6 +79,7 @@ class ProjectCreate(BaseModel):
     style_notes: str = ""
     default_profile_id: str = profiles.DEFAULT_PROFILE_ID
     export_root: str = ""
+    describe_hint: str = ""
 
 
 class ProjectPatch(BaseModel):
@@ -76,21 +88,28 @@ class ProjectPatch(BaseModel):
     style_notes: str | None = None
     default_profile_id: str | None = None
     export_root: str | None = None
+    describe_hint: str | None = None
 
 
-def _asset_out(project: Project, a) -> AssetOut:
+def _asset_out(project: Project, a, describer: AssetDescriber | None = None) -> AssetOut:
+    note = a.note or {}
+    state, error = describer.state(a.id) if describer is not None else ("", "")
+    base = f"/api/projects/{project.id}/assets/{a.id}"
     return AssetOut(id=a.id, kind=a.kind, name=a.name, label=a.label, label_source=a.label_source,
-                    note_caption=str((a.note or {}).get("caption", "")),
+                    note_caption=str(note.get("caption", "")),
+                    note_tags=[str(t) for t in note.get("tags", []) or []],
+                    note_text=str(note.get("text_in_image", "")),
+                    describe_state=state, describe_error=error,
                     sha256=a.sha256, created_at=a.created_at,
-                    path=a.path, url=f"/api/projects/{project.id}/assets/{a.id}/file")
+                    path=a.path, url=f"{base}/file", thumb_url=f"{base}/thumb")
 
 
-def _out(store: Store, p: Project) -> ProjectOut:
+def _out(store: Store, p: Project, describer: AssetDescriber | None = None) -> ProjectOut:
     return ProjectOut(
         id=p.id, slug=p.slug, name=p.name, brand_notes=p.brand_notes, style_notes=p.style_notes,
         default_profile_id=p.default_profile_id, export_root=p.export_root,
-        export_root_effective=str(projects.export_root(p)),
-        assets=[_asset_out(p, a) for a in p.assets], created_at=p.created_at, updated_at=p.updated_at,
+        export_root_effective=str(projects.export_root(p)), describe_hint=p.describe_hint,
+        assets=[_asset_out(p, a, describer) for a in p.assets], created_at=p.created_at, updated_at=p.updated_at,
         n_jobs=store.count_jobs(project_id=p.id),
     )
 
@@ -133,23 +152,31 @@ async def list_projects(store: Store = Depends(get_store)) -> list[ProjectSummar
 async def create_project(body: ProjectCreate, store: Store = Depends(get_store)) -> ProjectOut:
     _check_profile(store, body.default_profile_id)
     p = projects.new_project(body.name, slug=body.slug, brand_notes=body.brand_notes, style_notes=body.style_notes,
-                             default_profile_id=body.default_profile_id, export_root=body.export_root)
+                             default_profile_id=body.default_profile_id, export_root=body.export_root,
+                             describe_hint=body.describe_hint)
     return _out(store, _save(store, p))
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
-async def get_project(project_id: str, store: Store = Depends(get_store)) -> ProjectOut:
-    return _out(store, _load(store, project_id))
+async def get_project(
+    project_id: str, store: Store = Depends(get_store), describer: AssetDescriber | None = Depends(get_describer),
+) -> ProjectOut:
+    return _out(store, _load(store, project_id), describer)
 
 
 @router.put("/{project_id}", response_model=ProjectOut)
-async def update_project(project_id: str, patch: ProjectPatch, store: Store = Depends(get_store)) -> ProjectOut:
-    p = _load(store, project_id)
+async def update_project(
+    project_id: str, patch: ProjectPatch, store: Store = Depends(get_store),
+    describer: AssetDescriber | None = Depends(get_describer),
+) -> ProjectOut:
     if patch.default_profile_id is not None:
         _check_profile(store, patch.default_profile_id)
-    for k, v in patch.model_dump(exclude_none=True).items():
-        setattr(p, k, v)
-    return _out(store, _save(store, p))
+    with projects.editing(store, project_id) as p:
+        if p is None:
+            raise ApiError(404, "not_found", f"no such project {project_id!r}")
+        for k, v in patch.model_dump(exclude_none=True).items():
+            setattr(p, k, v)
+        return _out(store, _save(store, p), describer)
 
 
 @router.delete("/{project_id}", status_code=204)
@@ -184,16 +211,50 @@ async def upload_asset(
     kind: str = Form("other"),
     label: str = Form(""),
     store: Store = Depends(get_store),
+    describer: AssetDescriber | None = Depends(get_describer),
 ) -> AssetOut:
-    p = _load(store, project_id)
+    """Add a file to the project. Unless a label was given (a person already named it), the
+    asset is queued for background description and gets a suggested label when Gemma is done."""
     if kind not in ASSET_KINDS:
         raise ApiError(422, "validation_error", f"kind must be one of {ASSET_KINDS}")
     data = await file.read()
     if not data:
         raise ApiError(400, "bad_request", "empty upload")
-    a = projects.add_asset(p, data, kind=kind, name=file.filename or "asset", label=label)
-    _save(store, p)
-    return _asset_out(p, a)
+    with projects.editing(store, project_id) as p:
+        if p is None:
+            raise ApiError(404, "not_found", f"no such project {project_id!r}")
+        a = projects.add_asset(p, data, kind=kind, name=file.filename or "asset", label=label)
+        _save(store, p)
+    if describer is not None and describer.auto and not a.label:
+        describer.enqueue(p.id, [a.id])
+    return _asset_out(p, a, describer)
+
+
+class DescribeRequest(BaseModel):
+    asset_ids: list[str] | None = None   # None = every asset in the project
+    force: bool = False                  # also redo labels Gemma already suggested
+
+
+class DescribeResult(BaseModel):
+    queued: int
+
+
+@router.post("/{project_id}/assets/describe", response_model=DescribeResult, status_code=202)
+async def describe_assets(
+    project_id: str, body: DescribeRequest, store: Store = Depends(get_store),
+    describer: AssetDescriber | None = Depends(get_describer),
+) -> DescribeResult:
+    """Queue assets for background description: unlabelled ones by default, suggested (``auto``)
+    ones too with ``force``. Labels a person wrote are never touched."""
+    if describer is None:
+        raise ApiError(409, "conflict", "background description is not available in this server")
+    p = _load(store, project_id)
+    wanted = set(body.asset_ids) if body.asset_ids is not None else None
+    if wanted is not None and (unknown := wanted - {a.id for a in p.assets}):
+        raise ApiError(404, "not_found", f"no such asset {sorted(unknown)[0]!r}")
+    ids = [a.id for a in p.assets
+           if (wanted is None or a.id in wanted) and a.label_source != "human" and (body.force or not a.label.strip())]
+    return DescribeResult(queued=describer.enqueue(p.id, ids))
 
 
 @router.get("/{project_id}/assets/{asset_id}/file")
@@ -205,30 +266,83 @@ async def asset_file(project_id: str, asset_id: str, store: Store = Depends(get_
     return FileResponse(a.path, filename=a.name)
 
 
+_IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}
+
+
+@router.get("/{project_id}/assets/{asset_id}/thumb")
+def asset_thumb(project_id: str, asset_id: str, store: Store = Depends(get_store)):
+    """A small cached JPEG of the asset for pickers and grids (320 px long side).
+
+    A plain ``def`` route: FastAPI runs it in its threadpool, so the one-time ffmpeg call
+    never blocks the event loop. Built under a temporary name and renamed into place, so a
+    burst of first requests never serves a half-written file. Assets never change (a new
+    upload is a new id), so the response may be cached forever. Anything ffmpeg cannot
+    shrink (already small, not an image) is served as the original file.
+    """
+    p = _load(store, project_id)
+    a = p.asset(asset_id)
+    if a is None or not Path(a.path).is_file():
+        raise ApiError(404, "not_found", "no such asset")
+    dest = projects.thumb_path(p, a.id)
+    if not dest.is_file():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f".{dest.stem}.{uuid.uuid4().hex}.jpg")
+        try:
+            out = media.downscale(a.path, max_side=projects.THUMB_SIDE, dest=tmp)
+            if out == tmp:
+                os.replace(tmp, dest)
+        except (media.MediaError, OSError):
+            pass
+        finally:
+            tmp.unlink(missing_ok=True)
+    if dest.is_file():
+        return FileResponse(dest, media_type="image/jpeg", headers=_IMMUTABLE)
+    return FileResponse(a.path, filename=a.name, headers=_IMMUTABLE)
+
+
 class AssetPatch(BaseModel):
-    label: str
+    label: str | None = None
+    kind: Literal["master_face", "reference", "product", "logo", "other"] | None = None
+
+    @model_validator(mode="after")
+    def _something(self) -> "AssetPatch":
+        if self.label is None and self.kind is None:
+            raise ValueError("give a label, a kind, or both")
+        return self
 
 
 @router.patch("/{project_id}/assets/{asset_id}", response_model=AssetOut)
-async def update_asset(project_id: str, asset_id: str, body: AssetPatch, store: Store = Depends(get_store)) -> AssetOut:
-    """Rename an asset's label (e.g. a face as "Maria, age 8") — labels are what the
-    storyboard reads when it assigns identities and references to scenes.
+async def update_asset(
+    project_id: str, asset_id: str, body: AssetPatch, store: Store = Depends(get_store),
+    describer: AssetDescriber | None = Depends(get_describer),
+) -> AssetOut:
+    """Rename an asset's label (e.g. a face as "Maria, age 8") and/or change its kind — labels
+    and kinds are what the storyboard reads when it assigns identities and references to scenes.
 
-    Saving here marks the label ``human``, which both clears the "AI" flag in the UI and
-    makes the label immune to later `vorch project label-assets` runs. Confirming an
-    unchanged suggestion is the same call."""
-    p = _load(store, project_id)
-    try:
-        a = projects.set_asset_label(p, asset_id, body.label)
-    except KeyError:
-        raise ApiError(404, "not_found", "no such asset")
-    _save(store, p)
-    return _asset_out(p, a)
+    Saving a label marks it ``human``, which both clears the "AI" flag in the UI and makes the
+    label immune to later descriptions. Confirming an unchanged suggestion is the same call.
+    Changing the kind rebuilds a still-suggested label for that kind; scenes already using the
+    asset are not changed."""
+    with projects.editing(store, project_id) as p:
+        if p is None:
+            raise ApiError(404, "not_found", f"no such project {project_id!r}")
+        try:
+            a = None
+            if body.kind is not None:
+                a = projects.set_asset_kind(p, asset_id, body.kind)
+            if body.label is not None:
+                a = projects.set_asset_label(p, asset_id, body.label)
+        except KeyError:
+            raise ApiError(404, "not_found", "no such asset")
+        _save(store, p)
+        return _asset_out(p, a, describer)
 
 
 @router.delete("/{project_id}/assets/{asset_id}", status_code=204)
 async def delete_asset(project_id: str, asset_id: str, store: Store = Depends(get_store)) -> None:
-    p = _load(store, project_id)
-    if not projects.remove_asset(p, asset_id):
-        raise ApiError(404, "not_found", "no such asset")
-    _save(store, p)
+    with projects.editing(store, project_id) as p:
+        if p is None:
+            raise ApiError(404, "not_found", f"no such project {project_id!r}")
+        if not projects.remove_asset(p, asset_id):
+            raise ApiError(404, "not_found", "no such asset")
+        _save(store, p)

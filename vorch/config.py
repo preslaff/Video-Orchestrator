@@ -124,6 +124,8 @@ DATABASE_URL = os.environ.get("VORCH_DATABASE_URL", "postgresql:///vorch")
 # Setup phase: where projects keep their assets and where finished jobs are exported.
 PROJECTS_ROOT = Path(os.environ.get("VORCH_PROJECTS_ROOT", "~/vorch/projects")).expanduser()
 EXPORT_ROOT = Path(os.environ.get("VORCH_EXPORT_ROOT", "~/vorch/export")).expanduser()
+# Describe (caption + suggest a label for) every uploaded asset in the background with Gemma.
+AUTO_DESCRIBE = os.environ.get("VORCH_AUTO_DESCRIBE", "1") not in ("0", "false", "no", "")
 
 # Web UI (Next.js) and the origins FastAPI trusts for direct browser calls.
 UI_URL = os.environ.get("VORCH_UI_URL", "http://localhost:3000")
