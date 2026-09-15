@@ -53,7 +53,7 @@ async def create_job(
         raise ApiError(409, "environment_not_ready", str(e), details=e.report.to_dict())
     except (FileNotFoundError, KeyError, ValueError) as e:
         raise ApiError(400, "bad_request", str(e).strip("'"))
-    return job_to_public(job, store)
+    return job_to_public(job, store, manager)
 
 
 @router.get("", response_model=Page[JobSummaryOut])
@@ -77,8 +77,12 @@ async def list_jobs(
 
 
 @router.get("/{job_id}", response_model=JobPublic)
-async def get_job(job_id: str, store: Store = Depends(get_store)) -> JobPublic:
-    return job_to_public(_load(store, job_id), store)
+async def get_job(
+    job_id: str,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    return job_to_public(_load(store, job_id), store, manager)
 
 
 @router.delete("/{job_id}", status_code=204)
@@ -125,7 +129,7 @@ async def update_scenes(
         raise ApiError(409, "conflict", str(e))
     except ValueError as e:
         raise ApiError(400, "bad_request", str(e))
-    return job_to_public(job, store)
+    return job_to_public(job, store, manager)
 
 
 @router.post("/{job_id}/scenes/{index}/regenerate", response_model=JobPublic)
@@ -146,7 +150,30 @@ async def regenerate_scene(
         raise ApiError(409, "conflict", str(e))
     except ValueError as e:
         raise ApiError(400, "bad_request", str(e))
-    return job_to_public(job, store)
+    return job_to_public(job, store, manager)
+
+
+@router.post("/{job_id}/stop", response_model=JobPublic, status_code=202)
+async def stop(
+    job_id: str,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Ask a running job to stop at its next safe point.
+
+    Accepted, not finished: the job keeps status ``running`` with ``stopping: true``
+    until the worker reaches a checkpoint (a ComfyUI step is withdrawn within a poll
+    interval; a Gemma call finishes first), then ends ``cancelled`` and can be edited
+    and resumed with ``POST /retry``.
+    """
+    _load(store, job_id)
+    try:
+        job = manager.stop(job_id)
+    except KeyError:
+        raise ApiError(404, "not_found", "no such job")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    return job_to_public(job, store, manager)
 
 
 @router.post("/{job_id}/retry", response_model=JobPublic)
@@ -155,7 +182,7 @@ async def retry(
     manager: JobManager = Depends(get_manager),
     store: Store = Depends(get_store),
 ) -> JobPublic:
-    """Resume a failed job from where it stopped (e.g. after fixing the environment)."""
+    """Resume a failed, stopped or orphaned job from where it stopped; finished work is kept."""
     _load(store, job_id)
     try:
         job = await manager.retry(job_id)
@@ -163,7 +190,7 @@ async def retry(
         raise ApiError(404, "not_found", "no such job")
     except RuntimeError as e:
         raise ApiError(409, "conflict", str(e))
-    return job_to_public(job, store)
+    return job_to_public(job, store, manager)
 
 
 @router.post("/{job_id}/approve/{gate}", response_model=JobPublic)
@@ -180,4 +207,4 @@ async def approve(
         job = await manager.approve(job_id, gate)
     except KeyError:
         raise ApiError(404, "not_found", "no such job")
-    return job_to_public(job, store)
+    return job_to_public(job, store, manager)

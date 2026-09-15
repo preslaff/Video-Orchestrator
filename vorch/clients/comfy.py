@@ -21,7 +21,7 @@ from pathlib import Path
 
 import requests
 
-from .. import backends, config
+from .. import backends, cancel, config
 from ..backends import ComfyBackend
 
 log = logging.getLogger("vorch.comfy")
@@ -65,6 +65,7 @@ def _request(
     *,
     timeout: float | tuple | None = None,
     retry_for: float = 0.0,
+    stoppable: bool = True,
     **kw,
 ) -> requests.Response:
     """One HTTP call against ``backend``.
@@ -72,6 +73,11 @@ def _request(
     Connection errors, timeouts and 502/503/504 are retried with backoff for up
     to ``retry_for`` seconds (0 = one attempt); anything else is returned as is.
     Raises ComfyError when the budget is exhausted.
+
+    A stop requested while waiting to retry raises ``cancel.JobStopped`` instead of
+    sleeping out the budget (a remote cold start grace is minutes). Calls that must
+    still go out *after* a stop — the queue delete and interrupt themselves — pass
+    ``stoppable=False``.
     """
     url = backend.url + path
     timeout = backend.request_timeout if timeout is None else timeout
@@ -89,6 +95,8 @@ def _request(
         remaining = deadline - _clock()
         if remaining <= 0:
             raise ComfyError(f"{backend.name}: {method} {path} failed ({err})")
+        if stoppable:
+            cancel.check()
         log.debug("comfy %s: %s %s -> %s; retrying (%.0fs left)", backend.name, method, path, err, remaining)
         _sleep(min(delay, remaining))
         delay = min(delay * 2, 10.0)
@@ -122,13 +130,35 @@ def wait_ready(backend: ComfyBackend | str | None = None, *, grace: float | None
     return stats
 
 
-def interrupt(backend: ComfyBackend | str | None = None) -> None:
-    """Best-effort ``POST /interrupt`` (stop the running prompt)."""
+def interrupt(backend: ComfyBackend | str | None = None, prompt_id: str | None = None) -> None:
+    """Best-effort ``POST /interrupt``.
+
+    With ``prompt_id`` newer ComfyUI interrupts only that prompt (so another client's
+    work on a shared instance is left alone); older builds ignore the body and stop
+    whatever is executing.
+    """
     b = _resolve(backend)
+    body = {"prompt_id": prompt_id} if prompt_id else None
     try:
-        _request(b, "POST", "/interrupt", timeout=10)
+        _request(b, "POST", "/interrupt", timeout=10, stoppable=False, json=body)
     except ComfyError as e:
         log.warning("comfy %s: interrupt failed: %s", b.name, e)
+
+
+def delete_queued(prompt_ids: list[str], backend: ComfyBackend | str | None = None) -> None:
+    """Best-effort ``POST /queue {"delete": [...]}``: drop prompts that have not started."""
+    b = _resolve(backend)
+    try:
+        _request(b, "POST", "/queue", timeout=10, stoppable=False, json={"delete": list(prompt_ids)})
+    except ComfyError as e:
+        log.warning("comfy %s: queue delete failed: %s", b.name, e)
+
+
+def _stop_prompt(b: ComfyBackend, prompt_id: str) -> None:
+    """A stop was requested while ``prompt_id`` was queued or running: withdraw it."""
+    log.info("comfy %s: stopping prompt %s", b.name, prompt_id)
+    delete_queued([prompt_id], b)
+    interrupt(b, prompt_id)
 
 
 # --- run -----------------------------------------------------------------------------
@@ -149,6 +179,7 @@ def run(
     timeout = config.RUN_TIMEOUT if timeout is None else timeout
     if b.remote:
         wait_ready(b)
+    cancel.check()  # nothing new is submitted once a stop was requested
     client_id = str(uuid.uuid4())
 
     # Never retry the submit itself: a lost response after a successful POST
@@ -165,7 +196,11 @@ def run(
         remaining = deadline - _clock()
         if remaining <= 0:
             break
-        resp = _request(b, "GET", f"/history/{prompt_id}", retry_for=min(poll_retry, remaining))
+        try:
+            resp = _request(b, "GET", f"/history/{prompt_id}", retry_for=min(poll_retry, remaining))
+        except cancel.JobStopped:  # stopped while riding out a network hiccup
+            _stop_prompt(b, prompt_id)
+            raise
         if resp.status_code != 200:
             raise ComfyError(f"{b.name}: /history returned {resp.status_code}")
         history = resp.json()
@@ -175,8 +210,13 @@ def run(
             if problems:
                 raise ComfyError(f"{b.name}: workflow {prompt_id} failed: " + "; ".join(problems))
             return _extract_outputs(entry)
+        # Checked only after a response showing the prompt unfinished, so a result
+        # that already arrived is never thrown away.
+        if cancel.requested():
+            _stop_prompt(b, prompt_id)
+            cancel.check()
         _sleep(min(b.poll_interval, max(deadline - _clock(), 0)))
-    interrupt(b)
+    interrupt(b, prompt_id)
     raise ComfyError(f"{b.name}: workflow {prompt_id} did not finish within {timeout}s (interrupted)")
 
 
@@ -323,6 +363,7 @@ def free(
         _request(
             _resolve(backend), "POST", "/free",
             json={"unload_models": unload_models, "free_memory": free_memory}, timeout=30,
+            stoppable=False,
         )
     except ComfyError:
         pass  # /free is an optimization; never fail the run over it.

@@ -490,6 +490,33 @@ def test_retry_resumes_a_failed_job(client):
     assert client.post("/api/jobs/nope/retry").status_code == 404
 
 
+def test_stop_route_and_live_run_flags(client):
+    """POST /stop is 202 on a stoppable segment, 409 otherwise; the job carries
+    `active`/`stopping` so a reload still knows a stop is pending."""
+    import threading
+
+    from vorch.state import new_job
+
+    job = new_job(idea="s")
+    client.store.save_job(job)
+    got = client.get(f"/api/jobs/{job.id}").json()
+    assert got["active"] is False and got["stopping"] is False
+
+    assert client.post(f"/api/jobs/{job.id}/stop").status_code == 409  # nothing running
+    assert client.post("/api/jobs/nope/stop").status_code == 404
+
+    mgr = client.app.state.manager
+    mgr._active.add(job.id)
+    mgr._stop[job.id] = threading.Event()  # a segment in flight
+    try:
+        r = client.post(f"/api/jobs/{job.id}/stop")
+        assert r.status_code == 202 and r.json()["active"] is True and r.json()["stopping"] is True
+        assert client.get(f"/api/jobs/{job.id}").json()["stopping"] is True
+    finally:
+        mgr._active.discard(job.id)
+        mgr._stop.pop(job.id, None)
+
+
 def test_job_listing_carries_the_profile_name(client):
     from vorch import profiles
     from vorch.state import new_job

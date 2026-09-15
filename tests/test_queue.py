@@ -498,3 +498,133 @@ def test_assemble_failure_recorded_without_failed_status(tmp_path, make_store, f
     assert [e["type"] for e in events] == ["step", "assembly", "end"]
     assert events[1]["ok"] is False and "ffmpeg died" in events[1]["error"]
     assert job.status is JobStatus.DONE and job.assembly["ok"] is False and not active
+
+
+# --- stop / resume ---------------------------------------------------------------------
+
+
+class StoppableOrch(FakeOrch):
+    """Blocks in the worker thread until told to go on, then hits a stop checkpoint."""
+
+    started = None  # threading.Event set when the worker is inside run/approve
+    proceed = None  # threading.Event the test sets after pressing Stop
+
+    def run(self, job):
+        from vorch import cancel
+        StoppableOrch.started.set()
+        StoppableOrch.proceed.wait(2)
+        cancel.check()
+        super().run(job)
+
+    approve = lambda self, job, gate: self.run(job)  # noqa: E731
+
+
+def _stoppable():
+    import threading
+    StoppableOrch.started, StoppableOrch.proceed = threading.Event(), threading.Event()
+
+
+def test_stop_ends_the_segment_cancelled_and_blocks_edits_until_the_worker_returns(make_store):
+    _stoppable()
+
+    async def go():
+        store = make_store()
+        job = new_job(idea="x")
+        job.status = JobStatus.NEEDS_APPROVAL
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: StoppableOrch(s, j), auto_export=False)
+        q = mgr.events(job.id)
+        await mgr.approve(job.id, "storyboard")
+        await asyncio.get_running_loop().run_in_executor(None, StoppableOrch.started.wait, 2)
+        mgr.stop(job.id)
+        assert mgr.is_stopping(job.id) and mgr.is_active(job.id)
+        with pytest.raises(RuntimeError):  # the worker is still alive: no racing its saves
+            mgr.update_scenes(job.id, [])
+        mgr.stop(job.id)  # idempotent
+        StoppableOrch.proceed.set()
+        events = await _drain(q)
+        return store, mgr, job, events
+
+    store, mgr, job, events = asyncio.run(go())
+    saved = store.load_job(job.id)
+    assert saved.status is JobStatus.CANCELLED
+    assert not mgr.is_active(job.id) and not mgr.is_stopping(job.id)
+    types = [e["type"] for e in events]
+    assert types.count("stopping") == 1 and types[-1] == "end"
+    assert any(e["type"] == "status" and e.get("status") == "cancelled" for e in events)
+    assert [d.action for d in store.decisions(job.id)] == ["stopped"]
+    store.close()
+
+
+def test_stop_while_waiting_for_the_gpu_restores_the_previous_status(make_store):
+    ran = {"n": 0}
+
+    class CountingOrch(FakeOrch):
+        def approve(self, job, gate):
+            ran["n"] += 1
+
+    async def go():
+        store = make_store()
+        job = new_job(idea="x")
+        job.status = JobStatus.NEEDS_APPROVAL
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: CountingOrch(s, j), auto_export=False)
+        async with mgr._lock:  # another job holds the GPU
+            await mgr.approve(job.id, "storyboard")
+            assert store.load_job(job.id).status is JobStatus.RUNNING
+            mgr.stop(job.id)
+        await asyncio.gather(*list(mgr._tasks))
+        return store, mgr, job
+
+    store, mgr, job = asyncio.run(go())
+    assert ran["n"] == 0  # the segment never ran
+    assert store.load_job(job.id).status is JobStatus.NEEDS_APPROVAL  # still approvable
+    assert not mgr.is_active(job.id)
+    store.close()
+
+
+def test_stop_refuses_when_nothing_stoppable_runs(make_store):
+    store = make_store()
+    job = new_job(idea="x")
+    store.save_job(job)
+    mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+    with pytest.raises(RuntimeError):
+        mgr.stop(job.id)
+    mgr._active.add(job.id)  # an assembly marks the job active but is not a run segment
+    with pytest.raises(RuntimeError):
+        mgr.stop(job.id)
+    store.close()
+
+
+@pytest.mark.parametrize("status", [JobStatus.CANCELLED, JobStatus.RUNNING, JobStatus.FAILED])
+def test_retry_resumes_stopped_orphaned_and_failed_jobs(make_store, status):
+    async def go():
+        store = make_store()
+        job = new_job(idea="x")
+        job.status = status  # RUNNING with no segment here = orphan left by a restart
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j), auto_export=False)
+        await mgr.retry(job.id)
+        await asyncio.gather(*list(mgr._tasks))
+        return store, job
+
+    store, job = asyncio.run(go())
+    assert store.load_job(job.id).status is JobStatus.DONE
+    assert [d.action for d in store.decisions(job.id)] == ["retry"]
+    store.close()
+
+
+def test_retry_refuses_a_finished_job(make_store):
+    async def go():
+        store = make_store()
+        job = new_job(idea="x")
+        job.status = JobStatus.DONE
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+        try:
+            with pytest.raises(RuntimeError):
+                await mgr.retry(job.id)
+        finally:
+            store.close()
+
+    asyncio.run(go())

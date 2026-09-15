@@ -24,7 +24,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from . import config, pipeline, profiles, provenance, storyboard
+from . import cancel, config, pipeline, profiles, provenance, storyboard
 from . import projects as projects_mod
 from . import scene_assets
 from .genparams import DEFAULT, GenParams
@@ -195,22 +195,28 @@ class Orchestrator:
         self.store.save_job(job)
         self._event(job, "status", status=job.status.value)
 
+        # Stop checkpoints sit between phases; there is none before DONE — once the last
+        # phase returns, all the work is done and a late stop must not discard it.
         if not job.scenes:
+            cancel.check()
             self._phase_storyboard(job)
         if self._gate(job, GATE_STORYBOARD):
             return job
 
         if self._needs_keyframes(job):
+            cancel.check()
             self._phase_keyframes(job)
 
         if job.kind == "stills":
             # Everything after the keyframes is cheap: no second gate.
             if self._needs_stills_finish(job):
+                cancel.check()
                 self._phase_finish_stills(job)
         else:
             if self._gate(job, GATE_KEYFRAMES):
                 return job
             if self._needs_videos(job):
+                cancel.check()
                 self._phase_videos(job)
 
         job.status = JobStatus.DONE
@@ -411,12 +417,14 @@ class Orchestrator:
         for scene in job.scenes:
             if not self._scene_needs_keyframes(scene, n):
                 continue  # resume: already done
+            cancel.check()
             log.info("job %s: keyframes scene %d (%d variant(s))", job.id, scene.index, n)
             refs = (
                 pipeline.stage_references(scene.references, self.params, cache=ref_cache)
                 if scene.mode == "edit" else ()
             )
             for v in range(len(scene.variants), n):
+                cancel.check()  # every earlier variant is already saved
                 provenance.set_context(scene=scene.index, variant=v if n > 1 else None)
                 seed = config.derive_seed(self.seed, scene=scene.index, variant=v,
                                           attempt=1 + 10 * scene.regenerations)
@@ -440,6 +448,9 @@ class Orchestrator:
                     attempt=1, max_attempts=self.max_attempts if self.evaluate else 1, mode=scene.mode)
         if self.evaluate:
             def on_start(attempt, _seed, _idx=scene.index):
+                # Before generating (not after judging): a stop here never discards a
+                # keyframe that was already made and scored.
+                cancel.check()
                 if attempt > 1:
                     self._event(job, "step", step="keyframe", index=_idx, variant=variant, variants=n_var,
                                 attempt=attempt, max_attempts=self.max_attempts, mode=scene.mode)
@@ -486,6 +497,7 @@ class Orchestrator:
             if not scene.keyframe_path:
                 log.warning("job %s: scene %d has no keyframe; skipping", job.id, scene.index)
                 continue
+            cancel.check()
             provenance.set_context(scene=scene.index)
             face = scene.identity if self.face_swap else ""
             do_swap = bool(face)
@@ -494,6 +506,7 @@ class Orchestrator:
                 for v, variant in enumerate(scene.variants):
                     if variant.swapped_path:
                         continue
+                    cancel.check()
                     provenance.set_context(variant=v if len(scene.variants) > 1 else None)
                     self._event(job, "step", step="swap", index=scene.index, variant=v, variants=len(scene.variants))
                     swapped = pipeline.swap_master_onto(
@@ -515,6 +528,7 @@ class Orchestrator:
                 for v, variant in enumerate(scene.variants):
                     if variant.post_paths:
                         continue
+                    cancel.check()
                     self._event(job, "step", step="post", index=scene.index, variant=v,
                                 chain=[st.workflow for st in self.params.post_steps])
                     src = variant.swapped_path or variant.path
@@ -557,6 +571,14 @@ class Orchestrator:
             )
 
     def _phase_videos(self, job: Job) -> None:
+        """Swap (when the scene has a face), animate, then post-process each scene.
+
+        Resumable at every persisted step, which a user stop relies on: a scene whose
+        swap is saved is not swapped again; a scene whose raw clip is saved but whose
+        post-steps did not finish runs only the chain. ``video_path`` (the deliverable)
+        is set only once the chain has finished — or together with the raw clip when
+        the profile has no post-steps.
+        """
         face_cache: dict = {}  # (backend, face path) -> staged name; faces differ per scene
         self._event(job, "phase", phase="videos", total=len(job.scenes),
                     length=self.params.length, fps=self.params.fps)
@@ -566,46 +588,55 @@ class Orchestrator:
             if not scene.keyframe_path:
                 log.warning("job %s: scene %d has no keyframe; skipping", job.id, scene.index)
                 continue
+            cancel.check()
             provenance.set_context(scene=scene.index)
-            face = scene.identity if self.face_swap else ""
-            do_swap = bool(face)
-            if do_swap:
-                master_name = pipeline.stage_identity(face, self.params, cache=face_cache)
-                log.info("job %s: video scene %d (swap %s -> animate)", job.id, scene.index, Path(face).name)
-                self._event(job, "step", step="swap", index=scene.index, identity=Path(face).name)
-                swapped = pipeline.swap_master_onto(
-                    scene.keyframe_path, master_name, params=self.params,
-                    filename_prefix=output_prefix(job, scene.index, "swapped"),
-                )
-                scene.swapped_path = str(swapped)
-                scene.status = SceneStatus.SWAP
-                self.store.save_job(job)
-                frame = swapped
-            else:
-                log.info("job %s: video scene %d (animate keyframe, no swap)", job.id, scene.index)
-                frame = scene.keyframe_path
-
             seed = config.derive_seed(self.seed, scene=scene.index, attempt=1 + 10 * scene.regenerations)
-            self._event(job, "step", step="animate", index=scene.index,
-                        length=self.params.length, fps=self.params.fps, seconds=self.params.clip_seconds)
-            video = pipeline.animate_frame(
-                frame, scene.animation_prompt, seed=seed,
-                params=self.params, negative=scene.animation_negative or None,
-                filename_prefix=output_prefix(job, scene.index, "clip"),
-            )
-            scene.raw_video_path = str(video)
-            scene.video_path = str(video)
-            self.store.log_decision(
-                Decision(job_id=job.id, scene_index=scene.index, phase="video",
-                         attempt=1, action="generated")
-            )
-            self.store.save_job(job)
-            self._event(job, "video", index=scene.index, path=scene.video_path)
+            if not scene.raw_video_path:
+                face = scene.identity if self.face_swap else ""
+                if face and scene.swapped_path:
+                    log.info("job %s: video scene %d (swap already done -> animate)", job.id, scene.index)
+                    frame = scene.swapped_path
+                elif face:
+                    master_name = pipeline.stage_identity(face, self.params, cache=face_cache)
+                    log.info("job %s: video scene %d (swap %s -> animate)", job.id, scene.index, Path(face).name)
+                    self._event(job, "step", step="swap", index=scene.index, identity=Path(face).name)
+                    swapped = pipeline.swap_master_onto(
+                        scene.keyframe_path, master_name, params=self.params,
+                        filename_prefix=output_prefix(job, scene.index, "swapped"),
+                    )
+                    scene.swapped_path = str(swapped)
+                    scene.status = SceneStatus.SWAP
+                    self.store.save_job(job)
+                    frame = swapped
+                    cancel.check()  # the swap is saved
+                else:
+                    log.info("job %s: video scene %d (animate keyframe, no swap)", job.id, scene.index)
+                    frame = scene.keyframe_path
+
+                self._event(job, "step", step="animate", index=scene.index,
+                            length=self.params.length, fps=self.params.fps, seconds=self.params.clip_seconds)
+                video = pipeline.animate_frame(
+                    frame, scene.animation_prompt, seed=seed,
+                    params=self.params, negative=scene.animation_negative or None,
+                    filename_prefix=output_prefix(job, scene.index, "clip"),
+                )
+                scene.raw_video_path = str(video)
+                if not self.params.post_steps:
+                    scene.video_path = str(video)
+                self.store.log_decision(
+                    Decision(job_id=job.id, scene_index=scene.index, phase="video",
+                             attempt=1, action="generated")
+                )
+                self.store.save_job(job)
+                self._event(job, "video", index=scene.index, path=scene.raw_video_path)
+            else:
+                log.info("job %s: video scene %d (clip saved -> post-steps only)", job.id, scene.index)
             if self.params.post_steps:
+                cancel.check()  # the raw clip is saved
                 self._event(job, "step", step="post", index=scene.index,
                             chain=[st.workflow for st in self.params.post_steps])
                 outs = run_chain(
-                    video, self.params.post_steps, fps=self.params.fps, seed=seed,
+                    Path(scene.raw_video_path), self.params.post_steps, fps=self.params.fps, seed=seed,
                     filename_prefix=output_prefix(job, scene.index, "post"),
                     master_face=scene.identity or None,
                     prompts={"positive": scene.keyframe_prompt, "motion": scene.animation_prompt},
@@ -619,6 +650,8 @@ class Orchestrator:
                     )
                     for i, o in enumerate(outs):
                         self._event(job, "postprocess", index=scene.index, step=i, path=str(o))
+                else:
+                    scene.video_path = scene.raw_video_path  # every step was skipped
             scene.status = SceneStatus.COMPLETE
             self.store.save_job(job)
 

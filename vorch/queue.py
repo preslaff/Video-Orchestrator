@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections import deque
 from collections.abc import Callable
 
 from . import assembly as assembly_mod
+from . import cancel
 from . import export as export_mod
 from . import projects as projects_mod
 from . import scene_assets
@@ -104,6 +106,8 @@ class JobManager:
         self._lock = asyncio.Lock()  # one generation at a time (single GPU)
         self._tasks: set[asyncio.Task] = set()
         self._active: set[str] = set()  # jobs with a run segment in flight
+        # Stop signal per run segment (assembly also marks a job active but is not stoppable).
+        self._stop: dict[str, threading.Event] = {}
         # How to rebuild an Orchestrator for a job (run-config lives on the job).
         self._factory = orchestrator_factory or Orchestrator.from_job
 
@@ -148,18 +152,50 @@ class JobManager:
             idea, style=style, master_face=sub.master_face, autonomy=autonomy, mode=mode,
             reference_images=sub.reference_images, project_id=sub.project_id,
         )
-        self._start(job)
-        self._spawn(self._execute(job, lambda o, j: o.run(j)))
+        prev = self._start(job)
+        self._spawn(self._execute(job, lambda o, j: o.run(j), prev))
         return job
 
-    def _start(self, job: Job) -> None:
+    def _start(self, job: Job) -> JobStatus:
         """Mark a segment as queued: status RUNNING is persisted *before* the worker
         starts so a client that refetches right after the request already sees
-        the job as active (and keeps/reopens its event stream)."""
+        the job as active (and keeps/reopens its event stream).
+
+        Returns the status the job had, so a segment stopped before it got the GPU
+        lock can put the job back exactly as it was.
+        """
+        prev = job.status
         job.status = JobStatus.RUNNING
         self.store.save_job(job)
         self._active.add(job.id)
+        self._stop[job.id] = threading.Event()
         self.broker.publish(job.id, {"type": "status", "status": job.status.value})
+        return prev
+
+    def stop(self, job_id: str) -> Job:
+        """Ask a running segment to stop at its next safe point (idempotent).
+
+        The worker thread checks the signal between persisted units of work and in
+        the ComfyUI poll loop, where it also withdraws the prompt from ComfyUI. The job
+        ends CANCELLED ("stopped") and can be edited and resumed with ``retry``.
+        Raises RuntimeError when nothing stoppable is running (e.g. an assembly).
+        """
+        ev = self._stop.get(job_id)
+        if ev is None:
+            raise RuntimeError(f"job {job_id} has no run segment to stop")
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if not ev.is_set():
+            ev.set()
+            log.info("job %s: stop requested", job_id)
+            self.broker.publish(job_id, {"job_id": job_id, "type": "stopping"})
+        return job
+
+    def is_stopping(self, job_id: str) -> bool:
+        """True between a stop request and the segment actually ending."""
+        ev = self._stop.get(job_id)
+        return ev is not None and ev.is_set()
 
     def export_now(self, job_id: str, *, force: bool = False) -> export_mod.ExportRecord:
         """Materialise the handoff folder for a finished job (synchronous file I/O)."""
@@ -190,25 +226,34 @@ class JobManager:
         if job_id in self._active:
             log.info("job %s already running; ignoring duplicate approve", job_id)
             return job
-        self._start(job)
-        self._spawn(self._execute(job, lambda o, j: o.approve(j, gate)))
+        prev = self._start(job)
+        self._spawn(self._execute(job, lambda o, j: o.approve(j, gate), prev))
         return job
 
     async def retry(self, job_id: str) -> Job:
-        """Resume a **failed** job from its persisted state (scenes already done are
-        kept; the failed segment runs again). No-op while a segment is in flight."""
+        """Resume a job from its persisted state; finished work is kept.
+
+        Accepts a **failed** job, a **stopped** one (CANCELLED), and an **orphaned**
+        one — persisted as RUNNING but with no segment in this process, which is what a
+        server restart mid-run leaves behind. There is deliberately no startup sweep
+        that marks such jobs stopped: ``vorch run``/``vorch approve`` drive jobs
+        in-process against the same database, and a sweep would flag those live runs.
+        No-op while a segment is in flight here.
+        """
         job = self.store.load_job(job_id)
         if job is None:
             raise KeyError(job_id)
         if job_id in self._active:
             log.info("job %s already running; ignoring duplicate retry", job_id)
             return job
-        if job.status is not JobStatus.FAILED:
-            raise RuntimeError(f"job is {job.status.value}, not failed")
+        reasons = {JobStatus.FAILED: "resumed after failure", JobStatus.CANCELLED: "resumed after stop",
+                   JobStatus.RUNNING: "resumed an orphaned run (no worker in this server)"}
+        if job.status not in reasons:
+            raise RuntimeError(f"job is {job.status.value}; only failed, stopped or orphaned jobs resume")
         self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="job", attempt=1,
-                                         action="retry", reason="resumed after failure"))
-        self._start(job)
-        self._spawn(self._execute(job, lambda o, j: o.run(j)))
+                                         action="retry", reason=reasons[job.status]))
+        prev = self._start(job)
+        self._spawn(self._execute(job, lambda o, j: o.run(j), prev))
         return job
 
     async def regenerate(self, job_id: str, index: int, *, what: str = "keyframe",
@@ -224,8 +269,8 @@ class JobManager:
             raise RuntimeError("job is running")
         if not any(s.index == index for s in job.scenes):
             raise KeyError(f"scene {index}")
-        self._start(job)
-        self._spawn(self._execute(job, lambda o, j: o.regenerate(j, index, what=what, edits=edits)))
+        prev = self._start(job)
+        self._spawn(self._execute(job, lambda o, j: o.regenerate(j, index, what=what, edits=edits), prev))
         return job
 
     def events(self, job_id: str, *, after: int | None = None) -> asyncio.Queue:
@@ -273,18 +318,43 @@ class JobManager:
 
     # -- internals --
 
-    async def _execute(self, job: Job, fn: Callable[[Orchestrator, Job], None]) -> None:
-        """Run a blocking orchestrator call in an executor, under the GPU lock."""
+    async def _execute(self, job: Job, fn: Callable[[Orchestrator, Job], None],
+                       prev: JobStatus = JobStatus.PENDING) -> None:
+        """Run a blocking orchestrator call in an executor, under the GPU lock.
+
+        The call runs with this segment's stop event bound (``cancel.call_bound``), so
+        every path — run, approve, regenerate — honours Stop without extra plumbing.
+        The job stays in ``_active`` until the executor returns: the worker thread
+        cannot be killed, and edits must not race its saves.
+        """
         loop = asyncio.get_running_loop()
-        orch = self._factory(self.store, job)
-        orch.emit = lambda event, jid=job.id: loop.call_soon_threadsafe(
-            self.broker.publish, jid, event
-        )
+        ev = self._stop.setdefault(job.id, threading.Event())
         async with self._lock:
             try:
-                await loop.run_in_executor(None, fn, orch, job)
+                if ev.is_set():
+                    # Stopped while waiting for the GPU: nothing ran, put the job back as it
+                    # was (a new job has no earlier state, so it becomes stopped).
+                    job.status = (JobStatus.CANCELLED if prev in (JobStatus.PENDING, JobStatus.RUNNING)
+                                  else prev)
+                    self.store.save_job(job)
+                    self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="job", attempt=1,
+                                                     action="stopped", reason="stopped before it started"))
+                    self.broker.publish(job.id, {"job_id": job.id, "type": "status", "status": job.status.value})
+                    return
+                orch = self._factory(self.store, job)
+                orch.emit = lambda event, jid=job.id: loop.call_soon_threadsafe(
+                    self.broker.publish, jid, event
+                )
+                await loop.run_in_executor(None, cancel.call_bound, ev, fn, orch, job)
                 if self._auto_export:
                     await self._maybe_export(loop, job)
+            except cancel.JobStopped:
+                log.info("job %s stopped", job.id)
+                job.status = JobStatus.CANCELLED
+                self.store.save_job(job)
+                self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="job", attempt=1,
+                                                 action="stopped", reason="stopped by the user"))
+                self.broker.publish(job.id, {"job_id": job.id, "type": "status", "status": job.status.value})
             except Exception as e:  # surface failure as state + event, never crash the loop
                 log.exception("job %s failed", job.id)
                 job.status = JobStatus.FAILED
@@ -292,6 +362,7 @@ class JobManager:
                 self.broker.publish(job.id, {"job_id": job.id, "type": "error", "error": str(e)})
             finally:
                 self._active.discard(job.id)
+                self._stop.pop(job.id, None)
                 self.broker.publish(job.id, {"job_id": job.id, "type": "end"})
 
     async def _maybe_export(self, loop, job: Job) -> None:

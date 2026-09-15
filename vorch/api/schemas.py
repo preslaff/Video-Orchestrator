@@ -158,6 +158,10 @@ class JobPublic(BaseModel):
     updated_at: str
     scenes: list[ScenePublic]
     pending_gate: Gate | None = None
+    # Live run state from this server: a segment in flight, and a stop requested but not
+    # yet reached. status "running" with active false is an orphan (server restarted).
+    active: bool = False
+    stopping: bool = False
 
 
 class JobSummaryOut(BaseModel):

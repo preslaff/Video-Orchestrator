@@ -17,7 +17,7 @@ import logging
 from collections.abc import Sequence
 from pathlib import Path
 
-from .. import backends, registry, vram
+from .. import backends, cancel, registry, vram
 from ..clients import comfy
 from . import run_step
 
@@ -55,6 +55,7 @@ def run_chain(
     prev_workflow: str | None = None
     staged_master: dict[str, str] = {}  # backend name -> uploaded name
     for i, step in enumerate(chain):
+        cancel.check()  # a stop between steps; the chain reruns whole on resume
         spec = reg.get(step.workflow)
         if spec.kind != "postprocess":
             raise ValueError(f"post step {step.workflow!r} is kind {spec.kind!r}, not 'postprocess'")

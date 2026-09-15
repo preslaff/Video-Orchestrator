@@ -56,10 +56,16 @@ def scene_to_public(s: Scene, project_id: str | None = None) -> ScenePublic:
     return ScenePublic.model_validate(d)
 
 
-def job_to_public(job: Job, store: Store) -> JobPublic:
+def job_to_public(job: Job, store: Store, manager=None) -> JobPublic:
+    """``manager`` (a ``JobManager``) adds the live run state: whether a segment is in
+    flight in this server (``active``) and whether a stop is pending (``stopping``).
+    A job persisted as running but not active here is an orphan left by a restart."""
     d = job_to_dict(job)
     d["scenes"] = [scene_to_public(s, job.project_id) for s in job.scenes]
     d["pending_gate"] = Orchestrator.pending_gate(job, store)
+    if manager is not None:
+        d["active"] = manager.is_active(job.id)
+        d["stopping"] = manager.is_stopping(job.id)
     return JobPublic.model_validate(d)
 
 

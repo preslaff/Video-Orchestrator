@@ -108,6 +108,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop
+         * @description Ask a running job to stop at its next safe point.
+         *
+         *     Accepted, not finished: the job keeps status ``running`` with ``stopping: true``
+         *     until the worker reaches a checkpoint (a ComfyUI step is withdrawn within a poll
+         *     interval; a Gemma call finishes first), then ends ``cancelled`` and can be edited
+         *     and resumed with ``POST /retry``.
+         */
+        post: operations["stop_api_jobs__job_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/retry": {
         parameters: {
             query?: never;
@@ -119,7 +144,7 @@ export interface paths {
         put?: never;
         /**
          * Retry
-         * @description Resume a failed job from where it stopped (e.g. after fixing the environment).
+         * @description Resume a failed, stopped or orphaned job from where it stopped; finished work is kept.
          */
         post: operations["retry_api_jobs__job_id__retry_post"];
         delete?: never;
@@ -906,6 +931,16 @@ export interface components {
             scenes: components["schemas"]["ScenePublic"][];
             /** Pending Gate */
             pending_gate?: ("storyboard" | "keyframes") | null;
+            /**
+             * Active
+             * @default false
+             */
+            active: boolean;
+            /**
+             * Stopping
+             * @default false
+             */
+            stopping: boolean;
         };
         /**
          * JobSpec
@@ -1808,6 +1843,37 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_api_jobs__job_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };

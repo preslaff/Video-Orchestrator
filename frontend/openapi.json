@@ -424,13 +424,56 @@
         }
       }
     },
+    "/api/jobs/{job_id}/stop": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Stop",
+        "description": "Ask a running job to stop at its next safe point.\n\nAccepted, not finished: the job keeps status ``running`` with ``stopping: true``\nuntil the worker reaches a checkpoint (a ComfyUI step is withdrawn within a poll\ninterval; a Gemma call finishes first), then ends ``cancelled`` and can be edited\nand resumed with ``POST /retry``.",
+        "operationId": "stop_api_jobs__job_id__stop_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/retry": {
       "post": {
         "tags": [
           "jobs"
         ],
         "summary": "Retry",
-        "description": "Resume a failed job from where it stopped (e.g. after fixing the environment).",
+        "description": "Resume a failed, stopped or orphaned job from where it stopped; finished work is kept.",
         "operationId": "retry_api_jobs__job_id__retry_post",
         "parameters": [
           {
@@ -2675,6 +2718,16 @@
               }
             ],
             "title": "Pending Gate"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": false
+          },
+          "stopping": {
+            "type": "boolean",
+            "title": "Stopping",
+            "default": false
           }
         },
         "type": "object",

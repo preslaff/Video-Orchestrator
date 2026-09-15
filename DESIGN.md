@@ -302,3 +302,30 @@ Full design rationale: [`docs/sequential-continuity-plan.md`](docs/sequential-co
   chained run **cannot** batch the Wan phase the way NOTES §5 prescribes. Klein loads once for the cut
   scenes; the Wan+ReActor chain then runs scene-by-scene. Resolution aligns for free — a carried
   832×480 frame is already Wan-native.
+
+## 14. Run control: stop and resume
+
+A run segment is the blocking orchestrator in an executor thread under the one GPU lock
+(`queue.py`). A thread cannot be killed, and cancelling the asyncio task would let it keep
+saving the job, so **Stop is cooperative** (`vorch/cancel.py`):
+
+- `JobManager._execute` runs the segment through `cancel.call_bound(event, …)`, binding a
+  `threading.Event` in a ContextVar inside the worker thread (same pattern as provenance).
+  Every path — run, approve, regenerate — honours it with no orchestrator plumbing.
+- **Checkpoints** raise `JobStopped` only where nothing unsaved is lost: between phases (never
+  before DONE), per scene and per variant after the save, in the evaluated-keyframe `on_start`
+  (before generating, not after judging), between post-steps, and in the ComfyUI client —
+  in `_request`'s retry wait (a remote cold start does not hold a stop for minutes) and in the
+  `/history` poll *after* a response showing the prompt unfinished. There the prompt is
+  withdrawn: `POST /queue {"delete": [id]}`, then `POST /interrupt {"prompt_id": id}`.
+  Gemma calls are not interrupted; they finish first.
+- The job ends `cancelled` ("stopped"), stays in `_active` until the thread returns (edits
+  would race its last-writer-wins saves), and resumes with `retry`, which accepts failed,
+  stopped and **orphaned** jobs (persisted `running` with no segment in this server — what a
+  restart leaves). There is deliberately no startup sweep: `vorch run`/`approve` drive jobs
+  in-process against the same database and would be flagged as orphans.
+- A stop that lands while the segment waits for the GPU restores the job's previous status.
+- Resume granularity the stop relies on (`_phase_videos`): a saved swap is not redone; the raw
+  clip is saved before post-steps and `video_path` (the deliverable) only after the chain, so a
+  scene stopped mid-chain resumes with the chain alone.
+- API: `POST /api/jobs/{id}/stop` (202); `JobPublic.active` / `stopping`; SSE `stopping` event.

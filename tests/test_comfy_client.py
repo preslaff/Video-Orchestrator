@@ -281,3 +281,83 @@ def test_string_backend_names_resolve_via_registry(session, clock, tmp_path, mon
     assert comfy.system_stats("box") == {"ok": 1}
     with pytest.raises(backends.BackendError):
         comfy.system_stats("nope")
+
+
+# --- stop (cooperative cancel) ---------------------------------------------------------
+
+
+import threading
+
+from vorch import cancel
+
+
+def _stopped_after(fn):
+    """Run ``fn`` with a bound stop event; ``fn`` receives the event to set."""
+    ev = threading.Event()
+    return cancel.call_bound(ev, fn, ev)
+
+
+def test_stop_mid_poll_withdraws_the_prompt_and_raises(session, clock):
+    def run(ev):
+        def history_then_stop(m, p, kw):
+            ev.set()  # the user presses Stop while the prompt is still running
+            return Resp(200, {})
+        session.script = [_prompt_ok, history_then_stop]
+        session.default = lambda m, p, kw: Resp(200)
+        return comfy.run({"1": {}}, timeout=60)
+
+    with pytest.raises(cancel.JobStopped):
+        _stopped_after(run)
+    assert session.paths()[-2:] == ["POST /queue", "POST /interrupt"]
+    delete, interrupt = session.calls[-2], session.calls[-1]
+    assert delete[2]["json"] == {"delete": ["pid"]}
+    assert interrupt[2]["json"] == {"prompt_id": "pid"}
+
+
+def test_a_finished_result_is_kept_even_if_stop_arrives_with_it(session, clock):
+    def run(ev):
+        def done_and_stop(m, p, kw):
+            ev.set()
+            return _history(DONE)(m, p, kw)
+        session.script = [_prompt_ok, done_and_stop]
+        return comfy.run({"1": {}}, timeout=60)
+
+    assert _stopped_after(run)[0]["filename"] == "a_00001_.png"
+    assert "POST /interrupt" not in session.paths()
+
+
+def test_nothing_is_submitted_after_a_stop(session, clock):
+    def run(ev):
+        ev.set()
+        return comfy.run({"1": {}}, timeout=60)
+
+    with pytest.raises(cancel.JobStopped):
+        _stopped_after(run)
+    assert session.paths() == []
+
+
+def test_stop_during_a_retry_wait_raises_promptly_and_withdraws(session, clock):
+    def run(ev):
+        def outage(m, p, kw):
+            ev.set()
+            return requests.ConnectionError("reset")
+        session.script = [_prompt_ok, outage]
+        session.default = lambda m, p, kw: Resp(200)
+        return comfy.run({"1": {}}, timeout=600)
+
+    with pytest.raises(cancel.JobStopped):
+        _stopped_after(run)
+    assert clock[1] == []  # never slept out the retry budget
+    assert session.paths()[-2:] == ["POST /queue", "POST /interrupt"]
+
+
+def test_interrupt_and_free_still_send_while_stopped(session, clock):
+    def run(ev):
+        ev.set()
+        session.default = lambda m, p, kw: requests.ConnectionError("down")
+        comfy.interrupt(None, "pid")
+        comfy.free()
+        return None
+
+    _stopped_after(run)  # neither raises JobStopped
+    assert session.paths() == ["POST /interrupt", "POST /free"]
