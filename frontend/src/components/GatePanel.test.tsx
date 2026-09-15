@@ -45,8 +45,14 @@ describe('GatePanel identity picker', () => {
     const user = userEvent.setup()
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<QueryClientProvider client={qc}><GatePanel job={job} assets={assets} /></QueryClientProvider>)
+    expect(screen.queryByTestId('identity-0-young')).toBeNull()        // pickers start collapsed
+    expect(screen.getAllByText('Maria, age 8').length).toBeGreaterThan(0) // ...showing what is chosen
+    await user.click(screen.getByTestId('identity-0-choose'))
     expect(screen.getByTestId('identity-0-young')).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByTestId('identity-1-choose'))         // opening another closes the first
+    expect(screen.queryByTestId('identity-0-young')).toBeNull()
     await user.click(screen.getByTestId('identity-1-old'))            // scene 2 gets the older face
+    await user.click(screen.getByTestId('identity-0-choose'))
     await user.click(screen.getByTestId('identity-0-young'))          // toggling the chosen face off = none
     await user.click(screen.getByText('Save changes'))
     await waitFor(() => expect(puts).toHaveLength(1))

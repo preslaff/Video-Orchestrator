@@ -10,6 +10,26 @@ import { Button, ErrorBox } from '@/components/ui'
 
 type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null; chosen_variant: number | null }
 
+type PickerKind = 'refs' | 'identity' | 'image'
+
+/** A one-line summary of chosen assets (small thumbnails + labels) for a collapsed picker. */
+function PickSummary({ assets, ids, empty }: { assets: AssetOut[]; ids: string[]; empty: string }) {
+  const chosen = ids.map((id) => assets.find((a) => a.id === id)).filter((a): a is AssetOut => !!a)
+  if (!chosen.length) return <span className="text-xs text-neutral-500">{empty}</span>
+  return (
+    <span className="flex min-w-0 flex-wrap items-center gap-1">
+      {chosen.map((a, i) => (
+        <span key={a.id} className="flex max-w-48 items-center gap-1 rounded bg-neutral-100 px-1 py-0.5 text-xs" title={a.note_caption || a.label || a.name}>
+          {chosen.length > 1 && <span className="text-neutral-500">{i + 1}.</span>}
+          {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
+          <img src={a.thumb_url || a.url} alt="" loading="lazy" className="h-6 w-6 rounded object-cover" />
+          <span className="truncate">{a.label || a.name}</span>
+        </span>
+      ))}
+    </span>
+  )
+}
+
 function draftsFrom(job: JobPublic): Record<number, Draft> {
   const out: Record<number, Draft> = {}
   for (const s of job.scenes) {
@@ -33,7 +53,10 @@ function draftsFrom(job: JobPublic): Record<number, Draft> {
  */
 export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job: JobPublic; decisions?: DecisionOut[]; onStarted?: () => void; assets?: AssetOut[] }) {
   const [drafts, setDrafts] = useState(() => draftsFrom(job))
-  const [picking, setPicking] = useState<number | null>(null)   // scene whose "use my image" picker is open
+  // At most one picker is open across the whole panel: a 40-scene job renders one full picker, not 120.
+  const [openPicker, setOpenPicker] = useState<{ scene: number; kind: PickerKind } | null>(null)
+  const isOpen = (scene: number, kind: PickerKind) => openPicker?.scene === scene && openPicker.kind === kind
+  const togglePicker = (scene: number, kind: PickerKind) => setOpenPicker(isOpen(scene, kind) ? null : { scene, kind })
   const update = useUpdateScenes(job.id)
   const approve = useApprove(job.id)
   const regen = useRegenerateScene(job.id)
@@ -93,7 +116,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
       ? '\n\nThe scene\'s face will be swapped onto the image — choose identity "none" first to keep it as is.'
       : ''
     if (!confirm(`Use “${label}” as the keyframe of scene ${index + 1}? ${redo}${swapNote}`)) return
-    setPicking(null)
+    setOpenPicker(null)
     regen.mutate({ index, body: { what: 'keyframe', keyframe_asset_id: assetId, apply_suggestion: false } },
       { onSuccess: () => onStarted?.() })
   }
@@ -201,10 +224,10 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
               {job.project_id && (
                 <div>
                   <button type="button" disabled={busy} className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-50"
-                    data-testid={`use-image-${s.index}`} onClick={() => setPicking(picking === s.index ? null : s.index)}>
-                    {picking === s.index ? 'Cancel' : 'Use my image as keyframe…'}
+                    data-testid={`use-image-${s.index}`} onClick={() => togglePicker(s.index, 'image')}>
+                    {isOpen(s.index, 'image') ? 'Cancel' : 'Use my image as keyframe…'}
                   </button>
-                  {picking === s.index && (
+                  {isOpen(s.index, 'image') && (
                     <div className="mt-1">
                       <span className="text-xs text-neutral-500">pick a project image or upload one — it replaces the keyframe (not generated, not evaluated)</span>
                       <AssetPicker assets={assets} selected={[]} disabled={busy} testId={`keyframe-image-${s.index}`}
@@ -223,12 +246,19 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                     <textarea value={d.references} onChange={(e) => set(s.index, { references: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs" /></label>
                 )}
                 {d.mode === 'edit' && assetRefs && (
-                  <div><span className="text-xs text-neutral-500">references (project assets, in order){slots > 0 ? ` — the first ${slots} are used` : ''}</span>
-                    <AssetPicker assets={refAssets} selected={d.reference_asset_ids} multi onChange={(ids) => set(s.index, { reference_asset_ids: ids })} testId={`refs-${s.index}`}
-                      onUpload={job.project_id ? (f) => uploadThen(f, (id) => setDrafts((all) => ({
-                        ...all, [s.index]: { ...all[s.index], reference_asset_ids: [...all[s.index].reference_asset_ids, id] },
-                      }))) : undefined}
-                      uploading={upload.isPending} />
+                  <div className="min-w-0"><span className="text-xs text-neutral-500">references (project assets, in order){slots > 0 ? ` — the first ${slots} are used` : ''}</span>
+                    <div className="flex items-center gap-2">
+                      <PickSummary assets={assets} ids={d.reference_asset_ids} empty="no references" />
+                      <button type="button" className="shrink-0 text-xs text-neutral-700 hover:underline" data-testid={`refs-${s.index}-choose`}
+                        onClick={() => togglePicker(s.index, 'refs')}>{isOpen(s.index, 'refs') ? 'Done' : 'Choose…'}</button>
+                    </div>
+                    {isOpen(s.index, 'refs') && (
+                      <AssetPicker assets={refAssets} selected={d.reference_asset_ids} multi onChange={(ids) => set(s.index, { reference_asset_ids: ids })} testId={`refs-${s.index}`}
+                        onUpload={job.project_id ? (f) => uploadThen(f, (id) => setDrafts((all) => ({
+                          ...all, [s.index]: { ...all[s.index], reference_asset_ids: [...all[s.index].reference_asset_ids, id] },
+                        }))) : undefined}
+                        uploading={upload.isPending} />
+                    )}
                     {slots > 0 && d.reference_asset_ids.length > slots && (
                       <p className="text-xs text-amber-700">Only the first {slots} are used by the edit workflow; the rest are ignored.</p>
                     )}</div>
@@ -237,8 +267,15 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
               {job.face_swap && faces.length > 0 && (
                 <div>
                   <span className="text-xs text-neutral-500">identity for the face swap{s.video_path ? ' (applies on Re-animate)' : s.swapped_path ? ' (applies on Animate)' : ''}</span>
-                  <AssetPicker assets={faces} selected={d.identity_asset_id ? [d.identity_asset_id] : []} none="none" testId={`identity-${s.index}`}
-                    onChange={(ids) => set(s.index, { identity_asset_id: ids[0] ?? null })} />
+                  <div className="flex items-center gap-2">
+                    <PickSummary assets={faces} ids={d.identity_asset_id ? [d.identity_asset_id] : []} empty="none (no swap)" />
+                    <button type="button" className="shrink-0 text-xs text-neutral-700 hover:underline" data-testid={`identity-${s.index}-choose`}
+                      onClick={() => togglePicker(s.index, 'identity')}>{isOpen(s.index, 'identity') ? 'Done' : 'Choose…'}</button>
+                  </div>
+                  {isOpen(s.index, 'identity') && (
+                    <AssetPicker assets={faces} selected={d.identity_asset_id ? [d.identity_asset_id] : []} none="none" testId={`identity-${s.index}`}
+                      onChange={(ids) => set(s.index, { identity_asset_id: ids[0] ?? null })} />
+                  )}
                 </div>
               )}
               {video && (

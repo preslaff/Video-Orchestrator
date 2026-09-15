@@ -167,7 +167,27 @@ A project groups jobs and owns shared files: the **master face** used for identi
 an optional export root. Deleting a project keeps its jobs (unlinked).
 
 **Labels matter**, because the storyboard assigns a face and references to each scene by reading
-them. Rather than typing them all, let Gemma look at the assets and propose one each:
+them. Rather than typing them all, let Gemma look at the assets and propose one each.
+
+**In the UI this happens on its own.** An uploaded asset without a label is described in the
+background, one at a time (~20–40 s each on CPU Gemma), and its suggested label appears flagged
+**AI**. Describing waits while a job is generating, so it never slows a storyboard or the evaluator.
+- **Describe unlabelled** queues older assets, or any that a server restart dropped.
+- **Describe again** redoes a suggestion.
+- The project's **describe hint** (in its settings) gives Gemma the tag vocabulary.
+- `VORCH_AUTO_DESCRIBE=0` turns describe-on-upload off.
+
+Large projects stay manageable:
+- The asset page and every picker search labels, captions, tags and sign text ("mizen" finds the
+  plaque), and use small cached thumbnails.
+- The asset page can show **unreviewed only**.
+- In a job's scene cards the pickers stay collapsed to a summary until you **Choose…**.
+
+An asset's **kind** can be changed from its tile (or with `vorch project set-kind <slug> <asset> <kind>`).
+A suggested label is rebuilt for the new kind; a label you wrote is kept. Scenes already using the
+asset are not changed.
+
+From the command line:
 
 ```bash
 vorch project label-assets <slug> --limit 3 --dry-run \

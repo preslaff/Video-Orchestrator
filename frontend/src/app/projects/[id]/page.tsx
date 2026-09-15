@@ -1,14 +1,17 @@
 'use client'
 
-import { use, useState } from 'react'
+import { use, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { errorMessage } from '@/api/client'
-import { useDeleteAsset, useDeleteProject, useProfiles, useProject, useUpdateAssetLabel, useUpdateProject, useUploadAsset } from '@/hooks/useSetup'
+import { useDeleteAsset, useDeleteProject, useDescribeAssets, useProfiles, useProject, useUpdateAsset, useUpdateProject, useUploadAsset } from '@/hooks/useSetup'
 import { useJobs } from '@/hooks/useJobs'
 import { Button, Card, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '@/components/ui'
+import { filterAssets } from '@/lib/assetFilter'
 
-const KINDS = ['master_face', 'reference', 'product', 'logo', 'other']
+const KINDS = ['master_face', 'reference', 'product', 'logo', 'other'] as const
+type Kind = (typeof KINDS)[number]
+const PAGE = 48
 
 export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -20,10 +23,18 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
   const del = useDeleteProject()
   const upload = useUploadAsset(id)
   const delAsset = useDeleteAsset(id)
-  const relabel = useUpdateAssetLabel(id)
-  const [kind, setKind] = useState('master_face')
+  const updateAsset = useUpdateAsset(id)
+  const describe = useDescribeAssets(id)
+  const [kind, setKind] = useState<string>('master_face')
   const [label, setLabel] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  const [query, setQuery] = useState('')
+  const [unreviewed, setUnreviewed] = useState(false)
+  const [limit, setLimit] = useState(PAGE)
+  const visible = useMemo(() => {
+    const all = project.data?.assets ?? []
+    return filterAssets(all, query).filter((a) => !unreviewed || a.label_source === 'auto')
+  }, [project.data, query, unreviewed])
 
   if (project.isLoading) return <Empty>Loading…</Empty>
   if (project.error || !project.data) return <ErrorBox message={errorMessage(project.error, 'Project not found')} />
@@ -39,16 +50,17 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
         <Link href={`/jobs/new?project=${id}`} className="rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white">New job in this project</Link>
         <Button variant="danger" onClick={() => { if (confirm(`Delete project “${p.name}”? Jobs are kept (unlinked); asset files stay on disk.`)) del.mutate({ id }, { onSuccess: () => router.push('/projects') }) }}>Delete</Button>
       </div>
-      <ErrorBox message={update.error ? errorMessage(update.error) : del.error ? errorMessage(del.error) : upload.error ? errorMessage(upload.error) : delAsset.error ? errorMessage(delAsset.error) : null} />
+      <ErrorBox message={update.error ? errorMessage(update.error) : del.error ? errorMessage(del.error) : upload.error ? errorMessage(upload.error) : delAsset.error ? errorMessage(delAsset.error) : updateAsset.error ? errorMessage(updateAsset.error) : describe.error ? errorMessage(describe.error) : null} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Settings">
-          <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); const f = new FormData(e.currentTarget); update.mutate({ name: String(f.get('name')), brand_notes: String(f.get('brand_notes')), style_notes: String(f.get('style_notes')), default_profile_id: String(f.get('default_profile_id')), export_root: String(f.get('export_root')) }) }}>
+          <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); const f = new FormData(e.currentTarget); update.mutate({ name: String(f.get('name')), brand_notes: String(f.get('brand_notes')), style_notes: String(f.get('style_notes')), default_profile_id: String(f.get('default_profile_id')), export_root: String(f.get('export_root')), describe_hint: String(f.get('describe_hint')) }) }}>
             <label className="block"><span className="text-xs text-neutral-500">name</span><input name="name" defaultValue={p.name} className={inp} /></label>
             <label className="block"><span className="text-xs text-neutral-500">default profile</span><select name="default_profile_id" defaultValue={p.default_profile_id} className={inp + ' bg-white'}>{profiles.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
             <label className="block"><span className="text-xs text-neutral-500">brand notes</span><textarea name="brand_notes" defaultValue={p.brand_notes} rows={2} className={inp} /></label>
             <label className="block"><span className="text-xs text-neutral-500">style notes</span><textarea name="style_notes" defaultValue={p.style_notes} rows={2} className={inp} /></label>
             <label className="block"><span className="text-xs text-neutral-500">export root (effective: {p.export_root_effective})</span><input name="export_root" defaultValue={p.export_root} className={inp + ' font-mono text-xs'} /></label>
+            <label className="block"><span className="text-xs text-neutral-500">describe hint — what these assets are and which tags Gemma should use when describing them</span><textarea name="describe_hint" defaultValue={p.describe_hint} rows={2} placeholder="e.g. a bicycle trip around Irish lighthouses; tag as lamp_room, fog_horn, plaque, street_art" className={inp} /></label>
             <div className="flex items-center gap-3"><Button type="submit" variant="primary" disabled={update.isPending}>Save</Button>{update.isSuccess && !update.isPending && <span className="text-sm text-green-700">Saved.</span>}</div>
           </form>
         </Card>
@@ -66,29 +78,67 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
               {p.assets.filter((a) => a.label_source === 'auto').length} label(s) suggested by Gemma and not yet reviewed. Edit or confirm each one — the storyboard reads these.
             </p>
           )}
+          {p.assets.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <input type="search" value={query} onChange={(e) => { setQuery(e.target.value); setLimit(PAGE) }} aria-label="search assets"
+                placeholder="search labels, captions, tags, sign text" className="min-w-40 flex-1 rounded border border-neutral-300 px-2 py-1 text-sm" />
+              <label className="flex items-center gap-1 text-xs text-neutral-700">
+                <input type="checkbox" checked={unreviewed} onChange={(e) => { setUnreviewed(e.target.checked); setLimit(PAGE) }} /> unreviewed only
+              </label>
+              <span className="text-xs text-neutral-500" data-testid="asset-count">{visible.length} of {p.assets.length}</span>
+              <Button disabled={describe.isPending} title="let Gemma describe every asset that has no label yet (in the background, one at a time)"
+                onClick={() => describe.mutate({})}>
+                {describe.isPending ? 'Queuing…' : 'Describe unlabelled'}
+              </Button>
+              {describe.data && <span className="text-xs text-neutral-500">{describe.data.queued} queued</span>}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {p.assets.map((a) => (
+            {visible.slice(0, limit).map((a) => (
               <div key={a.id} className="rounded border border-neutral-200 p-1">
                 {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
-                <img src={a.url} alt={a.name} className="aspect-square w-full rounded object-cover" />
-                <div className="mt-1 flex items-center justify-between text-xs">
-                  <span>
-                    <span className="rounded bg-neutral-100 px-1">{a.kind}</span>{' '}
+                <img src={a.thumb_url || a.url} alt={a.name} loading="lazy" className="aspect-square w-full rounded object-cover" />
+                <div className="mt-1 flex items-center justify-between gap-1 text-xs">
+                  <span className="min-w-0">
+                    <select value={a.kind} aria-label={`kind of ${a.name}`} disabled={updateAsset.isPending}
+                      title="what this asset is used as; scenes already using it are not changed"
+                      onChange={(e) => updateAsset.mutate({ assetId: a.id, kind: e.target.value as Kind })}
+                      className="rounded bg-neutral-100 px-1">
+                      {KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+                    </select>{' '}
                     {a.label_source === 'auto' && <span className="rounded bg-amber-100 px-1 text-amber-800" title="suggested by Gemma — review it">AI</span>}{' '}
-                    <button type="button" className="hover:underline" title="edit label" onClick={() => { const v = prompt(`Label for “${a.name}”`, a.label || ''); if (v !== null) relabel.mutate({ assetId: a.id, label: v }) }}>{a.label || a.name}</button>
+                    <button type="button" className="hover:underline" title="edit label" onClick={() => { const v = prompt(`Label for “${a.name}”`, a.label || ''); if (v !== null) updateAsset.mutate({ assetId: a.id, label: v }) }}>{a.label || a.name}</button>
                   </span>
-                  <button type="button" className="text-red-700 hover:underline" onClick={() => { if (confirm(`Remove asset “${a.name}”?`)) delAsset.mutate(a.id) }}>remove</button>
+                  <button type="button" className="shrink-0 text-red-700 hover:underline" onClick={() => { if (confirm(`Remove asset “${a.name}”?`)) delAsset.mutate(a.id) }}>remove</button>
                 </div>
                 {/* What Gemma saw: context while deciding whether the label is right. */}
                 {a.note_caption && <p className="mt-0.5 line-clamp-2 px-1 text-[11px] text-neutral-500">{a.note_caption}</p>}
-                {a.label_source === 'auto' && (
-                  <button type="button" className="mt-0.5 px-1 text-[11px] text-neutral-600 hover:underline"
-                    title="keep this label as written and clear the AI flag"
-                    onClick={() => relabel.mutate({ assetId: a.id, label: a.label })}>confirm</button>
-                )}
+                <div className="mt-0.5 flex flex-wrap gap-2 px-1 text-[11px]">
+                  {(a.describe_state === 'queued' || a.describe_state === 'describing') && (
+                    <span className="text-sky-700" data-testid={`describe-state-${a.id}`}>{a.describe_state === 'queued' ? 'queued for Gemma…' : 'Gemma is describing…'}</span>
+                  )}
+                  {a.describe_state === 'failed' && (
+                    <button type="button" className="text-red-700 hover:underline" title={a.describe_error}
+                      onClick={() => describe.mutate({ assetIds: [a.id] })}>describe failed ↻</button>
+                  )}
+                  {a.label_source === 'auto' && (
+                    <>
+                      <button type="button" className="text-neutral-600 hover:underline" title="keep this label as written and clear the AI flag"
+                        onClick={() => updateAsset.mutate({ assetId: a.id, label: a.label })}>confirm</button>
+                      <button type="button" className="text-neutral-600 hover:underline" title="let Gemma describe it again (uses the project's describe hint)"
+                        onClick={() => describe.mutate({ assetIds: [a.id], force: true })}>describe again</button>
+                    </>
+                  )}
+                </div>
               </div>
             ))}
           </div>
+          {visible.length > limit && (
+            <button type="button" className="mt-2 w-full rounded bg-neutral-100 py-1 text-sm text-neutral-700 hover:bg-neutral-200" onClick={() => setLimit((n) => n + PAGE)}>
+              Show more ({visible.length - limit} more)
+            </button>
+          )}
+          {p.assets.length > 0 && visible.length === 0 && <Empty>No assets match.</Empty>}
         </Card>
       </div>
 

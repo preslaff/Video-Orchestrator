@@ -172,6 +172,9 @@ export function useProject(id: string | undefined) {
       if (error) throw error
       return data
     },
+    // Poll only while Gemma is describing assets in the background, so labels appear on their own.
+    refetchInterval: (query) =>
+      query.state.data?.assets.some((a) => a.describe_state === 'queued' || a.describe_state === 'describing') ? 3000 : false,
   })
 }
 
@@ -196,7 +199,7 @@ export function useCreateProject() {
 export function useUpdateProject(id: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (patch: { name?: string | null; brand_notes?: string | null; style_notes?: string | null; default_profile_id?: string | null; export_root?: string | null }) => {
+    mutationFn: async (patch: { name?: string | null; brand_notes?: string | null; style_notes?: string | null; default_profile_id?: string | null; export_root?: string | null; describe_hint?: string | null }) => {
       const { data, error } = await api.PUT('/api/projects/{project_id}', { params: { path: { project_id: id } }, body: patch })
       if (error) throw error
       return data
@@ -233,11 +236,33 @@ export function useUploadAsset(projectId: string) {
   })
 }
 
-export function useUpdateAssetLabel(projectId: string) {
+type AssetKind = 'master_face' | 'reference' | 'product' | 'logo' | 'other'
+
+/** Change an asset's label (it becomes a person's) and/or its kind (a suggested label is rebuilt). */
+export function useUpdateAsset(projectId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ assetId, label }: { assetId: string; label: string }) => {
-      const { data, error } = await api.PATCH('/api/projects/{project_id}/assets/{asset_id}', { params: { path: { project_id: projectId, asset_id: assetId } }, body: { label } })
+    mutationFn: async ({ assetId, label, kind }: { assetId: string; label?: string; kind?: AssetKind }) => {
+      const { data, error } = await api.PATCH('/api/projects/{project_id}/assets/{asset_id}', {
+        params: { path: { project_id: projectId, asset_id: assetId } },
+        body: { label: label ?? null, kind: kind ?? null },
+      })
+      if (error) throw error
+      return data
+    },
+    onSuccess: () => invalidateProjects(qc, projectId),
+  })
+}
+
+/** Queue assets for background description: unlabelled ones, or given ids; ``force`` also redoes suggestions. */
+export function useDescribeAssets(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ assetIds, force = false }: { assetIds?: string[]; force?: boolean } = {}) => {
+      const { data, error } = await api.POST('/api/projects/{project_id}/assets/describe', {
+        params: { path: { project_id: projectId } },
+        body: { asset_ids: assetIds ?? null, force },
+      })
       if (error) throw error
       return data
     },

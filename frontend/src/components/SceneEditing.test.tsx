@@ -66,6 +66,7 @@ describe('editing scenes at any stage', () => {
     renderPanel(job())
     expect(screen.getByText(/apply on Regenerate keyframe/)).toBeInTheDocument()
     await user.selectOptions(screen.getByRole('combobox'), 'edit')
+    await user.click(screen.getByTestId('refs-0-choose'))
     await user.click(screen.getByTestId('refs-0-tower'))
     await user.click(screen.getByTestId('refs-0-bela'))
 
@@ -86,6 +87,7 @@ describe('editing scenes at any stage', () => {
     const user = userEvent.setup()
     renderPanel(job({ scenes: [scene(0, { keyframe_path: null, mode: 'edit' })] }))
     expect(screen.getByText(/the first 2 are used/)).toBeInTheDocument()
+    await user.click(screen.getByTestId('refs-0-choose'))
     for (const id of ['tower', 'bela', 'choc']) await user.click(screen.getByTestId(`refs-0-${id}`))
     expect(screen.getByText(/Only the first 2 are used/)).toBeInTheDocument()
   })
@@ -96,6 +98,7 @@ describe('editing scenes at any stage', () => {
     const user = userEvent.setup()
     renderPanel(job({ scenes: [scene(0, { keyframe_path: null, mode: 'edit' })] }))
     const file = new File(['img'], 'harbour.jpg', { type: 'image/jpeg' })
+    await user.click(screen.getByTestId('refs-0-choose'))
     await user.upload(screen.getByTestId('refs-0-upload'), file)
     await waitFor(() => expect(calls.some((c) => c.path === '/api/projects/p1/assets')).toBe(true))
     const form = calls.find((c) => c.path === '/api/projects/p1/assets')!.body as FormData
