@@ -62,7 +62,8 @@ export function SceneCard({ job, scene, children, assets = [] }: { job: JobPubli
             {faceLabel}
           </span>
         ) : <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500">no identity</span>)}
-        {scene.mode === 'edit' && <span className="rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-800">edit · {scene.references.length} ref</span>}
+        {scene.keyframe_source === 'user' && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-800" title="the keyframe is an image you chose, not generated">your image</span>}
+        {scene.mode === 'edit' && scene.keyframe_source !== 'user' && <span className="rounded bg-violet-100 px-1.5 py-0.5 text-xs text-violet-800">edit · {scene.references.length} ref</span>}
         {scene.post_paths.length > 0 && <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs">{scene.post_paths.length} post-step(s)</span>}
       </div>
       {children}

@@ -5,6 +5,7 @@ import { errorMessage } from '@/api/client'
 import type { AssetOut, DecisionOut, JobPublic, SceneEdit } from '@/api/types'
 import { AssetPicker } from '@/components/AssetPicker'
 import { useApprove, useRegenerateScene, useUpdateScenes } from '@/hooks/useJobs'
+import { useUploadAsset } from '@/hooks/useSetup'
 import { Button, ErrorBox } from '@/components/ui'
 
 type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null; chosen_variant: number | null }
@@ -24,25 +25,32 @@ function draftsFrom(job: JobPublic): Record<number, Draft> {
 }
 
 /**
- * Review + edit at an approval gate (and after the run): prompts are always
- * editable — edits to a scene whose artifact exists apply on "Regenerate
- * keyframe" / "Re-animate" — the variant picker chooses which candidate is the
- * scene's keyframe, and Approve continues the run.
+ * Review + edit whenever the job is not running: at an approval gate, after it is done,
+ * failed or stopped. Prompts, mode and references are always editable — on a scene whose
+ * keyframe exists they apply on "Regenerate keyframe" / "Re-animate" — the variant picker
+ * chooses which candidate is the scene's keyframe, "Use my image" replaces the keyframe
+ * with a project image (or an upload), and Approve continues the run.
  */
 export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job: JobPublic; decisions?: DecisionOut[]; onStarted?: () => void; assets?: AssetOut[] }) {
   const [drafts, setDrafts] = useState(() => draftsFrom(job))
+  const [picking, setPicking] = useState<number | null>(null)   // scene whose "use my image" picker is open
   const update = useUpdateScenes(job.id)
   const approve = useApprove(job.id)
   const regen = useRegenerateScene(job.id)
-  const editable = job.status === 'needs_approval' || job.status === 'done' || job.status === 'failed'
+  const upload = useUploadAsset(job.project_id ?? '')
+  const orphaned = job.status === 'running' && !job.active
+  const editable = job.status === 'needs_approval' || job.status === 'done' || job.status === 'failed' || job.status === 'cancelled' || orphaned
   if (!editable) return null
   const video = job.kind === 'video'
-  const busy = update.isPending || approve.isPending || regen.isPending
+  const busy = update.isPending || approve.isPending || regen.isPending || upload.isPending
+  const slots = job.edit_reference_slots ?? 0
   const faces = assets.filter((a) => a.kind === 'master_face')
   const refAssets = assets.filter((a) => a.kind !== 'master_face')
   /** identity edits (asset id, '' = none) only when the project has faces; else leave untouched */
   const identityEdit = (d: Draft): string | null => (faces.length ? (d.identity_asset_id ?? '') : null)
-  const refsEdit = (d: Draft): string[] | null => (refAssets.length ? d.reference_asset_ids : null)
+  // A job in a project picks references as assets (and can upload new ones); otherwise as file paths.
+  const assetRefs = refAssets.length > 0 || !!job.project_id
+  const refsEdit = (d: Draft): string[] | null => (assetRefs ? d.reference_asset_ids : null)
 
   const regenerate = (index: number, what: 'keyframe' | 'video') => {
     const d = drafts[index]
@@ -60,7 +68,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
         animation_prompt: video ? d.animation_prompt : null,
         animation_negative: video ? d.animation_negative : null,
         mode: what === 'keyframe' ? d.mode : null,
-        references: what === 'keyframe' && !refAssets.length ? d.references.split('\n').map((x) => x.trim()).filter(Boolean) : null,
+        references: what === 'keyframe' && !assetRefs ? d.references.split('\n').map((x) => x.trim()).filter(Boolean) : null,
         reference_asset_ids: what === 'keyframe' ? refsEdit(d) : null,
         identity_asset_id: job.face_swap ? identityEdit(d) : null,   // a changed face applies to the redone swap
         apply_suggestion: false, // suggestions are applied in the editable prompt above
@@ -69,6 +77,26 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   }
 
   const set = (i: number, patch: Partial<Draft>) => setDrafts((d) => ({ ...d, [i]: { ...d[i], ...patch } }))
+
+  /** Upload a file as a project reference asset, then hand its id on. */
+  const uploadThen = (file: File, then: (assetId: string) => void) =>
+    upload.mutate({ file, kind: 'reference' }, { onSuccess: (a: AssetOut) => then(a.id) })
+
+  const chooseImage = (index: number, assetId: string) => {
+    const scene = job.scenes.find((x) => x.index === index)
+    const name = assets.find((a) => a.id === assetId)
+    const label = name ? (name.label || name.name) : 'the uploaded image'
+    const redo = video
+      ? 'Its face swap and clip are discarded and the keyframes gate reopens for review.'
+      : 'Its face swap and post-steps are redone.'
+    const swapNote = job.face_swap && scene?.identity
+      ? '\n\nThe scene\'s face will be swapped onto the image — choose identity "none" first to keep it as is.'
+      : ''
+    if (!confirm(`Use “${label}” as the keyframe of scene ${index + 1}? ${redo}${swapNote}`)) return
+    setPicking(null)
+    regen.mutate({ index, body: { what: 'keyframe', keyframe_asset_id: assetId, apply_suggestion: false } },
+      { onSuccess: () => onStarted?.() })
+  }
 
   /** Evaluator fix suggestions for a scene: every logged retry + the stored verdict, newest first. */
   const suggestionsFor = (index: number): string[] => {
@@ -99,7 +127,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
         animation_prompt: video ? d.animation_prompt : null,
         animation_negative: video ? d.animation_negative : null,
         mode: s.keyframe_path ? null : d.mode,
-        references: s.keyframe_path || refAssets.length ? null : d.references.split('\n').map((x) => x.trim()).filter(Boolean),
+        references: s.keyframe_path || assetRefs ? null : d.references.split('\n').map((x) => x.trim()).filter(Boolean),
         reference_asset_ids: s.keyframe_path ? null : refsEdit(d),
         identity_asset_id: job.face_swap && !s.video_path ? identityEdit(d) : null,
         chosen_variant: d.chosen_variant,
@@ -128,7 +156,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
           )}
         </div>
       </div>
-      <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : null} />
+      <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : upload.error ? errorMessage(upload.error) : null} />
       {update.isSuccess && !update.isPending && <p className="text-xs text-green-700">Saved.</p>}
 
       <div className="grid gap-3 md:grid-cols-2">
@@ -170,20 +198,42 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                   <p className="text-amber-700">Applying appends “Correction: …” to the keyframe prompt, exactly like the automatic retry; edit it, then Regenerate keyframe.</p>
                 </div>
               )}
-              {!locked && (
-                <div className="grid grid-cols-[8rem_1fr] gap-2">
-                  <label className="block"><span className="text-xs text-neutral-500">mode</span>
-                    <select value={d.mode} onChange={(e) => set(s.index, { mode: e.target.value as 't2i' | 'edit' })} className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1"><option value="t2i">t2i</option><option value="edit">edit</option></select></label>
-                  {d.mode === 'edit' && !refAssets.length && (
-                    <label className="block"><span className="text-xs text-neutral-500">reference paths (one per line)</span>
-                      <textarea value={d.references} onChange={(e) => set(s.index, { references: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs" /></label>
-                  )}
-                  {d.mode === 'edit' && refAssets.length > 0 && (
-                    <div><span className="text-xs text-neutral-500">references (project assets, in order)</span>
-                      <AssetPicker assets={refAssets} selected={d.reference_asset_ids} multi onChange={(ids) => set(s.index, { reference_asset_ids: ids })} testId={`refs-${s.index}`} /></div>
+              {job.project_id && (
+                <div>
+                  <button type="button" disabled={busy} className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-50"
+                    data-testid={`use-image-${s.index}`} onClick={() => setPicking(picking === s.index ? null : s.index)}>
+                    {picking === s.index ? 'Cancel' : 'Use my image as keyframe…'}
+                  </button>
+                  {picking === s.index && (
+                    <div className="mt-1">
+                      <span className="text-xs text-neutral-500">pick a project image or upload one — it replaces the keyframe (not generated, not evaluated)</span>
+                      <AssetPicker assets={assets} selected={[]} disabled={busy} testId={`keyframe-image-${s.index}`}
+                        onChange={(ids) => ids[0] && chooseImage(s.index, ids[0])}
+                        onUpload={(f) => uploadThen(f, (id) => chooseImage(s.index, id))} uploading={upload.isPending} />
+                    </div>
                   )}
                 </div>
               )}
+              <div className="grid grid-cols-[8rem_1fr] gap-2">
+                {locked && <span className="col-span-2 text-xs text-neutral-500">mode &amp; references apply on Regenerate keyframe</span>}
+                <label className="block"><span className="text-xs text-neutral-500">mode</span>
+                  <select value={d.mode} onChange={(e) => set(s.index, { mode: e.target.value as 't2i' | 'edit' })} className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1"><option value="t2i">t2i</option><option value="edit">edit</option></select></label>
+                {d.mode === 'edit' && !assetRefs && (
+                  <label className="block"><span className="text-xs text-neutral-500">reference paths (one per line)</span>
+                    <textarea value={d.references} onChange={(e) => set(s.index, { references: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs" /></label>
+                )}
+                {d.mode === 'edit' && assetRefs && (
+                  <div><span className="text-xs text-neutral-500">references (project assets, in order){slots > 0 ? ` — the first ${slots} are used` : ''}</span>
+                    <AssetPicker assets={refAssets} selected={d.reference_asset_ids} multi onChange={(ids) => set(s.index, { reference_asset_ids: ids })} testId={`refs-${s.index}`}
+                      onUpload={job.project_id ? (f) => uploadThen(f, (id) => setDrafts((all) => ({
+                        ...all, [s.index]: { ...all[s.index], reference_asset_ids: [...all[s.index].reference_asset_ids, id] },
+                      }))) : undefined}
+                      uploading={upload.isPending} />
+                    {slots > 0 && d.reference_asset_ids.length > slots && (
+                      <p className="text-xs text-amber-700">Only the first {slots} are used by the edit workflow; the rest are ignored.</p>
+                    )}</div>
+                )}
+              </div>
               {job.face_swap && faces.length > 0 && (
                 <div>
                   <span className="text-xs text-neutral-500">identity for the face swap{s.video_path ? ' (applies on Re-animate)' : s.swapped_path ? ' (applies on Animate)' : ''}</span>
@@ -205,7 +255,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                   {s.variants.map((v, i) => (
                     <label key={i} className="flex items-center gap-1 rounded border border-neutral-300 px-2 py-1">
                       <input type="radio" name={`variant-${s.index}`} checked={d.chosen_variant === i} onChange={() => set(s.index, { chosen_variant: i })} />
-                      v{i + 1}{v.verdict ? ` · ${v.verdict.score}/10` : ''}
+                      {v.source === 'user' ? 'your image' : `v${i + 1}`}{v.verdict ? ` · ${v.verdict.score}/10` : ''}
                     </label>
                   ))}
                 </fieldset>

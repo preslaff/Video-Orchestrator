@@ -3,9 +3,10 @@
 import type { AssetOut } from '@/api/types'
 
 /** Thumbnails of project assets to pick from. Single choice (with a "none" tile) or an
- * ordered multi-selection (click order = priority, shown as a badge). */
+ * ordered multi-selection (click order = priority, shown as a badge). With ``onUpload``
+ * a last tile adds a file from the computer (the caller turns it into a project asset). */
 export function AssetPicker({
-  assets, selected, onChange, multi = false, none, testId, disabled = false,
+  assets, selected, onChange, multi = false, none, testId, disabled = false, onUpload, uploading = false,
 }: {
   assets: AssetOut[]
   selected: string[]
@@ -14,6 +15,8 @@ export function AssetPicker({
   none?: string            // label of the "none" tile (single mode)
   testId?: string
   disabled?: boolean
+  onUpload?: (file: File) => void
+  uploading?: boolean
 }) {
   const toggle = (id: string) => {
     if (disabled) return
@@ -50,6 +53,15 @@ export function AssetPicker({
           </button>
         )
       })}
+      {onUpload && (
+        <label className={`flex aspect-square cursor-pointer flex-col items-center justify-center rounded border border-dashed text-xs ${disabled || uploading ? 'border-neutral-200 text-neutral-400' : 'border-neutral-400 text-neutral-600 hover:border-neutral-700'}`}
+          title="add an image from your computer to the project">
+          <span className="text-lg leading-none">+</span>
+          {uploading ? 'Uploading…' : 'Upload…'}
+          <input type="file" accept="image/*" className="sr-only" disabled={disabled || uploading} data-testid={testId ? `${testId}-upload` : undefined}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = '' }} />
+        </label>
+      )}
     </div>
   )
 }

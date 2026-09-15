@@ -3,7 +3,7 @@
 import { use } from 'react'
 import Link from 'next/link'
 import { errorMessage } from '@/api/client'
-import { useDecisions, useExportStatus, useJob, useProvenance, useRetry, useRunExport } from '@/hooks/useJobs'
+import { useDecisions, useExportStatus, useJob, useProvenance, useRunExport } from '@/hooks/useJobs'
 import { useJobEvents } from '@/hooks/useJobEvents'
 import { useProject } from '@/hooks/useSetup'
 import { Button, Card, Collapsible, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '@/components/ui'
@@ -14,12 +14,12 @@ import { SceneCard, ScenePrompts } from '@/components/SceneGrid'
 import { GatePanel } from '@/components/GatePanel'
 import { ProgressPanel } from '@/components/ProgressPanel'
 import { AssemblePanel } from '@/components/AssemblePanel'
+import { RunControls } from '@/components/RunControls'
 
 export default function JobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const job = useJob(id)
   const decisions = useDecisions(id)
-  const retry = useRetry(id)
   const provenance = useProvenance(id)
   const exp = useExportStatus(id)
   const project = useProject(job.data?.project_id ?? undefined)
@@ -28,13 +28,16 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   // `end`, and a later approve/regenerate reconnects (onStarted) or resumes (active).
   const live = useJobEvents(id, {
     enabled: !!job.data,
-    active: job.data?.status === 'running' || job.data?.status === 'pending',
+    // An orphaned "running" job (server restarted) has no segment to stream.
+    active: (job.data?.status === 'running' && !!job.data?.active) || job.data?.status === 'pending',
   })
 
   if (job.isLoading) return <Empty>Loading…</Empty>
   if (job.error || !job.data) return <ErrorBox message={errorMessage(job.error, 'Job not found')} />
   const j = job.data
   const profile = j.profile as { aspect?: string; name?: string } | null
+  // Persisted as running but no segment in this server: what a restart mid-run leaves behind.
+  const orphaned = j.status === 'running' && !j.active
 
   return (
     <div className="space-y-4">
@@ -52,18 +55,12 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         )}
         <span className="text-xs text-neutral-500" title={j.profile_id ?? undefined}>{j.kind} · {profile?.name ?? j.profile_id ?? 'default profile'} · {profile?.aspect ?? '16:9'} · seed {j.seed || 'random'}</span>
         {j.pending_gate && <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-900">waiting for approval: {j.pending_gate}</span>}
-        {j.status === 'failed' && (
-          <Button variant="primary" disabled={retry.isPending} title="resume from the persisted state: finished scenes are kept, the failed step runs again"
-            onClick={() => retry.mutate(undefined, { onSuccess: () => live.reconnect() })}>
-            {retry.isPending ? 'Resuming…' : 'Retry'}
-          </Button>
-        )}
+        <RunControls job={j} onStarted={live.reconnect} />
       </div>
-      <ErrorBox message={retry.error ? errorMessage(retry.error) : null} />
 
       <ProgressPanel job={j} events={live.events} connected={live.connected} />
 
-      {(j.status === 'needs_approval' || j.status === 'done' || j.status === 'failed') && j.scenes.length > 0 && (
+      {(j.status === 'needs_approval' || j.status === 'done' || j.status === 'failed' || j.status === 'cancelled' || orphaned) && j.scenes.length > 0 && (
         <GatePanel key={`${j.id}-${j.status}-${j.updated_at}`} job={j} decisions={decisions.data} onStarted={live.reconnect} assets={project.data?.assets} />
       )}
 

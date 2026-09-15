@@ -19,7 +19,7 @@ const STATUS = {
   profile_fps: 16, record: null,
 }
 
-function mockFetch() {
+function mockFetch(status: Record<string, unknown> = STATUS) {
   const posts: unknown[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
@@ -28,9 +28,9 @@ function mockFetch() {
     if (new URL(raw, 'http://x').pathname === '/api/jobs/j1/assemble') {
       if (method === 'POST') {
         posts.push(init?.body ? JSON.parse(String(init.body)) : await (input as Request).json())
-        return json({ ...STATUS, active: true })
+        return json({ ...status, active: true })
       }
-      return json(STATUS)
+      return json(status)
     }
     return json({ error: { code: 'not_found', message: raw } }, 404)
   }))
@@ -94,5 +94,13 @@ describe('AssemblePanel speed', () => {
     await user.click(screen.getByText('natural'))
     expect(screen.getByTestId('total')).toHaveTextContent('8.19s')
     expect(screen.getByTestId('speed-0')).toHaveTextContent('1×')
+  })
+
+  it('says so when the clips changed since the assembly', async () => {
+    const record = { path: '/out/assembly_v1.mp4', url: '/media/assembly_v1.mp4', created_at: '', duration: 8.2, n_clips: 3, spec: {},
+      ok: true, error: '', size_bytes: 10, fps: 16, width: 832, height: 480, exists: true, exported: false, version: 1, clips: [], stale: true }
+    mockFetch({ ...STATUS, record })
+    renderPanel()
+    expect(await screen.findByTestId('assembly-stale')).toHaveTextContent('Clips changed since this assembly')
   })
 })

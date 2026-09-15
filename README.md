@@ -263,6 +263,24 @@ suggestions for the scene are listed with an **Apply to prompt** button, which a
 `Correction: …` exactly as the automatic retry does. "Re-animate" keeps the keyframe and renders
 the clip again. The export folder is rebuilt when the job completes again.
 
+### Stopping, editing and resuming
+
+**Stop** on a running job ends it at the next safe point, as **stopped**; finished work is kept.
+The ComfyUI step in progress is withdrawn, while a Gemma call finishes first. **Resume** then
+continues from the saved state. A job that was running when the server restarted shows as *not
+running* and resumes the same way.
+
+Scenes are editable whenever the job isn't running: at either gate, and after it is done, failed or
+stopped.
+- **Mode (t2i/edit) and references**: pick project assets in priority order, or **Upload…** a file
+  from the scene card, which adds it to the project. On a scene that already has a keyframe, they
+  apply on *Regenerate keyframe*. The picker says how many references the edit workflow uses.
+- **Use my image as keyframe**: pick or upload an image. It is cropped to the job's frame size and
+  replaces the keyframe without being generated or evaluated. The generated candidates stay
+  selectable, and the gate reopens for review as for a regenerated keyframe.
+- **Changing the face or the keyframe variant** discards what was built on the old one.
+- **The Assemble panel says when clips changed** since the last assembly.
+
 ### Stills and variants
 
 A stills profile generates `variants` keyframes per scene with distinct seeds, evaluates each,

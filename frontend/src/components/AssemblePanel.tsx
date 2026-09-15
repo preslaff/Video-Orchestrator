@@ -235,6 +235,7 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
               <div className="text-xs text-neutral-500">{fmtTime(rec.created_at)}</div>
               <code className="block break-all rounded bg-neutral-100 px-2 py-1 text-xs">{rec.path}</code>
               {!rec.exists && <div className="text-xs text-amber-700">The file is no longer on disk — re-assemble.</div>}
+              {rec.exists && rec.stale && <div className="text-xs text-amber-700" data-testid="assembly-stale">Clips changed since this assembly — assemble again to include them.</div>}
             </div>
           </div>
         ) : (

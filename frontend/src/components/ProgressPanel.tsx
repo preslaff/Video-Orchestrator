@@ -58,10 +58,12 @@ function elapsed(from: number | undefined): string {
 
 export function ProgressPanel({ job, events, connected }: { job: JobPublic; events: JobEvent[]; connected: boolean }) {
   const p = deriveProgress(job, events)
-  const running = job.status === 'running' || job.status === 'pending'
+  const orphaned = job.status === 'running' && !job.active
+  const running = (job.status === 'running' && !orphaned) || job.status === 'pending'
   useTick(running)
   const paused = job.status === 'needs_approval'
   const failed = job.status === 'failed'
+  const stopped = job.status === 'cancelled'
   const lastError = failed ? [...events].reverse().find((e) => e.type === 'error') : undefined
 
   return (
@@ -92,19 +94,22 @@ export function ProgressPanel({ job, events, connected }: { job: JobPublic; even
       </div>
       <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-500">
         <span>{p.units.done}/{p.units.total} steps · {p.percent}%</span>
-        <span>{running ? (connected ? '● live' : '○ reconnecting…') : job.status === 'done' ? 'finished' : paused ? 'paused at a gate' : failed ? 'failed' : job.status}</span>
+        <span>{running ? (job.stopping ? 'stopping…' : connected ? '● live' : '○ reconnecting…') : job.status === 'done' ? 'finished' : paused ? 'paused at a gate' : failed ? 'failed' : stopped ? 'stopped' : orphaned ? 'not running' : job.status}</span>
       </div>
 
       {running && (
         <p className="mt-3 flex items-start gap-2 text-sm">
           <span className="mt-1 inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-900" />
           <span>
+            {job.stopping && <span className="mr-1 font-medium">Stopping — finishing the current step.</span>}
             {p.step ? describeStep(p.step) : p.current === 'storyboard' ? describeStep({ type: 'step', step: 'storyboard', job_id: job.id }) : 'Working…'}
             {p.step?._at ? <span className="ml-2 font-mono text-xs text-neutral-500">{elapsed(p.step._at)}</span> : null}
           </span>
         </p>
       )}
-      {failed && <p className="mt-3 text-sm text-red-700">Failed{lastError ? `: ${String(lastError.error)}` : ''}. Check the decision log and the API log; the job can be re-run from the CLI.</p>}
+      {failed && <p className="mt-3 text-sm text-red-700">Failed{lastError ? `: ${String(lastError.error)}` : ''}. Check the decision log and the API log, then Retry — finished scenes are kept.</p>}
+      {stopped && <p className="mt-3 text-sm text-neutral-700">Stopped. Edit any scene below, then Resume — finished work is kept.</p>}
+      {orphaned && <p className="mt-3 text-sm text-amber-800">Not running: the server restarted while this job ran. Resume continues from its saved state.</p>}
 
       {job.scenes.length > 0 && (
         <ul className="mt-3 flex flex-wrap gap-1.5">

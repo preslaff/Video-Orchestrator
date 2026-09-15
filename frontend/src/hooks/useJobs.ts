@@ -116,6 +116,19 @@ export function useRetry(id: string) {
   })
 }
 
+/** Ask a running job to stop at its next safe point; it ends `cancelled` ("stopped"). */
+export function useStopJob(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data, error } = await api.POST('/api/jobs/{job_id}/stop', { params: { path: { job_id: id } } })
+      if (error) throw error
+      return data
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: keys.job(id) }),
+  })
+}
+
 export function useUpdateScenes(id: string) {
   const qc = useQueryClient()
   return useMutation({

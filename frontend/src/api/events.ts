@@ -14,6 +14,7 @@ export const EVENT_TYPES = [
   'export',
   'assembly',
   'error',
+  'stopping',
   'end',
 ] as const
 

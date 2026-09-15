@@ -14,7 +14,7 @@ const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) 
 const base = (over: Partial<JobPublic>): JobPublic => ({
   id: 'j', idea: 'x', style: '', master_face: '', autonomy: 'semi', n_scenes: 2, seed: 0, max_attempts: 2, evaluate: true,
   face_swap: true, mode: 't2i', reference_images: [], project_id: null, profile_id: null, profile: null, kind: 'video',
-  export: null, status: 'running', created_at: '', updated_at: '', scenes: [], pending_gate: null, active: false, stopping: false, edit_reference_slots: 2, ...over,
+  export: null, status: 'running', created_at: '', updated_at: '', scenes: [], pending_gate: null, active: true, stopping: false, edit_reference_slots: 2, ...over,
 })
 
 describe('deriveProgress', () => {
@@ -53,6 +53,19 @@ describe('ProgressPanel', () => {
     expect(screen.getByText('● live')).toBeInTheDocument()
     render(<ProgressPanel job={base({ status: 'needs_approval', scenes: [scene(0, { keyframe_path: '/a', status: 'keyframe' })] })} events={[]} connected={false} />)
     expect(screen.getByText(/Videos · awaiting approval/)).toBeInTheDocument()
+  })
+  it('shows stopping, stopped and orphaned jobs', () => {
+    const { unmount } = render(<ProgressPanel job={base({ stopping: true })} events={[]} connected />)
+    expect(screen.getByText('stopping…')).toBeInTheDocument()
+    expect(screen.getByText(/Stopping — finishing the current step/)).toBeInTheDocument()
+    unmount()
+    const stopped = render(<ProgressPanel job={base({ status: 'cancelled', active: false })} events={[]} connected={false} />)
+    expect(screen.getByText('stopped')).toBeInTheDocument()
+    expect(screen.getByText(/Edit any scene below, then Resume/)).toBeInTheDocument()
+    stopped.unmount()
+    render(<ProgressPanel job={base({ status: 'running', active: false })} events={[]} connected={false} />)
+    expect(screen.getByText('not running')).toBeInTheDocument()
+    expect(screen.queryByText('● live')).toBeNull()
   })
   it('describes steps', () => {
     expect(describeStep({ type: 'step', step: 'keyframe', index: 2, variant: 1, variants: 4, attempt: 2, max_attempts: 2, job_id: 'j' }))
