@@ -220,8 +220,13 @@ submit, so later edits never change a running job.
 | edit_workflow | which `edit` workflow reference-locked keyframes use |
 | post_steps | ordered `postprocess` workflows with parameters |
 
-Built-ins (YAML in `vorch/profiles_builtin/`, read-only): `cinematic_16x9` (1024×576 → 832×480,
-49 frames), `social_9x16` (576×1024 → 480×832), `social_1x1` (768×768 → 640×640),
+The two sizes are **different things**: the first is the still Klein renders, the second the size
+Wan animates it at (Wan downscales and centre-crops the still itself). They only have to share an
+aspect — and the clip, the smaller one, is what you end up with. See
+[Delivery](#delivery-what-you-actually-ship) for turning that into a file you can publish.
+
+Built-ins (YAML in `vorch/profiles_builtin/`, read-only): `cinematic_16x9` (still 1024×576, clip
+832×480, 49 frames), `social_9x16` (still 576×1024, clip 480×832), `social_1x1` (768×768 → 640×640),
 `stills_16x9` (4 variants, no video). Clone one to change anything (for example `length: 81`
 for longer clips). Aspect presets compute the sizes; any `W:H` works.
 
@@ -375,9 +380,9 @@ The **Assemble** panel joins selected clips of a job into one video:
 - set a **target duration per clip** to change its speed (0.25×–4×); slow motion repeats
   frames or, with **smooth slow motion**, uses motion-compensated interpolation (much slower to
   render);
-- optionally change the fps or use the NVENC encoder.
+- pick a **delivery target** (below), the fps, grain, or the NVENC encoder.
 
-ffmpeg renders once (h264, the clips' size, no audio) to `assembly_v<N>.mp4` next to the clips,
+ffmpeg renders once (h264) to `assembly_v<N>.mp4` next to the clips,
 with a provenance sidecar. **Every assembly is kept as a version**: play any, *Use for export*
 (it becomes `assembly.mp4` in the export folder), or delete it. From the CLI:
 
@@ -390,6 +395,36 @@ python -m vorch assemble <job_id> --select 2                          # make v2 
 
 `cuts.json` mirrors the API spec, e.g.
 `{"items":[{"scene_index":0,"target_seconds":6.1},{"scene_index":1}],"cuts":[{"transition":"wipeleft","duration":0.3}],"smooth":true}`.
+
+### Delivery: what you actually ship
+
+A 16 GB card animates at 480p, so a job's clips are 832×480 (or 480×832) at 16 fps. **The assembly
+is where that becomes a deliverable file** — it is the only step that re-encodes. Choose a target in
+the Assemble panel, or `--delivery` on the CLI:
+
+| target | size | fps | for |
+|---|---|---|---|
+| `source` | the clips' own | the clips' own | an edit in an NLE, or when you want the raw thing |
+| `master_1080` | the job's aspect at 1080 (1920×1080 / 1080×1920 / 1080×1080) | 24 | a film master, a screener, Vimeo |
+| `social_1080` | same | 30 | Reels / TikTok / Shorts — **they accept 23–60 fps, so 16 is out of range** |
+| `youtube_1080` | 1920×1080 | 30 | landscape upload |
+
+Every target is scaled with lanczos, tagged Rec.709, and encoded H.264 High with a 2-second closed
+GOP and `+faststart` — what the platforms ask for. **Grain** (light/medium) is worth turning on for
+an upscale: it hides the plastic look that scaling 480p to 1080p produces. `--max-mbps` caps the
+bitrate when a platform publishes a ceiling (Instagram documents 25 Mbps).
+
+```bash
+python -m vorch assemble <job_id> --delivery master_1080 --grain 1
+python -m vorch assemble <job_id> --width 1080 --height 1920 --fps 30   # explicit beats the target
+```
+
+**Upscaling is a ceiling, not a fix.** Sharpness comes from the clips. When a shot matters, render
+it natively bigger instead: the cloud profiles do 1280×720 (Wan fp16, ≈$1.50/clip) or 1280×704 @ 24
+fps **with audio** (LTX-2.5, ≈$0.28/clip once warm) — see [`docs/modal-backend.md`](docs/modal-backend.md).
+Two things worth knowing: platforms re-encode and serve ≤1080p, so 4K buys nothing for
+Reels/TikTok/Shorts; and a 1080p master is a native 2K fit, so festivals do not reject a short for
+being finished at 1080p.
 
 ## Command line
 

@@ -17,6 +17,12 @@ const STATUS = {
   default_spec: { items: [0, 1, 2].map((i) => ({ scene_index: i, source: 'final' })), cuts: [{ transition: 'fade', duration: 0.5 }, { transition: 'fade', duration: 0.5 }], fps: null, width: null, height: null, crf: 18, encoder: 'libx264' },
   clips: [0, 1, 2].map((i) => ({ scene_index: i, source: 'final', path: `/v${i}.mp4`, url: `/media/v${i}.mp4`, duration: 3.062, fps: 16, width: 832, height: 480, has_raw: false })),
   profile_fps: 16, record: null,
+  deliveries: [
+    { id: 'source', label: 'Source (as rendered)', width: null, height: null, fps: null, note: '832×480 @ 16 fps' },
+    { id: 'master_1080', label: 'Master 1080p', width: 1920, height: 1080, fps: 24, note: 'for an edit or a screening' },
+    { id: 'social_1080', label: 'Social 1080', width: 1920, height: 1080, fps: 30, note: 'Reels / TikTok / Shorts' },
+  ],
+  delivery: 'master_1080',
 }
 
 function mockFetch(status: Record<string, unknown> = STATUS) {
@@ -103,4 +109,32 @@ describe('AssemblePanel speed', () => {
     renderPanel()
     expect(await screen.findByTestId('assembly-stale')).toHaveTextContent('Clips changed since this assembly')
   })
+
+  it('masters to a delivery target and says when that is an upscale', async () => {
+    const posts = mockFetch()
+    renderPanel()
+    const user = userEvent.setup()
+    await screen.findByText('Scene 1')
+    expect(screen.getByLabelText('delivery')).toHaveValue('master_1080')   // the job's default
+    expect(screen.getByTestId('delivery-format')).toHaveTextContent('1920×1080 @ 24 fps')
+    expect(screen.getByTestId('delivery-upscale')).toHaveTextContent('upscaled 2.3× from 832×480')
+
+    await user.selectOptions(screen.getByLabelText('grain'), '1')
+    await user.click(screen.getByTestId('assemble'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toMatchObject({ delivery: 'master_1080', grain: 1, fps: null })
+  })
+
+  it('keeps the clips\' own format when Source is chosen', async () => {
+    const posts = mockFetch()
+    renderPanel()
+    const user = userEvent.setup()
+    await screen.findByText('Scene 1')
+    await user.selectOptions(screen.getByLabelText('delivery'), 'source')
+    expect(screen.queryByTestId('delivery-upscale')).toBeNull()
+    await user.click(screen.getByTestId('assemble'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toMatchObject({ delivery: 'source' })
+  })
 })
+

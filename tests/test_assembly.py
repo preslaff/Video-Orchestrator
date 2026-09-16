@@ -275,3 +275,83 @@ def test_unknown_clips_or_failed_records_are_never_flagged(tmp_path):
     assert assembly.is_stale(job, rec) is False  # no clips and no sidecar: cannot know
     failed = assembly.AssemblyRecord(path="x", created_at="", ok=False, clips=["/nope"], spec={"items": [{"scene_index": 0}]})
     assert assembly.is_stale(job, failed) is False
+
+
+# --- delivery (what the assembly is mastered as) ---------------------------------------
+
+
+def _job_profile(tmp_path, w, h, fps=16, purpose="cinematic", n=2, aspect="16:9"):
+    job = _job(tmp_path, n=n)
+    job.profile = {"purpose": purpose, "aspect": aspect,
+                   "video": {"width": w, "height": h, "fps": fps, "length": 49}}
+    if aspect is None:
+        job.profile.pop("aspect")
+    return job
+
+
+def test_delivery_targets_follow_the_jobs_aspect(tmp_path):
+    landscape = {d.id: d for d in assembly.deliveries(_job_profile(tmp_path, 832, 480))}
+    assert (landscape["master_1080"].width, landscape["master_1080"].height) == (1920, 1080)
+    assert landscape["master_1080"].fps == 24 and landscape["youtube_1080"].fps == 30
+    assert landscape["source"].width is None  # source keeps whatever the clips are
+
+    vertical = {d.id: d for d in assembly.deliveries(_job_profile(tmp_path, 480, 832, aspect="9:16"))}
+    assert (vertical["social_1080"].width, vertical["social_1080"].height) == (1080, 1920)
+    assert "youtube_1080" not in vertical  # a landscape target for a vertical film is noise
+
+    square = {d.id: d for d in assembly.deliveries(_job_profile(tmp_path, 640, 640, aspect="1:1"))}
+    assert (square["master_1080"].width, square["master_1080"].height) == (1080, 1080)
+
+    # No declared aspect (a legacy job): fall back to the clip's own ratio.
+    legacy = {d.id: d for d in assembly.deliveries(_job_profile(tmp_path, 832, 480, aspect=None))}
+    assert (legacy["master_1080"].width, legacy["master_1080"].height) == (1920, 1108)
+
+
+def test_social_jobs_default_to_a_social_target_and_others_to_a_master(tmp_path):
+    assert assembly.delivery_default(_job_profile(tmp_path, 480, 832, purpose="social_vertical",
+                                                  aspect="9:16")) == "social_1080"
+    assert assembly.delivery_default(_job_profile(tmp_path, 832, 480)) == "master_1080"
+    bare = _job(tmp_path)
+    bare.profile = None
+    assert assembly.delivery_default(bare) == "source"   # nothing to resolve an aspect from
+
+
+def test_target_format_resolves_a_delivery_and_an_explicit_size_still_wins(tmp_path):
+    job = _job_profile(tmp_path, 480, 832, aspect="9:16")
+    first = MediaInfo(480, 832, 16.0, 3.0, 49, "h264", False)
+
+    spec, _ = assembly.resolve(job, {"delivery": "social_1080"})
+    assert assembly.target_format(job, spec, first) == (30.0, 1080, 1920)
+
+    spec, _ = assembly.resolve(job, {"delivery": "social_1080", "width": 720, "height": 1280, "fps": 25})
+    assert assembly.target_format(job, spec, first) == (25.0, 720, 1280)
+
+    spec, _ = assembly.resolve(job, {})            # unchanged default: the clips' own format
+    assert assembly.target_format(job, spec, first) == (16.0, 480, 832)
+
+    with pytest.raises(ValueError, match="unknown delivery"):
+        assembly.resolve(job, {"delivery": "imax"})
+
+
+def test_status_offers_the_targets_with_the_default(tmp_path):
+    st = assembly.status(_job_profile(tmp_path, 832, 480))
+    assert [d["id"] for d in st["deliveries"]] == ["source", "master_1080", "social_1080", "youtube_1080"]
+    assert st["delivery"] == "master_1080"
+
+
+def test_the_record_and_spec_carry_the_mastering_settings(tmp_path, monkeypatch):
+    job = _job_profile(tmp_path, 832, 480)
+    spec, paths = assembly.resolve(job, {"delivery": "master_1080", "grain": 1.5, "max_mbps": 25})
+    assert spec.to_dict()["delivery"] == "master_1080" and spec.to_dict()["grain"] == 1.5
+    seen = {}
+
+    def fake_assemble(clips, cuts, dest, **kw):
+        seen.update(kw)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"mp4")
+        return dest
+
+    monkeypatch.setattr(media, "assemble", fake_assemble)
+    assembly.run(job, spec, paths)
+    assert seen["size"] == (1920, 1080) and seen["fps"] == 24.0
+    assert seen["grain"] == 1.5 and seen["max_mbps"] == 25

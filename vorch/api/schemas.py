@@ -274,6 +274,9 @@ class AssemblySpecIn(BaseModel):
     encoder: Literal["libx264", "h264_nvenc"] = "libx264"
     smooth: bool = False   # motion-interpolated slow motion for clips slower than 1x (much slower render)
     audio: bool = False    # keep the clips' audio (LTX clips have a track; Wan clips are silent -> ignored)
+    delivery: str = "source"          # a target id from AssemblyStatus.deliveries; width/height/fps win
+    max_mbps: float | None = None     # cap the bitrate for a platform ceiling
+    grain: float = 0.0                # 0-3: light film grain (an upscale reads plastic without it)
 
 
 class AssemblyClipOut(BaseModel):
@@ -325,6 +328,17 @@ class AssemblyVersionOut(BaseModel):
     current: bool = False
 
 
+class DeliveryOut(BaseModel):
+    """A delivery target for this job: what the assembly is rendered as."""
+
+    id: str
+    label: str
+    width: int | None = None     # null = keep the clips' own size
+    height: int | None = None
+    fps: int | None = None
+    note: str = ""
+
+
 class AssemblyStatus(BaseModel):
     available: bool
     active: bool
@@ -332,5 +346,7 @@ class AssemblyStatus(BaseModel):
     default_spec: dict
     clips: list[AssemblyClipOut]
     profile_fps: int | None = None
+    deliveries: list[DeliveryOut] = []   # what this job can be mastered as
+    delivery: str = "source"             # the preselected one
     record: AssemblyRecordOut | None = None
     versions: list[AssemblyVersionOut] = []

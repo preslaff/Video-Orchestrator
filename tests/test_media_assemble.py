@@ -203,3 +203,56 @@ def test_assemble_keeps_audio_when_asked(tmp_path):
     assert info.has_audio and abs(info.frame_duration - 3.5) < 0.2
     both_silent = media.assemble([b, b], [Cut("fade", 0.5)], tmp_path / "bs.mp4", audio=True)
     assert not media.probe(both_silent).has_audio                  # no track anywhere -> silent file
+
+
+# --- mastering: the assembly is where a delivery format is made ------------------------
+
+
+def test_the_scaler_is_lanczos_and_grain_is_opt_in():
+    graph, _ = media.build_filtergraph([2, 2], [Cut("fade", 0.5)], width=1920, height=1080, fps=24)
+    assert "scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos" in graph
+    assert "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" in graph   # letterbox, never stretch
+    assert "noise=" not in graph
+
+    grainy, _ = media.build_filtergraph([2], [], width=1920, height=1080, fps=24, grain=1.5)
+    assert "noise=alls=1.5:allf=t+u" in grainy
+    clamped, _ = media.build_filtergraph([2], [], width=64, height=64, fps=8, grain=99)
+    assert "noise=alls=3:allf=t+u" in clamped
+
+
+@needs_ffmpeg
+def test_masters_small_clips_to_a_real_1080p_file(tmp_path):
+    """The whole point: 480p-class clips delivered as a 1080p master."""
+    clips = [_clip(tmp_path, "a", "teal", size="320x180", rate=16),
+             _clip(tmp_path, "b", "maroon", size="320x180", rate=16)]
+    dest = tmp_path / "master.mp4"
+    media.assemble(clips, [Cut("fade", 0.5)], dest, fps=24, size=(1920, 1080), grain=1)
+    info = media.probe(dest)
+    assert (info.width, info.height) == (1920, 1080) and round(info.fps) == 24
+
+    out = subprocess.check_output([
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+        "stream=profile,color_primaries,color_transfer,color_space,pix_fmt", "-of", "default=nw=1", str(dest),
+    ]).decode()
+    assert "profile=High" in out and "pix_fmt=yuv420p" in out
+    assert out.count("bt709") == 3          # primaries, transfer and matrix are tagged, not guessed
+
+
+@needs_ffmpeg
+def test_encoder_flags_carry_gop_and_an_optional_bitrate_cap(tmp_path, monkeypatch):
+    seen = {}
+    real_run = subprocess.run
+
+    def spy(cmd, *a, **kw):
+        if cmd and cmd[0] == "ffmpeg" and "-filter_complex" in cmd:
+            seen["cmd"] = cmd
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(media.subprocess, "run", spy)
+    clip = _clip(tmp_path, "c", "navy", size="64x64", rate=8)
+    media.assemble([clip], [], tmp_path / "out.mp4", fps=24, size=(64, 64), max_mbps=25)
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("-g") + 1] == "48"                     # a closed GOP of 2 s at 24 fps
+    assert cmd[cmd.index("-keyint_min") + 1] == "24"
+    assert cmd[cmd.index("-maxrate") + 1] == "25M" and cmd[cmd.index("-bufsize") + 1] == "50M"
+    assert "+faststart" in cmd[cmd.index("-movflags") + 1]      # streams without a full download

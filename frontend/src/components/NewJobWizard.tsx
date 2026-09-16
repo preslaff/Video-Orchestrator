@@ -12,12 +12,14 @@ import { clipSeconds } from '@/lib/wan'
 
 const STEPS = ['Project', 'Profile', 'Brief', 'Review'] as const
 
+/** The two sizes are different things — the still Klein renders, and the size Wan animates it at
+ *  — so name them instead of showing "A → B", which reads as a conversion. */
 export function profileSummary(p: OutputProfile): string {
-  const kf = `${p.keyframe?.width ?? '?'}×${p.keyframe?.height ?? '?'}`
+  const kf = `still ${p.keyframe?.width ?? '?'}×${p.keyframe?.height ?? '?'}`
   if (p.kind === 'stills') return `stills · ${p.aspect} · ${kf} · ${p.stills?.variants ?? 1} variant(s)`
   const v = p.video
   if (!v) return `video · ${p.aspect} · ${kf}`
-  return `video · ${p.aspect} · ${kf} → ${v.width}×${v.height} · ${v.length} frames @ ${v.fps} fps (~${clipSeconds(v.length, v.fps)}s)`
+  return `video · ${p.aspect} · ${kf} · clip ${v.width}×${v.height} · ${v.length} frames @ ${v.fps} fps (~${clipSeconds(v.length, v.fps)}s)`
 }
 
 export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: string } = {}) {

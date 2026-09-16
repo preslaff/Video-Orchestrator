@@ -210,7 +210,9 @@ def build_readme(job: Job, manifest: dict, files: list[str]) -> str:
             f"s{i + 1:02d} {it.get('speed', 1):g}×" for i, it in enumerate(spec.get("items", []))
             if it.get("target_seconds") is not None
         )
-        lines.append(f"assembly.mp4: {asm.get('n_clips')} clip(s), {asm.get('duration')}s"
+        mastered = (f", {asm.get('width')}x{asm.get('height')} @ {asm.get('fps'):g} fps"
+                    if asm.get("width") and asm.get("fps") else "")
+        lines.append(f"assembly.mp4: {asm.get('n_clips')} clip(s), {asm.get('duration')}s{mastered}"
                      + (f", cuts: {cuts}" if cuts else "") + (f", speed: {speeds}" if speeds else "")
                      + (" (smooth slow motion)" if spec.get("smooth") else "")
                      + " (xfade transitions, re-assemble from the job page)")
@@ -221,11 +223,17 @@ def build_readme(job: Job, manifest: dict, files: list[str]) -> str:
         lines.append(f"  {s['index'] + 1:02d}. {s['description'] or s['keyframe_prompt'][:70]}"
                      + (f"  — identity: {ident['label']}" if ident else ""))
     lines += ["", "files:"] + [f"  {f}" for f in files]
+    # The raw clips keep their rendered size; assembly.mp4 may have been mastered to a bigger one.
+    mode_w = video.get("width") or kf.get("width")
+    mode_h = video.get("height") or kf.get("height")
+    mode_fps = video.get("fps") or asm.get("fps") or 24
     lines += [
         "",
         "Shotcut: File > Open (or drag the folder) — clips are named in scene order;",
-        f"set the project Video Mode to match ({video.get('width', kf.get('width'))}x"
-        f"{video.get('height', kf.get('height'))}, {video.get('fps', 25)} fps) before adding to the timeline.",
+        f"set the project Video Mode to match the clips ({mode_w}x{mode_h}, {mode_fps:g} fps) "
+        "before adding to the timeline."
+        + (f" assembly.mp4 is mastered at {asm.get('width')}x{asm.get('height')} @ {asm.get('fps'):g} fps."
+           if asm.get("ok") and asm.get("width") else ""),
         "Audio, titles and colour are done in the NLE; assembly.mp4 (when present) is a ready cut with",
         "the chosen transitions. Regenerate a scene or re-assemble from the job page if needed.",
         "manifest.json / provenance/ hold the prompts + seeds that made every file.",

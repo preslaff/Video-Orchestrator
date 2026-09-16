@@ -761,6 +761,18 @@ export interface components {
              * @default false
              */
             audio: boolean;
+            /**
+             * Delivery
+             * @default source
+             */
+            delivery: string;
+            /** Max Mbps */
+            max_mbps?: number | null;
+            /**
+             * Grain
+             * @default 0
+             */
+            grain: number;
         };
         /** AssemblyStatus */
         AssemblyStatus: {
@@ -778,6 +790,16 @@ export interface components {
             clips: components["schemas"]["AssemblyClipOut"][];
             /** Profile Fps */
             profile_fps?: number | null;
+            /**
+             * Deliveries
+             * @default []
+             */
+            deliveries: components["schemas"]["DeliveryOut"][];
+            /**
+             * Delivery
+             * @default source
+             */
+            delivery: string;
             record?: components["schemas"]["AssemblyRecordOut"] | null;
             /**
              * Versions
@@ -976,6 +998,27 @@ export interface components {
             reason: string;
             /** Created At */
             created_at: string;
+        };
+        /**
+         * DeliveryOut
+         * @description A delivery target for this job: what the assembly is rendered as.
+         */
+        DeliveryOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Width */
+            width?: number | null;
+            /** Height */
+            height?: number | null;
+            /** Fps */
+            fps?: number | null;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
         };
         /** DescribeRequest */
         DescribeRequest: {

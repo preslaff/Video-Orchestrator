@@ -187,6 +187,10 @@ def test_assemble_command(cli_store, tmp_path, monkeypatch, capsys):
     assert cli.main(["assemble", job.id, "--list"]) == 0
     assert "* v1" in capsys.readouterr().out and "wipeleft 0.3s" in capsys.readouterr().out or True
 
+    assert cli.main(["assemble", job.id, "--delivery", "master_1080", "--grain", "1.5"]) == 0
+    assert seen["spec"]["delivery"] == "master_1080" and seen["spec"]["grain"] == 1.5
+    capsys.readouterr()
+
     job.status = JobStatus.NEEDS_APPROVAL
     cli_store.save_job(job)
     assert cli.main(["assemble", job.id]) == 1  # not done, no --force

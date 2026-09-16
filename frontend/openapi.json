@@ -2354,6 +2354,27 @@
             "type": "boolean",
             "title": "Audio",
             "default": false
+          },
+          "delivery": {
+            "type": "string",
+            "title": "Delivery",
+            "default": "source"
+          },
+          "max_mbps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Mbps"
+          },
+          "grain": {
+            "type": "number",
+            "title": "Grain",
+            "default": 0.0
           }
         },
         "type": "object",
@@ -2399,6 +2420,19 @@
               }
             ],
             "title": "Profile Fps"
+          },
+          "deliveries": {
+            "items": {
+              "$ref": "#/components/schemas/DeliveryOut"
+            },
+            "type": "array",
+            "title": "Deliveries",
+            "default": []
+          },
+          "delivery": {
+            "type": "string",
+            "title": "Delivery",
+            "default": "source"
           },
           "record": {
             "anyOf": [
@@ -2835,6 +2869,63 @@
           "created_at"
         ],
         "title": "DecisionOut"
+      },
+      "DeliveryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "fps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fps"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "DeliveryOut",
+        "description": "A delivery target for this job: what the assembly is rendered as."
       },
       "DescribeRequest": {
         "properties": {

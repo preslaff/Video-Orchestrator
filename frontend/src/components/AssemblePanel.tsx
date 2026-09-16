@@ -55,6 +55,10 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
   const audio = seeded.audio
   const update = (patch: Partial<Draft>) => setDraft({ ...seeded, ...patch })
   const [encoder, setEncoder] = useState<'libx264' | 'h264_nvenc'>('libx264')
+  // What the assembly is mastered as. The clips are rendered small (a 16 GB card animates at
+  // 480p); this is where they become a file you can deliver.
+  const [delivery, setDelivery] = useState<string | null>(null)
+  const [grain, setGrain] = useState(0)
 
   const selected = rows.filter((r) => r.selected)
   const targetFps = fps || status.data?.profile_fps || clips[0]?.fps || 16
@@ -105,6 +109,9 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
       encoder,
       smooth,
       audio,
+      delivery: target?.id ?? 'source',
+      grain,
+      max_mbps: null,
     }
     run.mutate({ spec, force: job.status !== 'done' }, { onSuccess: () => onStarted?.() })
   }
@@ -113,10 +120,45 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
   if (status.error) return <ErrorBox message={errorMessage(status.error)} />
   if (!status.data?.available) return <Empty>No clips to assemble yet.</Empty>
   const size = clipSize(job)
+  const deliveryTargets = status.data.deliveries ?? []
+  const target = deliveryTargets.find((d) => d.id === (delivery ?? status.data?.delivery)) ?? deliveryTargets[0]
+  const outW = target?.width ?? size?.[0] ?? clips[0]?.width ?? null
+  const outH = target?.height ?? size?.[1] ?? clips[0]?.height ?? null
+  const outFps = fps || target?.fps || status.data.profile_fps || clips[0]?.fps || null
+  const upscale = outW && size?.[0] ? outW / size[0] : 1
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-neutral-600">Tick the clips, order them, choose a transition for every cut. The result is re-encoded once (h264, same size and fps as the clips) and lands in the export folder as <code className="rounded bg-neutral-100 px-1">assembly.mp4</code>.</p>
+      <p className="text-sm text-neutral-600">Tick the clips, order them, choose a transition for every cut. The result is re-encoded once and lands in the export folder as <code className="rounded bg-neutral-100 px-1">assembly.mp4</code>.</p>
+
+      {deliveryTargets.length > 1 && (
+        <div className="flex flex-wrap items-center gap-3 rounded border border-neutral-200 bg-neutral-50 p-2 text-sm">
+          <label className="flex items-center gap-1 text-neutral-700">deliver as
+            <select aria-label="delivery" value={target?.id ?? 'source'} onChange={(e) => setDelivery(e.target.value)}
+              className="rounded border border-neutral-300 bg-white px-2 py-1">
+              {deliveryTargets.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+            </select>
+          </label>
+          <span data-testid="delivery-format" className="text-neutral-600">
+            {outW && outH ? `${outW}×${outH}` : 'the clips\' size'}{outFps ? ` @ ${outFps} fps` : ''}
+          </span>
+          {upscale > 1.05 && (
+            <span className="text-xs text-amber-800" data-testid="delivery-upscale">
+              upscaled {upscale.toFixed(1)}× from {size?.[0]}×{size?.[1]} — sharpness comes from the clips, not the scaler
+            </span>
+          )}
+          {target?.note && <span className="text-xs text-neutral-500">{target.note}</span>}
+          <label className="flex items-center gap-1 text-neutral-600" title="light film grain; an upscale reads plastic without it">
+            grain
+            <select aria-label="grain" value={grain} onChange={(e) => setGrain(Number(e.target.value))}
+              className="rounded border border-neutral-300 bg-white px-2 py-1">
+              <option value={0}>none</option>
+              <option value={1}>light</option>
+              <option value={2}>medium</option>
+            </select>
+          </label>
+        </div>
+      )}
 
       <ol className="space-y-2">
         {rows.map((r, i) => {
@@ -194,7 +236,7 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
         <span data-testid="total"><b>{selected.length}</b> clip(s) · <b>{fmtSeconds(total)}</b> total</span>
         <label className="flex items-center gap-1 text-neutral-600">fps
           <select value={fps} onChange={(e) => setFps(e.target.value === '' ? '' : Number(e.target.value))} className="rounded border border-neutral-300 bg-white px-2 py-1">
-            <option value="">clips ({status.data.profile_fps ?? clips[0]?.fps ?? '?'})</option>
+            <option value="">{target?.fps ? `delivery (${target.fps})` : `clips (${status.data.profile_fps ?? clips[0]?.fps ?? '?'})`}</option>
             {[24, 25, 30].map((f) => <option key={f} value={f}>{f}</option>)}
           </select>
         </label>

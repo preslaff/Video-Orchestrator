@@ -373,7 +373,7 @@ def validate_cuts(durations: list[float], cuts: list[Cut], *, fps: float) -> Non
 
 
 def _norm(width: int, height: int, fps: float, *, speed: float = 1.0, smooth: bool = False,
-          target: float | None = None) -> str:
+          target: float | None = None, grain: float = 0.0) -> str:
     """Per-input normalisation: size, (retimed) rate, format, timebase.
 
     speed 1 keeps the historical chain byte for byte. Other speeds retime with
@@ -383,9 +383,13 @@ def _norm(width: int, height: int, fps: float, *, speed: float = 1.0, smooth: bo
     the exact retimed length so xfade offsets stay frame-exact.
     """
     fps_s = f"{fps:g}"
-    head = (f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+    # lanczos, not ffmpeg's default: delivering a 480p clip as 1080p is an upscale, where the
+    # scaler is visible. `decrease` never stretches; a mismatched clip is padded, not cropped.
+    head = (f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1")
-    tail = "format=yuv420p,settb=AVTB,setpts=PTS-STARTPTS"
+    # Light grain last: an upscale smooths AI footage into plastic, and a little noise reads as film.
+    noise = f",noise=alls={max(0.0, min(grain, 3.0)):g}:allf=t+u" if grain else ""
+    tail = f"format=yuv420p{noise},settb=AVTB,setpts=PTS-STARTPTS"
     if speed == 1.0:
         return f"{head},fps={fps_s},{tail}"
     pad = f"tpad=stop_mode=clone:stop_duration={TPAD_SECONDS:g}"
@@ -456,7 +460,7 @@ def build_audio_filtergraph(
 
 def build_filtergraph(
     durations: list[float], cuts: list[Cut], *, width: int, height: int, fps: float,
-    speeds: list[float] | None = None, smooth: bool = False,
+    speeds: list[float] | None = None, smooth: bool = False, grain: float = 0.0,
 ) -> tuple[str, str]:
     """``(filter_complex, output_label)`` for ``xfade`` chains joined by ``concat`` at hard cuts.
 
@@ -468,7 +472,7 @@ def build_filtergraph(
     speeds = list(speeds) if speeds else [1.0] * n
     durations = retimed(durations, speeds)
     parts = [
-        f"[{i}:v]{_norm(width, height, fps, speed=speeds[i], smooth=smooth, target=durations[i])}[v{i}]"
+        f"[{i}:v]{_norm(width, height, fps, speed=speeds[i], smooth=smooth, target=durations[i], grain=grain)}[v{i}]"
         for i in range(n)
     ]
     groups: list[list[int]] = [[0]]
@@ -516,6 +520,8 @@ def assemble(
     speeds: list[float] | None = None,
     smooth: bool = False,
     audio: bool = False,
+    max_mbps: float | None = None,
+    grain: float = 0.0,
 ) -> Path:
     """Join ``clips`` into one h264 mp4 with per-cut xfade transitions.
 
@@ -541,7 +547,7 @@ def assemble(
     rt = retimed(durations, speeds)
     validate_cuts(rt, cuts, fps=fps)
     graph, out = build_filtergraph(durations, cuts, width=width, height=height, fps=fps,
-                                   speeds=speeds, smooth=smooth)
+                                   speeds=speeds, smooth=smooth, grain=grain)
     with_audio = bool(audio) and any(i.has_audio for i in infos)
     if with_audio:
         agraph, aout = build_audio_filtergraph(durations, cuts, [i.has_audio for i in infos], speeds=speeds)
@@ -562,6 +568,13 @@ def assemble(
         cmd += ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
     else:
         cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+    # Delivery hygiene: High profile, a closed GOP of 2 s (what platforms ask for) and an explicit
+    # Rec.709 tag, so a master is not left for the player to guess at.
+    gop = max(1, round(fps * 2))
+    cmd += ["-profile:v", "high", "-level", "4.2", "-bf", "2", "-g", str(gop), "-keyint_min", str(round(fps)),
+            "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709"]
+    if max_mbps:   # a platform ceiling (Instagram documents 25 Mbps); CRF alone is usually under it
+        cmd += ["-maxrate", f"{max_mbps:g}M", "-bufsize", f"{max_mbps * 2:g}M"]
     cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", str(part)]
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=timeout)

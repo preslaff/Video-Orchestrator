@@ -625,6 +625,14 @@ def _cmd_assemble(args) -> int:
             spec_dict["encoder"] = args.encoder
         if args.fps:
             spec_dict["fps"] = args.fps
+        if args.delivery:
+            spec_dict["delivery"] = args.delivery
+        if args.width:
+            spec_dict["width"] = args.width
+        if args.height:
+            spec_dict["height"] = args.height
+        if args.grain:
+            spec_dict["grain"] = args.grain
         spec, paths = assembly.resolve(job, spec_dict)
         print(f"assembling {len(paths)} clip(s): " + ", ".join(
             c.transition if c.transition == "none" else f"{c.transition} {c.duration:g}s" for c in spec.cuts))
@@ -634,7 +642,10 @@ def _cmd_assemble(args) -> int:
         if not rec.ok:
             print(f"error: {rec.error}", file=sys.stderr)
             return 1
-        print(f"v{rec.version}: {rec.path}  ({rec.duration}s, {rec.width}x{rec.height} @ {rec.fps:g} fps)")
+        src = assembly.profile_video(job)
+        upscaled = src.get("width") and rec.width and rec.width > int(src["width"])
+        note = f"  (upscaled from {src['width']}x{src['height']})" if upscaled else ""
+        print(f"v{rec.version}: {rec.path}  ({rec.duration}s, {rec.width}x{rec.height} @ {rec.fps:g} fps){note}")
         if job.export or job.status is JobStatus.DONE:
             project = projects.load(store, job.project_id) if job.project_id else None
             er = export.export_job(store, job, project)
@@ -920,6 +931,11 @@ def build_parser() -> argparse.ArgumentParser:
     asm.add_argument("--spec", default=None, help="JSON file with {items, cuts, fps, ...} (overrides --transition/--duration)")
     asm.add_argument("--fps", type=int, default=None)
     asm.add_argument("--encoder", default=None, choices=["libx264", "h264_nvenc"])
+    asm.add_argument("--delivery", default=None,
+                     help="master to a delivery target: source | master_1080 | social_1080 | youtube_1080")
+    asm.add_argument("--width", type=int, default=None, help="explicit delivery width (overrides --delivery)")
+    asm.add_argument("--height", type=int, default=None, help="explicit delivery height")
+    asm.add_argument("--grain", type=float, default=None, help="0-3: light film grain, hides upscaling")
     asm.add_argument("--force", action="store_true", help="assemble even if the job is not done")
     asm.add_argument("--list", action="store_true", help="list the job's assembly versions (* = current)")
     asm.add_argument("--select", type=int, default=None, metavar="N", help="make version N the current assembly")

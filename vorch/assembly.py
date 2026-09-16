@@ -27,6 +27,99 @@ DEFAULT_CUT_SECONDS = 0.5
 MAX_CUT_SECONDS = 5.0
 SOURCES = ("final", "raw")
 
+# --- delivery ---------------------------------------------------------------------------
+#
+# What the clips are *rendered* at is the profile's business (832x480 on a 16 GB card).
+# What you *deliver* is a different question: a 1080p master, or a vertical file a platform
+# will accept. The assembly is the one place that re-encodes, so mastering happens here —
+# ffmpeg scales every clip to the target anyway (`media._norm`), it just needed a sensible
+# target and a way to pick it.
+DELIVERY_SOURCE = "source"
+DELIVERY_DEFAULT_FPS = {"master_1080": 24, "social_1080": 30, "youtube_1080": 30}
+_SHORT_SIDE_1080 = 1080
+
+
+@dataclass(frozen=True)
+class Delivery:
+    """A delivery target resolved for one job: what the assembly is rendered as."""
+
+    id: str
+    label: str
+    width: int | None       # None = keep the clips' own size
+    height: int | None
+    fps: int | None
+    note: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def _aspect_of(job: Job, clip_w: int, clip_h: int) -> tuple[float, float]:
+    """The job's intended aspect. The profile's declared `aspect` ("16:9") wins over the clip's
+    pixel ratio, because the render sizes are rounded to the model's multiple — 832×480 is a
+    16:9 job that would otherwise master to 1920×1108."""
+    declared = str((job.profile or {}).get("aspect") or "")
+    if ":" in declared:
+        try:
+            w, h = (float(x) for x in declared.split(":", 1))
+            if w > 0 and h > 0:
+                return w, h
+        except ValueError:
+            pass
+    return float(clip_w), float(clip_h)
+
+
+def _fit_1080(aspect_w: float, aspect_h: float) -> tuple[int, int]:
+    """That aspect at the 1080 class, both sides even (h264 wants 4:2:0-friendly sizes)."""
+    if aspect_w > aspect_h:
+        width = 1920
+        height = round(width * aspect_h / aspect_w)
+    elif aspect_h > aspect_w:
+        height = 1920
+        width = round(height * aspect_w / aspect_h)
+    else:
+        width = height = _SHORT_SIDE_1080
+    return max(2, width - width % 2), max(2, height - height % 2)
+
+
+def deliveries(job: Job) -> list[Delivery]:
+    """The delivery targets offered for this job, resolved against its aspect."""
+    pv = profile_video(job)
+    w, h = int(pv.get("width") or 0), int(pv.get("height") or 0)
+    src_fps = pv.get("fps")
+    out = [Delivery(DELIVERY_SOURCE, "Source (as rendered)", None, None, None,
+                    f"{w}×{h} @ {src_fps} fps" if w and h else "the clips' own size and rate")]
+    if not (w and h):
+        return out
+    mw, mh = _fit_1080(*_aspect_of(job, w, h))
+    vertical = h > w
+    out.append(Delivery("master_1080", "Master 1080p", mw, mh, DELIVERY_DEFAULT_FPS["master_1080"],
+                        "for an edit, a screening or a festival screener"))
+    out.append(Delivery("social_1080", "Social 1080", mw, mh, DELIVERY_DEFAULT_FPS["social_1080"],
+                        "Reels / TikTok / Shorts accept 23–60 fps" + ("" if vertical else "; they prefer 9:16")))
+    if not vertical:
+        out.append(Delivery("youtube_1080", "YouTube 1080p", 1920, 1080, DELIVERY_DEFAULT_FPS["youtube_1080"],
+                            "landscape upload"))
+    return out
+
+
+def delivery_default(job: Job) -> str:
+    """Which target is preselected: social purposes deliver for a feed, everything else a master."""
+    purpose = str((job.profile or {}).get("purpose") or "")
+    ids = {d.id for d in deliveries(job)}
+    if purpose.startswith("social") and "social_1080" in ids:
+        return "social_1080"
+    return "master_1080" if "master_1080" in ids else DELIVERY_SOURCE
+
+
+def delivery_by_id(job: Job, delivery_id: str | None) -> Delivery | None:
+    if not delivery_id:
+        return None
+    found = next((d for d in deliveries(job) if d.id == delivery_id), None)
+    if found is None:
+        raise ValueError(f"unknown delivery {delivery_id!r}")
+    return found
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -51,6 +144,9 @@ class AssemblySpec:
     encoder: str = "libx264"
     smooth: bool = False            # motion-interpolated slow motion (slow render)
     audio: bool = False             # keep the clips' audio (LTX clips carry a track; Wan clips do not)
+    delivery: str = DELIVERY_SOURCE  # a target from `deliveries()`; width/height/fps override it
+    max_mbps: float | None = None   # cap the bitrate (a platform ceiling); None = CRF alone
+    grain: float = 0.0              # 0-3: light film grain, which upscaled 480p needs to not read plastic
 
     @property
     def speeds(self) -> list[float]:
@@ -62,6 +158,7 @@ class AssemblySpec:
             "cuts": [asdict(c) for c in self.cuts],
             "fps": self.fps, "width": self.width, "height": self.height,
             "crf": self.crf, "encoder": self.encoder, "smooth": self.smooth, "audio": self.audio,
+            "delivery": self.delivery, "max_mbps": self.max_mbps, "grain": self.grain,
         }
 
     @classmethod
@@ -73,6 +170,9 @@ class AssemblySpec:
             fps=d.get("fps"), width=d.get("width"), height=d.get("height"),
             crf=int(d.get("crf", 18)), encoder=str(d.get("encoder", "libx264")),
             smooth=bool(d.get("smooth", False)), audio=bool(d.get("audio", False)),
+            delivery=str(d.get("delivery") or DELIVERY_SOURCE),
+            max_mbps=float(d["max_mbps"]) if d.get("max_mbps") else None,
+            grain=float(d.get("grain", 0) or 0),
         )
 
 
@@ -307,9 +407,17 @@ def resolve(job: Job, spec: dict | None) -> tuple[AssemblySpec, list[Path]]:
         v = d.get(key)
         if v is not None and (not isinstance(v, int) or v <= 0):
             raise ValueError(f"{key} must be a positive integer")
+    grain = float(d.get("grain", 0) or 0)
+    if not 0 <= grain <= 3:
+        raise ValueError("grain must be within 0..3")
+    max_mbps = float(d["max_mbps"]) if d.get("max_mbps") else None
+    if max_mbps is not None and not 0 < max_mbps <= 200:
+        raise ValueError("max_mbps must be within 0 and 200")
+    delivery = str(d.get("delivery") or DELIVERY_SOURCE)
+    delivery_by_id(job, delivery if delivery != DELIVERY_SOURCE else None)   # ValueError -> 400
     resolved = AssemblySpec(items=items, cuts=cuts, fps=d.get("fps"), width=d.get("width"),
                             height=d.get("height"), crf=crf, encoder=encoder, smooth=bool(d.get("smooth", False)),
-                            audio=bool(d.get("audio", False)))
+                            audio=bool(d.get("audio", False)), delivery=delivery, max_mbps=max_mbps, grain=grain)
     # Speeds from target durations, then transition lengths vs the RETIMED clip lengths.
     infos = [media.probe(p) for p in paths]
     for it, info in zip(items, infos):
@@ -346,10 +454,12 @@ def clip_infos(job: Job) -> list[dict]:
 
 
 def target_format(job: Job, spec: AssemblySpec, first: media.MediaInfo) -> tuple[float, int, int]:
+    """fps and size of the rendered assembly: explicit spec > delivery target > profile > first clip."""
     pv = profile_video(job)
-    fps = float(spec.fps or pv.get("fps") or first.fps or config.WAN_FPS)
-    width = int(spec.width or pv.get("width") or first.width)
-    height = int(spec.height or pv.get("height") or first.height)
+    d = delivery_by_id(job, spec.delivery if spec.delivery != DELIVERY_SOURCE else None)
+    fps = float(spec.fps or (d.fps if d else None) or pv.get("fps") or first.fps or config.WAN_FPS)
+    width = int(spec.width or (d.width if d else None) or pv.get("width") or first.width)
+    height = int(spec.height or (d.height if d else None) or pv.get("height") or first.height)
     return fps, width, height
 
 
@@ -373,7 +483,8 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
                   "seconds": round(total, 2), "fps": fps, "width": width, "height": height,
                   "smooth": spec.smooth, "audio": spec.audio, "retimed": sum(1 for sp in speeds if sp != 1.0)})
         media.assemble(paths, spec.cuts, dest, fps=fps, size=(width, height), crf=spec.crf,
-                       encoder=spec.encoder, speeds=speeds, smooth=spec.smooth, audio=spec.audio)
+                       encoder=spec.encoder, speeds=speeds, smooth=spec.smooth, audio=spec.audio,
+                       max_mbps=spec.max_mbps, grain=spec.grain)
         info = media.probe(dest)
         rec = AssemblyRecord(
             path=str(dest), created_at=created, duration=round(info.frame_duration, 3), n_clips=len(paths),
@@ -437,6 +548,8 @@ def status(job: Job, *, active: bool = False) -> dict:
         "default_spec": default_spec(job).to_dict(),
         "clips": clip_infos(job),
         "profile_fps": pv.get("fps"),
+        "deliveries": [d.to_dict() for d in deliveries(job)],
+        "delivery": delivery_default(job),
         "record": rec_out,
         "versions": versions,
     }

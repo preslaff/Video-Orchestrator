@@ -628,7 +628,8 @@ def test_update_scenes_assigns_identity_and_references_by_asset_id(client):
 def _done_video_job(client, n=2, **extra):
     from vorch.state import Scene, new_job
 
-    job = new_job(idea="asm", kind="video", profile={"video": {"width": 832, "height": 480, "fps": 16, "length": 49}}, **extra)
+    extra.setdefault("profile", {"video": {"width": 832, "height": 480, "fps": 16, "length": 49}})
+    job = new_job(idea="asm", kind="video", **extra)
     job.status = JobStatus.DONE
     job.scenes = []
     for i in range(n):
@@ -865,3 +866,33 @@ def test_scene_versions_are_public_and_deletable(client):
     assert client.delete(f"/api/jobs/{job.id}/scenes/0/versions/nope").status_code == 400
     assert client.delete(f"/api/jobs/{job.id}/scenes/9/versions/k1").status_code == 404
     assert client.delete(f"/api/jobs/nope/scenes/0/versions/k1").status_code == 404
+
+
+def test_assembly_status_offers_delivery_targets_and_accepts_one(client, stub_media, monkeypatch):
+    from vorch import assembly as assembly_mod
+
+    job = _done_video_job(client, profile={"purpose": "social_vertical", "aspect": "9:16",
+                                           "video": {"width": 480, "height": 832, "fps": 16, "length": 49}})
+    st = client.get(f"/api/jobs/{job.id}/assemble").json()
+    by_id = {d["id"]: d for d in st["deliveries"]}
+    assert st["delivery"] == "social_1080"                       # a vertical social job masters for a feed
+    assert (by_id["social_1080"]["width"], by_id["social_1080"]["height"]) == (1080, 1920)
+    assert by_id["social_1080"]["fps"] == 30 and by_id["source"]["width"] is None
+
+    import time
+
+    seen = {}
+    monkeypatch.setattr(assembly_mod, "run", lambda j, s, p, **kw: seen.update(spec=s) or assembly_mod.AssemblyRecord(
+        path="/out/assembly_v1.mp4", created_at="t", duration=6.0, n_clips=2, spec=s.to_dict(),
+        fps=30, width=1080, height=1920, version=1))
+    r = client.post(f"/api/jobs/{job.id}/assemble", json={"delivery": "social_1080", "grain": 1})
+    assert r.status_code == 200
+    for _ in range(50):          # the render runs in the background
+        if "spec" in seen:
+            break
+        time.sleep(0.02)
+    assert seen["spec"].delivery == "social_1080" and seen["spec"].grain == 1
+
+    bad = client.post(f"/api/jobs/{job.id}/assemble", json={"delivery": "imax"})
+    assert bad.status_code == 400 and "unknown delivery" in bad.json()["error"]["message"]
+    assert client.post(f"/api/jobs/{job.id}/assemble", json={"grain": 9}).status_code == 400

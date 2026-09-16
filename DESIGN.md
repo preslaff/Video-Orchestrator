@@ -411,3 +411,27 @@ keeping references.
 - API: `SceneEdit.chosen_variant_id` / `chosen_clip_id` (the index-based `chosen_variant` still
   works), `ScenePublic.clips`, `active` on each version, and
   `DELETE /api/jobs/{id}/scenes/{n}/versions/{version_id}`.
+
+## 17. Delivery (mastering at assembly)
+
+Generation size is a *capacity* decision (832×480×49 is the tested 16 GB budget, `formats.py:44`);
+delivery is a *distribution* decision. They were the same number until now: `target_format` took
+the profile's `video` block, so `assembly.mp4` came out at the clips' own size and 16 fps — below
+the frame rate Instagram and TikTok accept, and a quarter of the pixels a 1080p master needs.
+
+The assembly is the only step that re-encodes, so mastering lives there:
+
+- `assembly.deliveries(job)` resolves targets against the job's **declared aspect** (`profile.aspect`
+  beats the clip's pixel ratio: 832×480 is a 16:9 job that would otherwise master to 1920×1108);
+  `delivery_default` sends social purposes to `social_1080` and everything else to `master_1080`.
+- `target_format` precedence: explicit `width/height/fps` → delivery target → profile → first clip.
+- `media._norm` scales with **lanczos** (this is an upscale now) and pads rather than stretches;
+  optional `grain` is the last filter, because an upscale of AI footage reads plastic without it.
+- `media.assemble` tags the output Rec.709 and encodes H.264 High with a 2 s closed GOP, plus an
+  optional `max_mbps` cap for a platform ceiling.
+- Export keeps hardlinking; its README now reports the mastered size for `assembly.mp4` and the
+  clips' size as the NLE's Video Mode.
+
+Deliberately **not** done: an upscaler in ComfyUI (SeedVR2/Topaz-class) or forcing cloud rendering.
+Both raise real detail where ffmpeg cannot, and both are the answer when a shot matters — the
+profile's `video.workflow` already switches to the 720p/LTX cloud workflows.
