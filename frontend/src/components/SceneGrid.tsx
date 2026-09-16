@@ -49,7 +49,8 @@ export function SceneCard({ job, scene, children, assets = [] }: { job: JobPubli
       ) : (
         <MediaThumb url={scene.swapped_url ?? scene.keyframe_url} width={kf?.[0]} height={kf?.[1]} alt="keyframe" />
       )}
-      {!stills && <MediaThumb url={scene.video_url} video width={clip?.[0]} height={clip?.[1]} />}
+      {!stills && <MediaThumb url={scene.video_url} video width={clip?.[0]} height={clip?.[1]}
+        poster={scene.swapped_url ?? scene.keyframe_url} />}
 
       <div className="flex flex-wrap items-center gap-2">
         <VerdictChip v={scene.keyframe_verdict} />

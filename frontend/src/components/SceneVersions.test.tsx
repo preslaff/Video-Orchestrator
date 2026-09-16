@@ -73,6 +73,13 @@ describe('scene media and its versions', () => {
     expect(screen.getByTestId('keyframe-cell-0').parentElement).not.toHaveClass('sm:grid-cols-2')
   })
 
+  it('shows a clip as its keyframe until it loads, never as a black box', () => {
+    renderPanel(job())
+    const clipEl = document.querySelector('video')!
+    expect(clipEl).toHaveAttribute('poster', '/media/kf2.png')
+    expect(clipEl).toHaveAttribute('preload', 'metadata')  // "none" paints nothing until play
+  })
+
   it('marks the active version and selects another one straight away', async () => {
     const calls: Call[] = []
     stub(calls)

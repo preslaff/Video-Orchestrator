@@ -319,7 +319,8 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                 </div>
                 {video && (
                   <div className="space-y-2" data-testid={`clip-cell-${s.index}`}>
-                    <MediaThumb url={s.video_url} video width={clip?.[0]} height={clip?.[1]} />
+                    <MediaThumb url={s.video_url} video width={clip?.[0]} height={clip?.[1]}
+                      poster={s.swapped_url ?? s.keyframe_url} />
                     {locked && (
                       <Button disabled={busy} onClick={() => regenerate(s.index, 'video')}
                         title={s.video_path ? 'keep the keyframe, render the clip again with the current animation prompt' : 'keep the keyframe, render the (missing) clip with the current animation prompt'}>
