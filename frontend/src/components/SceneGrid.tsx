@@ -3,7 +3,7 @@
 import type { AssetOut, JobPublic, ScenePublic, VerdictOut } from '@/api/types'
 import { MediaThumb } from '@/components/MediaThumb'
 
-function profileSizes(job: JobPublic): { kf: [number, number] | null; clip: [number, number] | null } {
+export function profileSizes(job: JobPublic): { kf: [number, number] | null; clip: [number, number] | null } {
   const p = job.profile as { keyframe?: { width?: number; height?: number }; video?: { width?: number; height?: number } | null } | null
   const kf = p?.keyframe?.width && p.keyframe.height ? ([p.keyframe.width, p.keyframe.height] as [number, number]) : null
   const clip = p?.video?.width && p.video.height ? ([p.video.width, p.video.height] as [number, number]) : kf

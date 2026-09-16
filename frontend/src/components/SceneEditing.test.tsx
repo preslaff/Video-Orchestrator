@@ -10,7 +10,7 @@ const scene = (index: number, extra: Record<string, unknown> = {}) => ({
   keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', references: [],
   keyframe_path: '/kf.png', keyframe_url: '/media/kf.png', keyframe_verdict: null, video_path: '/v.mp4', video_url: '/media/v.mp4',
   video_verdict: null, swapped_path: null, swapped_url: null, swap_verdict: null, variants: [], raw_video_path: '/v.mp4', post_paths: [],
-  identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], keyframe_source: 'generated', keyframe_asset_id: null,
+  identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], keyframe_source: 'generated', keyframe_asset_id: null, clips: [],
   ...extra,
 })
 const job = (over: Record<string, unknown> = {}) => ({

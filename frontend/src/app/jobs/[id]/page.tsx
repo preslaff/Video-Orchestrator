@@ -60,8 +60,9 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
 
       <ProgressPanel job={j} events={live.events} connected={live.connected} />
 
+      {/* keyed on status only: remounting on every update would discard drafts and scroll */}
       {(j.status === 'needs_approval' || j.status === 'done' || j.status === 'failed' || j.status === 'cancelled' || orphaned) && j.scenes.length > 0 && (
-        <GatePanel key={`${j.id}-${j.status}-${j.updated_at}`} job={j} decisions={decisions.data} onStarted={live.reconnect} assets={project.data?.assets} />
+        <GatePanel key={`${j.id}-${j.status}`} job={j} decisions={decisions.data} onStarted={live.reconnect} assets={project.data?.assets} />
       )}
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -86,7 +87,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         </Card>
       </div>
 
-      <Card title={`Scenes (${j.scenes.length})`}>
+      <Collapsible title="All scenes" count={j.scenes.length} hint="the whole storyboard as a gallery · editing happens in the panel above">
         {j.scenes.length === 0 && <Empty>No storyboard yet.</Empty>}
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {j.scenes.map((s) => (
@@ -95,7 +96,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
             </SceneCard>
           ))}
         </div>
-      </Card>
+      </Collapsible>
 
       {j.kind === 'video' && j.scenes.some((s) => s.video_url) && (
         <Collapsible title="Assemble" count={j.scenes.filter((s) => s.video_url).length} defaultOpen hint="join the clips into one video with transitions">

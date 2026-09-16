@@ -185,6 +185,21 @@ export function useRegenerateScene(id: string) {
   })
 }
 
+/** Drop one keyframe or clip version from a scene's history (the file stays on disk). */
+export function useDeleteVersion(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ index, versionId }: { index: number; versionId: string }) => {
+      const { data, error } = await api.DELETE('/api/jobs/{job_id}/scenes/{index}/versions/{version_id}', {
+        params: { path: { job_id: id, index, version_id: versionId } },
+      })
+      if (error) throw error
+      return data
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: keys.job(id) }),
+  })
+}
+
 export function useAssembly(id: string | undefined) {
   return useQuery({
     queryKey: keys.assembly(id ?? ''),

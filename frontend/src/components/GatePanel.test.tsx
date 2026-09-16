@@ -10,7 +10,7 @@ const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) 
   keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', references: [],
   keyframe_path: null, keyframe_url: null, keyframe_verdict: null, video_path: null, video_url: null, video_verdict: null,
   swapped_path: null, swapped_url: null, swap_verdict: null, variants: [], raw_video_path: null, post_paths: [],
-  identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], ...extra,
+  identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], clips: [], ...extra,
 })
 const job = {
   id: 'j1', idea: 'ages', style: '', master_face: '/m.png', autonomy: 'semi', n_scenes: 2, seed: 0, max_attempts: 2,

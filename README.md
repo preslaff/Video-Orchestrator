@@ -283,6 +283,22 @@ suggestions for the scene are listed with an **Apply to prompt** button, which a
 `Correction: …` exactly as the automatic retry does. "Re-animate" keeps the keyframe and renders
 the clip again. The export folder is rebuilt when the job completes again.
 
+### The job page
+
+Each scene is one row: its description and prompts on the left, its **media on the right** — the
+current keyframe with **Regenerate keyframe** / **Use my image…**, and the clip with
+**Re-animate** — so an edit and its result are side by side.
+
+Under each, a **version strip** holds every keyframe and every clip the scene has ever had, newest
+first, with the active one ringed. Click one to make it active: that is the keyframe the clip is
+animated from, and the clip the export and **Assemble** use. It is a pointer change, applied at
+once — nothing is regenerated. Choosing an older keyframe brings back the clip that was rendered
+from it, if the history still has one. **✕** drops a version from the job and keeps the file on disk.
+
+The scene chips in the progress panel jump to a scene, the Save/Approve bar stays in reach, and a
+refetch (a finished step, someone else's edit) no longer throws away a half-typed prompt. The whole
+storyboard is still available as a gallery under **All scenes**.
+
 ### Stopping, editing and resuming
 
 **Stop** on a running job ends it at the next safe point, as **stopped**; finished work is kept.

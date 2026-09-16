@@ -28,8 +28,8 @@ export function MediaThumb({
   }
   if (video) {
     // key on the URL: React reuses <video> elements and would keep playing the old source
-    return <video key={url} src={url} controls preload="metadata" style={style} className={`w-full rounded bg-black object-contain ${className}`} />
+    return <video key={url} src={url} controls preload="none" style={style} className={`w-full rounded bg-black object-contain ${className}`} />
   }
   // eslint-disable-next-line @next/next/no-img-element -- local media served by FastAPI; no optimizer
-  return <img src={url} alt={alt} style={style} className={`w-full rounded bg-neutral-100 object-contain ${className}`} />
+  return <img src={url} alt={alt} loading="lazy" style={style} className={`w-full rounded bg-neutral-100 object-contain ${className}`} />
 }

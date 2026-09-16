@@ -117,8 +117,13 @@ export function ProgressPanel({ job, events, connected }: { job: JobPublic; even
             const active = p.step && p.step.index === s.index
             const label = s.status === 'complete' ? '✓' : s.status === 'pending' ? '·' : s.status
             return (
-              <li key={s.index} className={`rounded px-2 py-0.5 text-xs ${active ? 'bg-blue-100 text-blue-900' : s.status === 'complete' ? 'bg-green-50 text-green-800' : 'bg-neutral-100 text-neutral-600'}`} title={s.description}>
-                s{s.index + 1} {label}{s.variants.length > 1 ? ` (${s.variants.length})` : ''}
+              <li key={s.index}>
+                <button type="button" data-testid={`goto-scene-${s.index}`}
+                  title={`${s.description}\n\nclick to jump to this scene`}
+                  onClick={() => document.getElementById(`scene-${s.index}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })}
+                  className={`rounded px-2 py-0.5 text-xs ${active ? 'bg-blue-100 text-blue-900' : s.status === 'complete' ? 'bg-green-50 text-green-800' : 'bg-neutral-100 text-neutral-600'} hover:ring-1 hover:ring-neutral-400`}>
+                  s{s.index + 1} {label}{s.variants.length > 1 ? ` (${s.variants.length})` : ''}
+                </button>
               </li>
             )
           })}
