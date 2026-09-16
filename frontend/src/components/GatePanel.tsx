@@ -33,6 +33,32 @@ function PickSummary({ assets, ids, empty }: { assets: AssetOut[]; ids: string[]
   )
 }
 
+/**
+ * The storyboard's hint that one of the project's photos fits this scene. Nothing is applied until
+ * "Use as reference", which only changes the draft (mode edit + that photo) — saved like any edit.
+ * A "motif only" match says why t2i may still be better: edit mode copies the photo's framing.
+ */
+function ReferenceHint({ scene, asset, why, fit, inUse, onUse, onUndo }: {
+  scene: number; asset: AssetOut; why: string; fit: string; inUse: boolean; onUse: () => void; onUndo: () => void
+}) {
+  const sameShot = fit === 'same_shot'
+  return (
+    <div className="flex items-start gap-2 rounded bg-sky-50 p-2 text-xs text-sky-950" data-testid={`hint-${scene}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
+      <img src={asset.thumb_url || asset.url} alt="" loading="lazy" className="h-12 w-12 shrink-0 rounded object-cover" />
+      <div className="min-w-0 flex-1">
+        <div><span className="font-semibold">Suggested reference</span> · {sameShot ? 'same shot' : 'motif only'}</div>
+        <div className="truncate" title={asset.note_caption || asset.label || asset.name}>{asset.label || asset.name}</div>
+        {why && <div className="text-sky-800">{why}</div>}
+        {!sameShot && !inUse && <div className="text-sky-700">Different framing — edit mode would keep the photo&apos;s composition; t2i may suit the scene better.</div>}
+      </div>
+      {inUse
+        ? <button type="button" onClick={onUndo} data-testid={`hint-${scene}-undo`} className="shrink-0 rounded border border-sky-300 bg-white px-2 py-0.5 font-medium">In use · undo</button>
+        : <button type="button" onClick={onUse} data-testid={`hint-${scene}-use`} className="shrink-0 rounded border border-sky-300 bg-white px-2 py-0.5 font-medium">Use as reference</button>}
+    </div>
+  )
+}
+
 function draftsFrom(job: JobPublic): Record<number, Draft> {
   const out: Record<number, Draft> = {}
   for (const s of job.scenes) {
@@ -248,6 +274,20 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                     <p className="text-amber-700">Applying appends “Correction: …” to the keyframe prompt, exactly like the automatic retry; edit it, then Regenerate keyframe.</p>
                   </div>
                 )}
+                {(() => {
+                  const hint = s.reference_suggestion
+                  const hintAsset = hint && assetRefs ? refAssets.find((a) => a.id === hint.asset_id) : undefined
+                  if (!hint || !hintAsset) return null     // a deleted photo leaves no dangling hint
+                  const inUse = d.mode === 'edit' && d.reference_asset_ids.includes(hint.asset_id)
+                  return (
+                    <ReferenceHint scene={s.index} asset={hintAsset} why={hint.why ?? ''} fit={hint.fit ?? 'motif_only'} inUse={inUse}
+                      onUse={() => set(s.index, { mode: 'edit', reference_asset_ids: [hint.asset_id, ...d.reference_asset_ids.filter((x) => x !== hint.asset_id)] })}
+                      onUndo={() => {
+                        const rest = d.reference_asset_ids.filter((x) => x !== hint.asset_id)
+                        set(s.index, { reference_asset_ids: rest, mode: rest.length ? 'edit' : 't2i' })
+                      }} />
+                  )
+                })()}
                 <div className="grid grid-cols-[8rem_1fr] gap-2">
                   {locked && <span className="col-span-2 text-xs text-neutral-500">mode &amp; references apply on Regenerate keyframe</span>}
                   <label className="block"><span className="text-xs text-neutral-500">mode</span>

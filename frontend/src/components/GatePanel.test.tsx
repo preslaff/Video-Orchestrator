@@ -74,3 +74,35 @@ describe('GatePanel identity picker', () => {
     expect((puts[0] as { scenes: { identity_asset_id: unknown }[] }).scenes[0].identity_asset_id).toBeNull()
   })
 })
+
+describe('GatePanel reference hints', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('shows the storyboard hint and applies it only when accepted', async () => {
+    const puts: unknown[] = []
+    stubFetch(puts)
+    const user = userEvent.setup()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const hinted = {
+      ...job, face_swap: false,
+      scenes: [
+        scene(0, { reference_suggestion: { asset_id: 'room', why: 'same room from the door', fit: 'same_shot' } }),
+        scene(1, { reference_suggestion: { asset_id: 'gone', why: 'deleted photo', fit: 'same_shot' } }),
+      ],
+    } as unknown as JobPublic
+    render(<QueryClientProvider client={qc}><GatePanel job={hinted} assets={assets} /></QueryClientProvider>)
+    expect(screen.getByText('same room from the door')).toBeInTheDocument()
+    expect(screen.queryByTestId('hint-1')).toBeNull()                    // unknown asset: no hint
+    await user.click(screen.getByText('Save changes'))                  // not accepted: scene stays t2i
+    await waitFor(() => expect(puts).toHaveLength(1))
+    type Body = { scenes: { mode: string | null; reference_asset_ids: string[] | null }[] }
+    expect((puts[0] as Body).scenes[0]).toMatchObject({ mode: 't2i', reference_asset_ids: [] })
+    await user.click(screen.getByTestId('hint-0-use'))
+    expect(screen.getByTestId('hint-0-undo')).toBeInTheDocument()
+    await user.click(screen.getByText('Save changes'))
+    await waitFor(() => expect(puts).toHaveLength(2))
+    expect((puts[1] as Body).scenes[0]).toMatchObject({ mode: 'edit', reference_asset_ids: ['room'] })
+    await user.click(screen.getByTestId('hint-0-undo'))
+    expect(screen.getByTestId('hint-0-use')).toBeInTheDocument()
+  })
+})

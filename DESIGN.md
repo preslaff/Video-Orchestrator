@@ -387,6 +387,17 @@ sidecar manifest).
   uploads and edits. In-process only: running `label-assets` from the CLI against a project the
   server is describing is unsupported.
 
+- **Reference suggestions** (`storyboard.suggest_references`): in a t2i job, a second Gemma
+  call after the storyboard matches the scenes against the project's non-face assets by label
+  (temperature 0.2 — it is a judgement, like evaluation) and stores one `Scene.reference_suggestion`
+  `{asset_id, why, fit}` per scene. It is a hint, never an assignment: invariant #6 means a
+  reference locks composition, so switching to edit mode stays a person's decision at the gate.
+  `fit` is `same_shot` or `motif_only` (unrecognised values fall back to `motif_only`, the hint
+  that does not suggest locking). Invented ids are dropped and logged; a failure is a warning, not a
+  failed storyboard. Edit jobs skip it — their storyboard assigns `reference_ids` directly. It is a
+  separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
+  the storyboard's own token budget now scales with the scene count (~160 per scene).
+
 ## 16. Scene media versions
 
 A scene keeps **every keyframe it has had** (`Scene.variants`) and **every clip it has rendered**

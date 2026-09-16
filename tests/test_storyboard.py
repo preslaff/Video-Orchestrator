@@ -178,3 +178,54 @@ def test_asset_ids_never_reach_the_image_prompts(monkeypatch):
     storyboard.keyframe_prompt(brief)
     storyboard.animation_prompt(brief)
     assert all("a1" not in u and "reference_ids" not in u for u in seen)
+
+
+# --- reference suggestions ---------------------------------------------------
+
+from vorch.storyboard import suggest_references as _real_suggest  # noqa: E402  (imported before conftest patches it)
+
+ASSETS = (
+    ("face1", "master_face", "Bela"),
+    ("stairs", "reference", "spiral stone staircase seen from below"),
+    ("lens", "reference", "Fresnel lens in the lamp room"),
+)
+BRIEFS = [SceneBrief(scene=1, description="bike at a lighthouse"), SceneBrief(scene=2, description="climbing the spiral stairs"),
+          SceneBrief(scene=3, description="the lens at dusk")]
+
+
+def test_suggest_references_keeps_known_ids_and_reports_invented_ones(monkeypatch):
+    seen = {}
+
+    def fake(system, user, **kw):
+        seen.update(user=user, **kw)
+        return """```json
+[{"scene": 1, "asset_id": null, "why": "", "fit": "motif_only"},
+ {"scene": 2, "asset_id": "stairs", "why": "same staircase view", "fit": "same_shot"},
+ {"scene": 3, "asset_id": "ghost", "why": "?", "fit": "same_shot"}]
+```"""
+
+    monkeypatch.setattr(storyboard.gemma, "complete_text", fake)
+    picks, unknown = _real_suggest(BRIEFS, ASSETS)
+    assert set(picks) == {1} and picks[1].asset_id == "stairs" and picks[1].fit == "same_shot"
+    assert unknown == ["ghost"]
+    assert "face1" not in seen["user"] and "stairs" in seen["user"]   # faces are not references
+    assert seen["temperature"] == 0.2
+
+
+def test_suggest_references_unsure_fit_falls_back_to_motif_only(monkeypatch):
+    monkeypatch.setattr(storyboard.gemma, "complete_text",
+                        lambda *a, **k: '[{"scene": 3, "asset_id": "lens", "why": "lens", "fit": "maybe"}, {"scene": 9, "asset_id": "lens"}, "junk"]')
+    picks, unknown = _real_suggest(BRIEFS, ASSETS)
+    assert list(picks) == [2] and picks[2].fit == "motif_only" and unknown == []
+
+
+def test_suggest_references_skips_gemma_without_reference_assets(monkeypatch):
+    monkeypatch.setattr(storyboard.gemma, "complete_text", lambda *a, **k: pytest.fail("no call expected"))
+    assert _real_suggest(BRIEFS, (("face1", "master_face", "Bela"),)) == ({}, [])
+
+
+def test_storyboard_budget_grows_with_scene_count(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(storyboard.gemma, "complete_text", lambda *a, **k: seen.update(k) or STORYBOARD_JSON)
+    generate_storyboard("idea", n_scenes=40)
+    assert seen["max_tokens"] >= 160 * 40

@@ -129,6 +129,12 @@ class VariantOut(BaseModel):
     active: bool = False        # the scene's current keyframe
 
 
+class ReferenceSuggestionOut(BaseModel):
+    asset_id: str
+    why: str = ""
+    fit: str = "motif_only"     # same_shot (edit mode keeps the scene) | motif_only (t2i stays better)
+
+
 class ScenePublic(BaseModel):
     index: int
     description: str = ""
@@ -163,6 +169,7 @@ class ScenePublic(BaseModel):
     # "user" when the chosen keyframe is an image the user picked instead of a generated one.
     keyframe_source: str = "generated"
     keyframe_asset_id: str | None = None
+    reference_suggestion: ReferenceSuggestionOut | None = None   # a project photo the storyboard thinks fits
 
 
 class JobPublic(BaseModel):

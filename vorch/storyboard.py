@@ -153,11 +153,17 @@ def generate_storyboard(
     *,
     n_scenes: int | None = None,
     context: PromptContext | None = None,
-    max_tokens: int = 1500,
+    max_tokens: int | None = None,
     timeout: int = 300,
 ) -> list[SceneBrief]:
-    """Break an idea into a list of scene briefs (description/character/setting/mood)."""
+    """Break an idea into a list of scene briefs (description/character/setting/mood).
+
+    The token budget grows with the scene count (~160 tokens a scene): a flat 1500 cut a
+    40-scene storyboard off mid-array.
+    """
     ctx = context or DEFAULT_CONTEXT
+    if max_tokens is None:
+        max_tokens = max(1500, 160 * n_scenes + 200) if n_scenes else 3000
     n = f"точно {n_scenes} сцени (не повече, не по-малко)" if n_scenes else "толкова сцени колкото историята изисква"
     what = "снимки" if ctx.kind == "stills" else "видео"
     user = (
@@ -182,6 +188,79 @@ def generate_storyboard(
         return [SceneBrief.model_validate(item) for item in data]
     except ValidationError as e:
         raise StoryboardError(f"storyboard: scene failed validation: {e}") from e
+
+
+# --- Reference suggestions ----------------------------------------------------
+
+FITS = ("same_shot", "motif_only")
+
+_SYSTEM_SUGGEST = """Ти си фоторедактор. Съпоставяш сцени от сценарий със снимки от архива на автора.
+- Предлагай снимка само ако показва същия субект/място като сцената; иначе null.
+- "fit": "same_shot" — снимката е практически същият кадър (субект, гледна точка, кадриране);
+  "motif_only" — същият субект, но различно кадриране или момент.
+- Една снимка на сцена, най-подходящата. Не измисляй id-та. Връщаш само JSON."""
+
+
+class ReferencePick(BaseModel):
+    scene: int
+    asset_id: str | None = None
+    why: str = ""
+    fit: str = "motif_only"
+
+
+def suggest_references(
+    briefs: list[SceneBrief],
+    assets: tuple[tuple[str, str, str], ...],
+    *,
+    timeout: int = 300,
+) -> tuple[dict[int, ReferencePick], list[str]]:
+    """Suggest, per scene, the project photo that best matches it — by the assets' labels.
+
+    A separate pass after the storyboard, so the storyboard prompt stays small and a failure
+    here costs only the hints. Returns ``({scene position (0-based): pick}, unknown ids)``;
+    picks naming an id that is not in ``assets`` are dropped and reported, never trusted.
+    Matching is a judgement, not creative writing: temperature 0.2, like evaluation.
+    """
+    refs = [(i, k, lbl) for i, k, lbl in assets if k != "master_face"]
+    if not refs or not briefs:
+        return {}, []
+    catalogue = "\n".join(f"- {i} ({k}): {lbl}" for i, k, lbl in refs)
+    scenes = "\n".join(
+        f"{n}. {b.description}" + (f" | място: {b.setting}" if b.setting else "")
+        for n, b in enumerate(briefs, start=1)
+    )
+    user = (
+        f"Снимки (id (вид): описание):\n{catalogue}\n\n"
+        f"Сцени:\n{scenes}\n\n"
+        "За всяка сцена върни JSON масив, по един обект на сцена:\n"
+        '[{"scene": 1, "asset_id": "id или null", "why": "кратко, на английски: какво съвпада", '
+        '"fit": "same_shot | motif_only"}]\n'
+        "Само JSON, без друг текст."
+    )
+    raw = gemma.complete_text(
+        _SYSTEM_SUGGEST, user, max_tokens=90 * len(briefs) + 200, temperature=0.2, timeout=timeout
+    )
+    data = _parse(raw, "reference suggestions")
+    if not isinstance(data, list):
+        raise StoryboardError("reference suggestions: expected a JSON array")
+    known = {i for i, _, _ in refs}
+    picks: dict[int, ReferencePick] = {}
+    unknown: list[str] = []
+    for item in data:
+        try:
+            pick = ReferencePick.model_validate(item)
+        except ValidationError:
+            continue  # one malformed entry should not cost the other scenes their hints
+        pos = pick.scene - 1
+        if not pick.asset_id or not 0 <= pos < len(briefs) or pos in picks:
+            continue
+        if pick.asset_id not in known:
+            unknown.append(pick.asset_id)
+            continue
+        if pick.fit not in FITS:
+            pick.fit = "motif_only"   # when unsure, the hint that does not lock the composition
+        picks[pos] = pick
+    return picks, unknown
 
 
 # --- Per-scene prompts -------------------------------------------------------

@@ -553,3 +553,54 @@ def test_face_swap_without_default_master_needs_project_faces(wired, tmp_path, m
     p, _young, _old = _faces_project(store, tmp_path, monkeypatch)
     job = o.create_job("x", master_face="", autonomy="full", project_id=p.id)
     assert job.master_face == "" and job.face_swap is True
+
+
+def _refs_project(store, tmp_path, monkeypatch):
+    from vorch import config, projects
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects.new_project("Coast")
+    stairs = projects.add_asset(p, b"s", kind="reference", name="stairs.png", label="spiral staircase")
+    projects.save(store, p)
+    return p, stairs
+
+
+def test_t2i_storyboard_attaches_reference_hints_without_applying_them(wired, tmp_path, monkeypatch):
+    from vorch.state import job_from_dict, job_to_dict
+
+    store, master, _ = wired
+    p, stairs = _refs_project(store, tmp_path, monkeypatch)
+    seen = {}
+
+    def fake(briefs, assets, **kw):
+        seen["assets"] = assets
+        return {1: storyboard.ReferencePick(scene=2, asset_id=stairs.id, why="same stairs", fit="same_shot")}, ["ghost"]
+
+    monkeypatch.setattr(storyboard, "suggest_references", fake)
+    o = Orchestrator(store, n_scenes=2, face_swap=False)
+    job = o.create_job("idea", master_face=str(master), autonomy="semi", project_id=p.id)
+    o.run(job)
+    s0, s1 = job.scenes
+    assert s0.reference_suggestion is None
+    assert (s1.reference_suggestion.asset_id, s1.reference_suggestion.fit) == (stairs.id, "same_shot")
+    assert s1.mode == "t2i" and s1.reference_asset_ids == []        # a hint, not an assignment
+    assert any(a[0] == stairs.id for a in seen["assets"])
+    again = job_from_dict(job_to_dict(job)).scenes[1].reference_suggestion
+    assert again == s1.reference_suggestion
+    actions = [(d.scene_index, d.action) for d in store.decisions(job.id) if d.phase == "storyboard"]
+    assert (1, "suggested") in actions and (None, "warning") in actions
+
+
+def test_failed_reference_hints_do_not_fail_the_storyboard(wired, tmp_path, monkeypatch):
+    store, master, _ = wired
+    p, _ = _refs_project(store, tmp_path, monkeypatch)
+
+    def boom(briefs, assets, **kw):
+        raise storyboard.StoryboardError("could not parse")
+
+    monkeypatch.setattr(storyboard, "suggest_references", boom)
+    o = Orchestrator(store, n_scenes=2, face_swap=False)
+    job = o.create_job("idea", master_face=str(master), autonomy="semi", project_id=p.id)
+    o.run(job)
+    assert job.status is JobStatus.NEEDS_APPROVAL and all(s.reference_suggestion is None for s in job.scenes)
+    assert any("reference suggestions failed" in d.reason for d in store.decisions(job.id))

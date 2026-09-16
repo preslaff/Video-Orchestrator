@@ -86,6 +86,10 @@ def _isolated_user_workflows(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "BACKENDS_FILE", tmp_path / "_isolated_backends.yaml")
     # Uploads never start a real Gemma description in tests (test_describer injects a fake).
     monkeypatch.setattr(config, "AUTO_DESCRIBE", False)
+    # A run in a project with photos never asks the real Gemma for reference hints: tests that
+    # fake the storyboard would otherwise reach a live llama-server. Tests of the pass patch it back.
+    from vorch import storyboard
+    monkeypatch.setattr(storyboard, "suggest_references", lambda briefs, assets, **kw: ({}, []))
     registry.reset_cache()
     backends.reset_cache()
     comfy.reset_cache()

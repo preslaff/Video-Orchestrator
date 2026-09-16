@@ -25,13 +25,17 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
+
 from . import cancel, config, media, pipeline, profiles, provenance, storyboard
 from . import projects as projects_mod
 from . import scene_assets
+from .clients import gemma as gemma_client
 from .genparams import DEFAULT, GenParams
 from .steps.edit import reference_slots
 from .steps.postprocess import run_chain
-from .state import Clip, Decision, Job, JobStatus, Scene, SceneStatus, Store, Variant, new_job
+from .state import (Clip, Decision, Job, JobStatus, ReferenceSuggestion, Scene, SceneStatus, Store, Variant,
+                    new_job)
 
 log = logging.getLogger("vorch.orchestrator")
 
@@ -415,6 +419,8 @@ class Orchestrator:
             )
             self._assign_scene_assets(job, scene, brief, project)
             scenes.append(scene)
+        if job.mode != "edit":   # an edit job already assigns references; t2i jobs get hints
+            self._suggest_references(job, scenes, briefs, asset_list)
         job.scenes = scenes
         self.store.log_decision(
             Decision(
@@ -424,6 +430,32 @@ class Orchestrator:
         )
         self.store.save_job(job)
         self._event(job, "storyboard", scenes=len(scenes))
+
+    def _suggest_references(self, job: Job, scenes: list[Scene], briefs, asset_list) -> None:
+        """Attach the storyboard's reference hints — shown at the gate, never applied here.
+
+        Non-fatal: without Gemma's answer the scenes simply have no hints."""
+        if not any(k != "master_face" for _, k, _ in asset_list):
+            return
+        self._event(job, "step", step="storyboard", detail="Gemma matches the project's photos to the scenes")
+        try:
+            picks, unknown = storyboard.suggest_references(briefs, asset_list)
+        except (storyboard.StoryboardError, gemma_client.GemmaError, requests.RequestException) as e:
+            log.warning("job %s: reference suggestions failed: %s", job.id, e)
+            self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="storyboard", attempt=1,
+                                             action="warning", reason=f"reference suggestions failed: {e}"[:500]))
+            return
+        if unknown:
+            self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="storyboard", attempt=1,
+                                             action="warning", reason=f"suggested unknown references {unknown}"))
+        for pos, pick in picks.items():
+            if pos >= len(scenes):
+                continue
+            scenes[pos].reference_suggestion = ReferenceSuggestion(asset_id=pick.asset_id, why=pick.why, fit=pick.fit)
+            self.store.log_decision(Decision(
+                job_id=job.id, scene_index=scenes[pos].index, phase="storyboard", attempt=1, action="suggested",
+                reason=f"reference {pick.asset_id} ({pick.fit}): {pick.why}"[:500],
+            ))
 
     def _assign_scene_assets(self, job: Job, scene: Scene, brief, project) -> None:
         """Apply the storyboard's per-scene identity / reference picks (project asset

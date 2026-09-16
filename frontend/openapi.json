@@ -4024,6 +4024,29 @@
         ],
         "title": "ProvenanceOut"
       },
+      "ReferenceSuggestionOut": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "title": "Asset Id"
+          },
+          "why": {
+            "type": "string",
+            "title": "Why",
+            "default": ""
+          },
+          "fit": {
+            "type": "string",
+            "title": "Fit",
+            "default": "motif_only"
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id"
+        ],
+        "title": "ReferenceSuggestionOut"
+      },
       "SceneEdit": {
         "properties": {
           "index": {
@@ -4445,6 +4468,16 @@
               }
             ],
             "title": "Keyframe Asset Id"
+          },
+          "reference_suggestion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReferenceSuggestionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",

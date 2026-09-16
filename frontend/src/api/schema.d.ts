@@ -1519,6 +1519,21 @@ export interface components {
             /** Has Manifest */
             has_manifest: boolean;
         };
+        /** ReferenceSuggestionOut */
+        ReferenceSuggestionOut: {
+            /** Asset Id */
+            asset_id: string;
+            /**
+             * Why
+             * @default
+             */
+            why: string;
+            /**
+             * Fit
+             * @default motif_only
+             */
+            fit: string;
+        };
         /**
          * SceneEdit
          * @description One scene's editable fields (storyboard gate review). Index is required.
@@ -1670,6 +1685,7 @@ export interface components {
             keyframe_source: string;
             /** Keyframe Asset Id */
             keyframe_asset_id?: string | null;
+            reference_suggestion?: components["schemas"]["ReferenceSuggestionOut"] | null;
         };
         /**
          * SceneRegenerate

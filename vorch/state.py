@@ -88,6 +88,21 @@ class Variant:
 
 
 @dataclass
+class ReferenceSuggestion:
+    """The storyboard's hint that one of the user's photos fits a scene (never applied by itself).
+
+    ``fit`` says how closely: ``same_shot`` — the photo is essentially this frame, so an
+    edit-mode keyframe from it keeps the scene; ``motif_only`` — same subject, different
+    framing, so edit mode would force the photo's composition (invariant #6) and t2i stays
+    the better default. The user accepts it at a gate, which sets mode + references.
+    """
+
+    asset_id: str
+    why: str = ""
+    fit: str = "motif_only"          # same_shot | motif_only
+
+
+@dataclass
 class Clip:
     """One clip a scene has had: the Wan render plus its post-step chain.
 
@@ -141,6 +156,7 @@ class Scene:
     raw_video_path: str | None = None    # Wan output before post-steps (video_path = final)
     post_paths: list[str] = field(default_factory=list)      # post-step outputs in order
     regenerations: int = 0               # manual keyframe/clip redo count (seed offset)
+    reference_suggestion: ReferenceSuggestion | None = None  # a photo the storyboard thinks fits
 
 
 @dataclass
@@ -328,6 +344,10 @@ def _scene_to_dict(s: Scene) -> dict:
         "raw_video_path": s.raw_video_path,
         "post_paths": list(s.post_paths),
         "regenerations": s.regenerations,
+        "reference_suggestion": (
+            {"asset_id": s.reference_suggestion.asset_id, "why": s.reference_suggestion.why,
+             "fit": s.reference_suggestion.fit} if s.reference_suggestion else None
+        ),
     }
 
 
@@ -360,7 +380,14 @@ def _scene_from_dict(d: dict) -> Scene:
         raw_video_path=d.get("raw_video_path"),
         post_paths=list(d.get("post_paths", []) or []),
         regenerations=int(d.get("regenerations", 0) or 0),
+        reference_suggestion=_suggestion_from_dict(d.get("reference_suggestion")),
     )
+
+
+def _suggestion_from_dict(d: dict | None) -> ReferenceSuggestion | None:
+    if not d or not d.get("asset_id"):
+        return None
+    return ReferenceSuggestion(asset_id=d["asset_id"], why=d.get("why", "") or "", fit=d.get("fit", "motif_only") or "motif_only")
 
 
 def job_to_dict(job: Job) -> dict:

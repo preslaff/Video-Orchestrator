@@ -893,6 +893,10 @@ def test_assembly_status_offers_delivery_targets_and_accepts_one(client, stub_me
         time.sleep(0.02)
     assert seen["spec"].delivery == "social_1080" and seen["spec"].grain == 1
 
-    bad = client.post(f"/api/jobs/{job.id}/assemble", json={"delivery": "imax"})
+    for _ in range(50):          # seeing the spec is not the task finishing: wait out the busy 409
+        bad = client.post(f"/api/jobs/{job.id}/assemble", json={"delivery": "imax"})
+        if bad.status_code != 409:
+            break
+        time.sleep(0.02)
     assert bad.status_code == 400 and "unknown delivery" in bad.json()["error"]["message"]
     assert client.post(f"/api/jobs/{job.id}/assemble", json={"grain": 9}).status_code == 400

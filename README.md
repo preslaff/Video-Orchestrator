@@ -326,6 +326,13 @@ stopped.
 - **Mode (t2i/edit) and references**: pick project assets in priority order, or **Upload…** a file
   from the scene card, which adds it to the project. On a scene that already has a keyframe, they
   apply on *Regenerate keyframe*. The picker says how many references the edit workflow uses.
+- **Suggested reference**: in a t2i job whose project has reference photos, Gemma matches the
+  photos' labels to the scenes after writing the storyboard and suggests at most one per scene,
+  with the reason and a fit: *same shot* (her photo is essentially this frame: edit mode keeps the
+  scene) or *motif only* (same subject, different framing: edit mode would copy the photo's
+  composition, so t2i is often better). **Use as reference** switches the scene to edit mode with that
+  photo (save to keep it); nothing is applied by itself. Suggestions are logged as `suggested`
+  decisions; a failed pass leaves the storyboard intact, just without hints.
 - **Use my image as keyframe**: pick or upload an image. It is cropped to the job's frame size and
   replaces the keyframe without being generated or evaluated. The generated candidates stay
   selectable, and the gate reopens for review as for a regenerated keyframe.
