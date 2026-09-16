@@ -90,7 +90,16 @@ export function ProfileEditor({ profile, mode }: { profile: OutputProfile; mode:
     const out: string[] = []
     if (!d.name.trim()) out.push('Name is required.')
     if (!parseAspect(d.aspect)) out.push('Aspect must look like 16:9.')
-    if (d.kind === 'video' && !isWanLength(d.video.length)) out.push(`Wan length must be 4n+1 (nearest: ${snapToWan(d.video.length)}).`)
+    const blanks: string[] = []
+    if (!d.keyframe.width || !d.keyframe.height) blanks.push('keyframe size')
+    if (!d.keyframe.steps || !d.keyframe.cfg) blanks.push('keyframe steps/cfg')
+    if (d.kind === 'video' && (!d.video.width || !d.video.height)) blanks.push('clip size')
+    if (d.kind === 'video' && (!d.video.length || !d.video.fps)) blanks.push('clip length/fps')
+    if (d.kind === 'stills' && !d.stills.variants) blanks.push('variants per scene')
+    if (blanks.length) out.push(`Fill in: ${blanks.join(', ')}.`)
+    if (d.kind === 'video' && d.video.length > 0 && !isWanLength(d.video.length)) {
+      out.push(`Wan length must be 4n+1 (nearest: ${snapToWan(d.video.length)}).`)
+    }
     for (const [i, s] of d.post_steps.entries()) {
       if (s.params.trim()) { try { JSON.parse(s.params) } catch { out.push(`Post-step ${i + 1}: params must be JSON.`) } }
     }
@@ -108,7 +117,12 @@ export function ProfileEditor({ profile, mode }: { profile: OutputProfile; mode:
     }
   }
   const err = create.error ? errorMessage(create.error) : update.error ? errorMessage(update.error) : null
-  const num = (v: string, fallback: number) => (v === '' ? fallback : Number(v))
+  // An emptied field stays empty (0) instead of snapping back to a default — otherwise clearing
+  // it restores the old number and the next keystroke appends to it ("480" + "1248").
+  // `problems` above refuses to save a profile with a field left blank.
+  const num = (v: string) => (v.trim() === '' ? 0 : Number(v))
+  /** 0 is "the user cleared this", which renders as an empty box, not a literal zero. */
+  const shown = (n: number) => (n ? String(n) : '')
   const inp = 'mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 text-sm'
   const sel = inp + ' bg-white'
 
@@ -134,10 +148,10 @@ export function ProfileEditor({ profile, mode }: { profile: OutputProfile; mode:
         <Card title="Keyframe (Klein)">
           <div className="grid gap-3 sm:grid-cols-3">
             <label className="block sm:col-span-3"><span className="text-xs text-neutral-500">workflow</span><select value={d.keyframe.workflow} onChange={(e) => set('keyframe', { ...d.keyframe, workflow: e.target.value })} className={sel}>{[d.keyframe.workflow, ...byKind('keyframe')].filter((v, i, a) => a.indexOf(v) === i).map((w) => <option key={w} value={w}>{w}</option>)}</select></label>
-            <label className="block"><span className="text-xs text-neutral-500">width</span><input type="number" step={16} value={d.keyframe.width} onChange={(e) => set('keyframe', { ...d.keyframe, width: num(e.target.value, 1024) })} className={inp} /></label>
-            <label className="block"><span className="text-xs text-neutral-500">height</span><input type="number" step={16} value={d.keyframe.height} onChange={(e) => set('keyframe', { ...d.keyframe, height: num(e.target.value, 576) })} className={inp} /></label>
-            <label className="block"><span className="text-xs text-neutral-500">steps</span><input type="number" min={1} value={d.keyframe.steps} onChange={(e) => set('keyframe', { ...d.keyframe, steps: num(e.target.value, 24) })} className={inp} /></label>
-            <label className="block"><span className="text-xs text-neutral-500">cfg</span><input type="number" step={0.5} value={d.keyframe.cfg} onChange={(e) => set('keyframe', { ...d.keyframe, cfg: num(e.target.value, 5) })} className={inp} /></label>
+            <label className="block"><span className="text-xs text-neutral-500">width</span><input type="number" step={16} value={shown(d.keyframe.width)} onChange={(e) => set('keyframe', { ...d.keyframe, width: num(e.target.value) })} className={inp} /></label>
+            <label className="block"><span className="text-xs text-neutral-500">height</span><input type="number" step={16} value={shown(d.keyframe.height)} onChange={(e) => set('keyframe', { ...d.keyframe, height: num(e.target.value) })} className={inp} /></label>
+            <label className="block"><span className="text-xs text-neutral-500">steps</span><input type="number" min={1} value={shown(d.keyframe.steps)} onChange={(e) => set('keyframe', { ...d.keyframe, steps: num(e.target.value) })} className={inp} /></label>
+            <label className="block"><span className="text-xs text-neutral-500">cfg</span><input type="number" step={0.5} value={shown(d.keyframe.cfg)} onChange={(e) => set('keyframe', { ...d.keyframe, cfg: num(e.target.value) })} className={inp} /></label>
             <label className="block sm:col-span-2"><span className="text-xs text-neutral-500">unet (model file; empty = template default)</span><input value={d.keyframe.unet} onChange={(e) => set('keyframe', { ...d.keyframe, unet: e.target.value })} className={inp + ' font-mono text-xs'} /></label>
           </div>
         </Card>
@@ -145,10 +159,10 @@ export function ProfileEditor({ profile, mode }: { profile: OutputProfile; mode:
           <Card title="Video (Wan)">
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="block sm:col-span-3"><span className="text-xs text-neutral-500">workflow</span><select value={d.video.workflow} onChange={(e) => set('video', { ...d.video, workflow: e.target.value })} className={sel}>{[d.video.workflow, ...byKind('animate')].filter((v, i, a) => a.indexOf(v) === i).map((w) => <option key={w} value={w}>{w}</option>)}</select></label>
-              <label className="block"><span className="text-xs text-neutral-500">width</span><input type="number" step={16} value={d.video.width} onChange={(e) => set('video', { ...d.video, width: num(e.target.value, 832) })} className={inp} /></label>
-              <label className="block"><span className="text-xs text-neutral-500">height</span><input type="number" step={16} value={d.video.height} onChange={(e) => set('video', { ...d.video, height: num(e.target.value, 480) })} className={inp} /></label>
-              <label className="block"><span className="text-xs text-neutral-500">fps</span><input type="number" min={1} max={60} value={d.video.fps} onChange={(e) => set('video', { ...d.video, fps: num(e.target.value, 16) })} className={inp} /></label>
-              <label className="block"><span className="text-xs text-neutral-500">length (frames, 4n+1)</span><input type="number" min={1} value={d.video.length} onChange={(e) => set('video', { ...d.video, length: num(e.target.value, 49) })} onBlur={() => set('video', { ...d.video, length: snapToWan(d.video.length) })} className={inp} /></label>
+              <label className="block"><span className="text-xs text-neutral-500">width</span><input type="number" step={16} value={shown(d.video.width)} onChange={(e) => set('video', { ...d.video, width: num(e.target.value) })} className={inp} /></label>
+              <label className="block"><span className="text-xs text-neutral-500">height</span><input type="number" step={16} value={shown(d.video.height)} onChange={(e) => set('video', { ...d.video, height: num(e.target.value) })} className={inp} /></label>
+              <label className="block"><span className="text-xs text-neutral-500">fps</span><input type="number" min={1} max={60} value={shown(d.video.fps)} onChange={(e) => set('video', { ...d.video, fps: num(e.target.value) })} className={inp} /></label>
+              <label className="block"><span className="text-xs text-neutral-500">length (frames, 4n+1)</span><input type="number" min={1} value={shown(d.video.length)} onChange={(e) => set('video', { ...d.video, length: num(e.target.value) })} onBlur={() => d.video.length > 0 && set('video', { ...d.video, length: snapToWan(d.video.length) })} className={inp} /></label>
               <p className="text-xs text-neutral-500 sm:col-span-2 sm:self-end">≈ {clipSeconds(d.video.length, d.video.fps)} s per clip · 49 / 81 / 121 are typical.</p>
               <div className="sm:col-span-3" data-testid="render-cost">{renderCost(d.video)}</div>
               <label className="block sm:col-span-3"><span className="text-xs text-neutral-500">negative (empty = style default)</span><input value={d.video.negative} onChange={(e) => set('video', { ...d.video, negative: e.target.value })} className={inp} /></label>
@@ -156,7 +170,7 @@ export function ProfileEditor({ profile, mode }: { profile: OutputProfile; mode:
           </Card>
         ) : (
           <Card title="Stills">
-            <label className="block"><span className="text-xs text-neutral-500">variants per scene (1–8)</span><input type="number" min={1} max={8} value={d.stills.variants} onChange={(e) => set('stills', { variants: num(e.target.value, 1) })} className={inp} /></label>
+            <label className="block"><span className="text-xs text-neutral-500">variants per scene (1–8)</span><input type="number" min={1} max={8} value={shown(d.stills.variants)} onChange={(e) => set('stills', { variants: num(e.target.value) })} className={inp} /></label>
           </Card>
         )}
         <Card title="Style vocabulary">
@@ -174,8 +188,8 @@ export function ProfileEditor({ profile, mode }: { profile: OutputProfile; mode:
             <label className="block"><span className="text-xs text-neutral-500">restore model</span><input value={d.face_swap.restore_model} onChange={(e) => set('face_swap', { ...d.face_swap, restore_model: e.target.value })} className={inp + ' font-mono text-xs'} /></label>
             <label className="block"><span className="text-xs text-neutral-500">edit workflow (reference-locked keyframes)</span><select value={d.edit_workflow} onChange={(e) => set('edit_workflow', e.target.value)} className={sel}>{[d.edit_workflow, ...byKind('edit')].filter((v, i, a) => a.indexOf(v) === i).map((w) => <option key={w} value={w}>{w}</option>)}</select></label>
             <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={d.evaluate.enabled} onChange={(e) => set('evaluate', { ...d.evaluate, enabled: e.target.checked })} /> evaluate keyframes with Gemma vision (retry with the fix)</label>
-            <label className="block"><span className="text-xs text-neutral-500">max attempts</span><input type="number" min={1} max={6} value={d.evaluate.max_attempts} onChange={(e) => set('evaluate', { ...d.evaluate, max_attempts: num(e.target.value, 2) })} className={inp} /></label>
-            <label className="block"><span className="text-xs text-neutral-500">review threshold (score below → flag, never block)</span><input type="number" min={0} max={10} value={d.evaluate.review_threshold} onChange={(e) => set('evaluate', { ...d.evaluate, review_threshold: num(e.target.value, 4) })} className={inp} /></label>
+            <label className="block"><span className="text-xs text-neutral-500">max attempts</span><input type="number" min={1} max={6} value={shown(d.evaluate.max_attempts)} onChange={(e) => set('evaluate', { ...d.evaluate, max_attempts: num(e.target.value) })} className={inp} /></label>
+            <label className="block"><span className="text-xs text-neutral-500">review threshold (score below → flag, never block)</span><input type="number" min={0} max={10} value={d.evaluate.review_threshold} onChange={(e) => set('evaluate', { ...d.evaluate, review_threshold: num(e.target.value) })} className={inp} /></label>
           </div>
         </Card>
         <Card title="Post-process steps" actions={<Button onClick={() => set('post_steps', [...d.post_steps, { workflow: byKind('postprocess')[0] ?? '', params: '' }])}>+ add step</Button>}>

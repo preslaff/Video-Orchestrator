@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ProfileEditor } from './ProfileEditor'
@@ -31,6 +32,35 @@ function renderEditor() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={qc}><ProfileEditor profile={profile} mode="edit" /></QueryClientProvider>)
 }
+
+describe('ProfileEditor size fields', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('lets a size be cleared and retyped instead of snapping back to a default', async () => {
+    renderEditor()
+    const user = userEvent.setup()
+    const widths = screen.getAllByLabelText('width')
+    const clipWidth = widths[widths.length - 1]
+
+    await user.clear(clipWidth)
+    expect(clipWidth).toHaveValue(null)                       // stays empty, does not restore 480
+    expect(screen.getByText(/Fill in: clip size/)).toBeInTheDocument()
+
+    await user.type(clipWidth, '832')
+    expect(clipWidth).toHaveValue(832)                        // not 480832
+    expect(screen.queryByText(/Fill in:/)).toBeNull()
+  })
+
+  it('does not snap a half-typed clip length to 4n+1 on blur', async () => {
+    renderEditor()
+    const user = userEvent.setup()
+    const length = screen.getByLabelText(/length/)
+    await user.clear(length)
+    await user.tab()
+    expect(length).toHaveValue(null)                          // an empty field is not "1"
+    expect(screen.getByText(/Fill in: clip length\/fps/)).toBeInTheDocument()
+  })
+})
 
 describe('ProfileEditor render cost', () => {
   afterEach(() => vi.unstubAllGlobals())
