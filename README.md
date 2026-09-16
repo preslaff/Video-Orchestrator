@@ -285,9 +285,9 @@ the clip again. The export folder is rebuilt when the job completes again.
 
 ### The job page
 
-Each scene is one row: its description and prompts on the left, its **media on the right** — the
-current keyframe with **Regenerate keyframe** / **Use my image…**, and the clip with
-**Re-animate** — so an edit and its result are side by side.
+Each scene is one row: its description and prompts, and directly **below them the media, keyframe
+and clip side by side** — the keyframe with **Regenerate keyframe** / **Use my image…**, the clip
+with **Re-animate** — so an edit and its result stay together as you scroll.
 
 Under each, a **version strip** holds every keyframe and every clip the scene has ever had, newest
 first, with the active one ringed. Click one to make it active: that is the keyframe the clip is

@@ -56,6 +56,23 @@ describe('scene media and its versions', () => {
     expect(screen.getByDisplayValue('kf')).toBeInTheDocument()  // the prompt editor is in the same row
   })
 
+  it('puts the keyframe and the clip side by side below the text', () => {
+    renderPanel(job())
+    const kfCell = screen.getByTestId('keyframe-cell-0')
+    const clipCell = screen.getByTestId('clip-cell-0')
+    expect(kfCell.parentElement).toBe(clipCell.parentElement)          // one row of two cells
+    expect(kfCell.parentElement).toHaveClass('sm:grid-cols-2')
+    const prompt = screen.getByDisplayValue('kf')
+    // the text comes first in the document, the media after it
+    expect(prompt.compareDocumentPosition(kfCell) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('gives a stills scene the keyframe alone, not half a row', () => {
+    renderPanel(job({ kind: 'stills' }))
+    expect(screen.queryByTestId('clip-cell-0')).toBeNull()
+    expect(screen.getByTestId('keyframe-cell-0').parentElement).not.toHaveClass('sm:grid-cols-2')
+  })
+
   it('marks the active version and selects another one straight away', async () => {
     const calls: Call[] = []
     stub(calls)

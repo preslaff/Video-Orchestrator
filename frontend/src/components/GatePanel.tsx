@@ -222,7 +222,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
           return (
             <div key={s.index} id={`scene-${s.index}`} className="scroll-mt-4 rounded border border-neutral-200 bg-white p-3 text-sm">
               <div className="mb-2 font-medium">Scene {s.index + 1} <span className="text-xs font-normal text-neutral-500">{locked ? 'keyframe made — prompt edits apply on regenerate' : 'prompts editable'}</span></div>
-              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_22rem]">
+              <div className="space-y-3">
                 <div className="space-y-2">
                 <label className="block"><span className="text-xs text-neutral-500">description</span>
                   <textarea value={d.description} onChange={(e) => set(s.index, { description: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
@@ -298,31 +298,27 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                   </>
                 )}
                 </div>
-              <div className="space-y-2">
-                <MediaThumb url={s.swapped_url ?? s.keyframe_url} width={kf?.[0]} height={kf?.[1]}
-                  alt={`scene ${s.index + 1} keyframe`} />
-                <div className="flex flex-wrap items-center gap-1">
-                  {locked && <Button disabled={busy} onClick={() => regenerate(s.index, 'keyframe')} title="new keyframe (new seed, current prompts); the previous one stays in the strip below">Regenerate keyframe</Button>}
-                  {job.project_id && (
-                    <button type="button" disabled={busy} className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-50"
-                      data-testid={`use-image-${s.index}`} onClick={() => togglePicker(s.index, 'image')}>
-                      {isOpen(s.index, 'image') ? 'Cancel' : 'Use my image…'}
-                    </button>
-                  )}
-                </div>
-                {isOpen(s.index, 'image') && (
-                  <div>
-                    <span className="text-xs text-neutral-500">pick a project image or upload one — it replaces the keyframe (not generated, not evaluated)</span>
-                    <AssetPicker assets={assets} selected={[]} disabled={busy} testId={`keyframe-image-${s.index}`}
-                      onChange={(ids) => ids[0] && chooseImage(s.index, ids[0])}
-                      onUpload={(f) => uploadThen(f, (id) => chooseImage(s.index, id))} uploading={upload.isPending} />
+              {/* Media under the text, keyframe and clip side by side: neither column runs long
+                  enough to leave the other empty while scrolling. */}
+              <div className={`grid gap-3 ${video ? 'sm:grid-cols-2' : 'sm:max-w-md'}`}>
+                <div className="space-y-2" data-testid={`keyframe-cell-${s.index}`}>
+                  <MediaThumb url={s.swapped_url ?? s.keyframe_url} width={kf?.[0]} height={kf?.[1]}
+                    alt={`scene ${s.index + 1} keyframe`} />
+                  <div className="flex flex-wrap items-center gap-1">
+                    {locked && <Button disabled={busy} onClick={() => regenerate(s.index, 'keyframe')} title="new keyframe (new seed, current prompts); the previous one stays in the strip below">Regenerate keyframe</Button>}
+                    {job.project_id && (
+                      <button type="button" disabled={busy} className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-50"
+                        data-testid={`use-image-${s.index}`} onClick={() => togglePicker(s.index, 'image')}>
+                        {isOpen(s.index, 'image') ? 'Cancel' : 'Use my image…'}
+                      </button>
+                    )}
                   </div>
-                )}
-                <VersionStrip scene={s} kind="keyframe" disabled={busy}
-                  onSelect={(id) => selectVersion(s.index, 'keyframe', id)}
-                  onDelete={(id, label) => deleteVersion(s.index, 'keyframe', id, label)} />
+                  <VersionStrip scene={s} kind="keyframe" disabled={busy}
+                    onSelect={(id) => selectVersion(s.index, 'keyframe', id)}
+                    onDelete={(id, label) => deleteVersion(s.index, 'keyframe', id, label)} />
+                </div>
                 {video && (
-                  <>
+                  <div className="space-y-2" data-testid={`clip-cell-${s.index}`}>
                     <MediaThumb url={s.video_url} video width={clip?.[0]} height={clip?.[1]} />
                     {locked && (
                       <Button disabled={busy} onClick={() => regenerate(s.index, 'video')}
@@ -333,9 +329,18 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                     <VersionStrip scene={s} kind="clip" disabled={busy}
                       onSelect={(id) => selectVersion(s.index, 'clip', id)}
                       onDelete={(id, label) => deleteVersion(s.index, 'clip', id, label)} />
-                  </>
+                  </div>
                 )}
               </div>
+              {/* Full width: the picker is a grid of its own and would be cramped in a half column. */}
+              {isOpen(s.index, 'image') && (
+                <div>
+                  <span className="text-xs text-neutral-500">pick a project image or upload one — it replaces the keyframe (not generated, not evaluated)</span>
+                  <AssetPicker assets={assets} selected={[]} disabled={busy} testId={`keyframe-image-${s.index}`}
+                    onChange={(ids) => ids[0] && chooseImage(s.index, ids[0])}
+                    onUpload={(f) => uploadThen(f, (id) => chooseImage(s.index, id))} uploading={upload.isPending} />
+                </div>
+              )}
               </div>
             </div>
           )
