@@ -7,6 +7,7 @@ import type { OutputProfile } from '@/api/types'
 import { useCreateProfile, useUpdateProfile, useWorkflows } from '@/hooks/useSetup'
 import { Button, Card, ErrorBox } from '@/components/ui'
 import { ASPECTS, keyframeSize, orientation, parseAspect, wanSize } from '@/lib/aspect'
+import { estimateClip, fmtRange, vramRatio, vramWarning } from '@/lib/render'
 import { clipSeconds, isWanLength, snapToWan } from '@/lib/wan'
 
 type Draft = {
@@ -58,6 +59,23 @@ export function ProfileEditor({ profile, mode }: { profile: OutputProfile; mode:
   const byKind = (kind: string) => workflows.data?.workflows.filter((w) => w.kind === kind).map((w) => w.name) ?? []
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((x) => ({ ...x, [k]: v }))
+  /** What this size costs: VRAM headroom and how long one clip takes. The numbers come from
+   *  measured runs; a legal size can still be one nobody wants to wait for. */
+  const renderCost = (v: Draft['video']) => {
+    const est = estimateClip({ width: v.width, height: v.height, length: v.length, workflow: v.workflow })
+    const warning = vramWarning(v.width, v.height, v.length)
+    const ratio = vramRatio(v.width, v.height, v.length)
+    if (!est) return null
+    return (
+      <p className={`text-xs ${warning ? 'text-amber-800' : 'text-neutral-500'}`}>
+        <b>{fmtRange(est)}</b> per clip on {est.where}
+        {` · ${ratio.toFixed(1)}× the tested 16 GB budget`}
+        {warning ? ` — ${warning.replace(/^[\d.]+× the tested( 16 GB)? budget( \(portrait\))? — /, '')}` : ''}
+        {!est.measured && ' · estimated with the local rate (this workflow has no measured run)'}
+      </p>
+    )
+  }
+
   const applyAspect = (aspect: string) => {
     const kf = keyframeSize(aspect)
     const wan = wanSize(aspect)
@@ -131,7 +149,8 @@ export function ProfileEditor({ profile, mode }: { profile: OutputProfile; mode:
               <label className="block"><span className="text-xs text-neutral-500">height</span><input type="number" step={16} value={d.video.height} onChange={(e) => set('video', { ...d.video, height: num(e.target.value, 480) })} className={inp} /></label>
               <label className="block"><span className="text-xs text-neutral-500">fps</span><input type="number" min={1} max={60} value={d.video.fps} onChange={(e) => set('video', { ...d.video, fps: num(e.target.value, 16) })} className={inp} /></label>
               <label className="block"><span className="text-xs text-neutral-500">length (frames, 4n+1)</span><input type="number" min={1} value={d.video.length} onChange={(e) => set('video', { ...d.video, length: num(e.target.value, 49) })} onBlur={() => set('video', { ...d.video, length: snapToWan(d.video.length) })} className={inp} /></label>
-              <p className="text-xs text-neutral-500 sm:col-span-2 sm:self-end">≈ {clipSeconds(d.video.length, d.video.fps)} s per clip · 49 / 81 / 121 are typical; above ~81 at 480p watch VRAM.</p>
+              <p className="text-xs text-neutral-500 sm:col-span-2 sm:self-end">≈ {clipSeconds(d.video.length, d.video.fps)} s per clip · 49 / 81 / 121 are typical.</p>
+              <div className="sm:col-span-3" data-testid="render-cost">{renderCost(d.video)}</div>
               <label className="block sm:col-span-3"><span className="text-xs text-neutral-500">negative (empty = style default)</span><input value={d.video.negative} onChange={(e) => set('video', { ...d.video, negative: e.target.value })} className={inp} /></label>
             </div>
           </Card>

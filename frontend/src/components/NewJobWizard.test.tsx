@@ -85,6 +85,22 @@ describe('NewJobWizard', () => {
     expect(posts[0].body).toMatchObject({ idea: 'bread at dawn', force: false })
   })
 
+  it('shows what the job will cost in GPU time, multiplied by the scene count', async () => {
+    mockFetch({ ok: true, checks: [{ name: 'comfy', status: 'ok', detail: '', data: {} }] })
+    const user = userEvent.setup()
+    renderWizard()
+    await user.click(screen.getByText('Next'))
+    await screen.findByText('Cinematic 16:9')
+    await user.click(screen.getByText('Next'))
+    await user.type(screen.getByTestId('idea'), 'bread at dawn')
+    await user.type(screen.getByRole('spinbutton', { name: /scenes/i }), '6')
+    await user.click(screen.getByText('Next'))
+    await screen.findByText('Environment OK.')
+    // 832×480×49 on this GPU ≈ 7.9 min a clip, so six scenes is most of an hour
+    expect(screen.getByTestId('job-cost')).toHaveTextContent(/per clip on this GPU/)
+    expect(screen.getByTestId('job-cost')).toHaveTextContent(/for 6 scenes/)
+  })
+
   const user = userEvent.setup()
 
   it('preselects the project from initialProjectId and starts at the profile step', async () => {

@@ -225,6 +225,16 @@ Wan animates it at (Wan downscales and centre-crops the still itself). They only
 aspect — and the clip, the smaller one, is what you end up with. See
 [Delivery](#delivery-what-you-actually-ship) for turning that into a file you can publish.
 
+**Custom sizes are the point of cloning a profile.** Any 16-aligned size the animate workflow
+allows works (the built-in Wan graph caps each side at 1280; raise it by copying
+`workflows/animate.yaml` into `~/vorch/workflows/` and editing `max:`). The editor shows what a
+size costs as you type it — **how long one clip takes on this GPU, and how far past the tested
+16 GB budget it is** — because a legal size can still be one nobody wants to wait for: 832×1248 is
+~2.6× the budget and roughly half an hour a clip, against ~8 minutes at 832×480. The new-job
+wizard multiplies that by the scene count. Estimates come from measured runs
+(`docs/modal-backend.md`) and are linear in pixels × frames, so treat them as a guide once RAM
+offload starts.
+
 Built-ins (YAML in `vorch/profiles_builtin/`, read-only): `cinematic_16x9` (still 1024×576, clip
 832×480, 49 frames), `social_9x16` (still 576×1024, clip 480×832), `social_1x1` (768×768 → 640×640),
 `stills_16x9` (4 variants, no video). Clone one to change anything (for example `length: 81`

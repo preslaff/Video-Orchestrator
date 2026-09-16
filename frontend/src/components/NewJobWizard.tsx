@@ -9,6 +9,7 @@ import { useEnv, useProfiles, useProject, useProjects, type EnvReport } from '@/
 import { EnvSummary } from '@/components/EnvSummary'
 import { Button, Card, ErrorBox } from '@/components/ui'
 import { clipSeconds } from '@/lib/wan'
+import { estimateClip, fmtDuration, fmtRange, vramWarning } from '@/lib/render'
 
 const STEPS = ['Project', 'Profile', 'Brief', 'Review'] as const
 
@@ -45,6 +46,23 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
   const effectiveProfileId = profileId || project.data?.default_profile_id || 'cinematic_16x9'
   const profile = profiles.data?.find((p) => p.id === effectiveProfileId)
   const env = useEnv(effectiveProfileId, false, step === 3)
+  // What this job will cost in GPU time, from measured runs — the scene count is the multiplier
+  // that turns a comfortable size into an overnight render.
+  const renderCost = (() => {
+    const v = profile?.video
+    if (!v?.width || !v.height || !v.length) return null
+    const est = estimateClip({ width: v.width, height: v.height, length: v.length, workflow: v.workflow })
+    if (!est) return null
+    const scenes = nScenes === '' ? null : Number(nScenes)
+    const warning = vramWarning(v.width, v.height, v.length)
+    return (
+      <span className={warning ? 'text-amber-800' : undefined}>
+        {fmtRange(est)} per clip on {est.where}
+        {scenes ? ` · ${fmtDuration(est.seconds * scenes)} for ${scenes} scenes` : ' · × the scene count'}
+        {warning ? ` — ${warning}` : ''}
+      </span>
+    )
+  })()
   const create = useCreateJob()
 
   const masterAsset = project.data?.assets.find((a) => a.kind === 'master_face')
@@ -221,6 +239,7 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
             <dt className="text-neutral-500">scenes / seed</dt><dd>{nScenes || 'auto'} / {seed || 'random'} · {autonomy}</dd>
             <dt className="text-neutral-500">mode</dt><dd>{mode}{mode === 'edit' ? ` (${refIds.length} ref)` : ''}</dd>
             <dt className="text-neutral-500">face swap</dt><dd>{swapOn ? `on (${masterFace || masterAsset?.name || 'no face!'})` : 'off'}</dd>
+            {renderCost && <><dt className="text-neutral-500">render time</dt><dd data-testid="job-cost">{renderCost}</dd></>}
           </dl>
           <div className="mt-3 space-y-2">
             {problems.map((p) => <ErrorBox key={p} message={p} />)}
