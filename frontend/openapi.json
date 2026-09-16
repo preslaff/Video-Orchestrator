@@ -467,6 +467,67 @@
         }
       }
     },
+    "/api/jobs/{job_id}/scenes/{index}/versions/{version_id}": {
+      "delete": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Delete Scene Version",
+        "description": "Drop one keyframe or clip version from a scene's history.\n\nThe generated file is kept on disk; only the reference is removed. Deleting the active\nversion falls back to the newest remaining one (for a keyframe, its clip follows).",
+        "operationId": "delete_scene_version_api_jobs__job_id__scenes__index__versions__version_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/retry": {
       "post": {
         "tags": [
@@ -2611,6 +2672,113 @@
         ],
         "title": "Body_upload_asset_api_projects__project_id__assets_post"
       },
+      "ClipOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "video_path": {
+            "type": "string",
+            "title": "Video Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "raw_video_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Video Path"
+          },
+          "raw_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Url"
+          },
+          "post_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Post Paths",
+            "default": []
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VerdictOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "keyframe_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keyframe Path"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          },
+          "batch": {
+            "type": "integer",
+            "title": "Batch",
+            "default": 0
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "video_path"
+        ],
+        "title": "ClipOut",
+        "description": "One clip a scene has rendered; the active one is the scene's deliverable."
+      },
       "DecisionOut": {
         "properties": {
           "scene_index": {
@@ -3890,6 +4058,28 @@
               }
             ],
             "title": "Chosen Variant"
+          },
+          "chosen_variant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chosen Variant Id"
+          },
+          "chosen_clip_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chosen Clip Id"
           }
         },
         "type": "object",
@@ -4139,6 +4329,14 @@
             },
             "type": "array",
             "title": "Post Paths",
+            "default": []
+          },
+          "clips": {
+            "items": {
+              "$ref": "#/components/schemas/ClipOut"
+            },
+            "type": "array",
+            "title": "Clips",
             "default": []
           },
           "keyframe_source": {
@@ -4468,6 +4666,26 @@
               }
             ],
             "title": "Asset Id"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          },
+          "batch": {
+            "type": "integer",
+            "title": "Batch",
+            "default": 0
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": false
           }
         },
         "type": "object",

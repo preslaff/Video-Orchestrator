@@ -115,9 +115,12 @@ def test_a_stills_job_with_variants_never_generates_over_the_chosen_image(env, m
     s = job.scenes[0]
     assert [v.source for v in s.variants] == ["user"] and job.status is JobStatus.DONE
 
-    # A plain regenerate goes back to generating.
+    # A plain regenerate goes back to generating — the chosen image stays in the history.
     o.reopen_scene(job, 0, what="keyframe")
-    assert job.scenes[0].variants == [] and job.scenes[0].status is SceneStatus.PENDING
+    s = job.scenes[0]
+    assert [v.source for v in s.variants] == ["user"] and s.keyframe_path is None
+    assert s.status is SceneStatus.PENDING
+    assert Orchestrator._scene_needs_keyframes(s, 4) is True  # no longer frozen by the old user image
 
 
 def test_bad_image_choices_are_rejected_before_the_job_starts(env):

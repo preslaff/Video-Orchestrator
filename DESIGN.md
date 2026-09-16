@@ -386,3 +386,28 @@ sidecar manifest).
   per-project lock — because a project is saved whole and the describer writes concurrently with
   uploads and edits. In-process only: running `label-assets` from the CLI against a project the
   server is describing is unsupported.
+
+## 16. Scene media versions
+
+A scene keeps **every keyframe it has had** (`Scene.variants`) and **every clip it has rendered**
+(`Scene.clips`); the scalar fields (`keyframe_path`, `swapped_path`, `video_path`,
+`raw_video_path`, `post_paths`) are the **projection of the active pair**, so assembly, export and
+the API keep reading one keyframe and one clip. Nothing on disk was ever overwritten — ComfyUI
+auto-increments filenames and each file keeps its provenance sidecar — so keeping history is
+keeping references.
+
+- **Regeneration appends.** `reopen_scene` clears only the projection, which is what makes the next
+  run produce a new *batch* (`Variant.batch` / `Clip.batch` = the scene's `regenerations`).
+- **Batch-scoped generation.** `_phase_keyframes` tops up the current batch, `choose_variant` picks
+  within it (an old high scorer must not override a fresh run), `_scene_needs_keyframes` looks at
+  the *active* variant for the user-image freeze, and the stills phase finishes and names the
+  current batch. All four used to count the whole list.
+- **`vorch/versions.py` owns the pointers**: `select_variant` (choosing an older keyframe re-points
+  to the clip rendered from it when the history still has one — nothing to re-render; otherwise the
+  gate reopens), `select_clip` (what assembly and export use), `delete_version` (drops the
+  reference, **keeps the file**, falls back to the newest remaining), and `adopt_legacy`, which
+  gives jobs from before this feature their current media with ids derived from the path
+  (`stable_id`) so a read needs no write.
+- API: `SceneEdit.chosen_variant_id` / `chosen_clip_id` (the index-based `chosen_variant` still
+  works), `ScenePublic.clips`, `active` on each version, and
+  `DELETE /api/jobs/{id}/scenes/{n}/versions/{version_id}`.

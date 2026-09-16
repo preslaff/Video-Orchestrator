@@ -49,7 +49,9 @@ class SceneEdit(BaseModel):
     references: list[str] | None = None            # explicit paths (CLI / no project)
     reference_asset_ids: list[str] | None = None   # project asset ids -> resolved into `references`
     identity_asset_id: str | None = None           # face for this scene's swap; "" clears it (no swap)
-    chosen_variant: int | None = None   # pick which variant is the scene's keyframe
+    chosen_variant: int | None = None      # legacy: pick a keyframe version by list position
+    chosen_variant_id: str | None = None   # pick which keyframe version is active (stable id)
+    chosen_clip_id: str | None = None      # pick which rendered clip is the deliverable
 
 
 class SceneEdits(BaseModel):
@@ -94,6 +96,23 @@ class VerdictOut(BaseModel):
     fix_suggestion: str = ""
 
 
+class ClipOut(BaseModel):
+    """One clip a scene has rendered; the active one is the scene's deliverable."""
+
+    id: str
+    video_path: str
+    url: str | None = None
+    raw_video_path: str | None = None
+    raw_url: str | None = None
+    post_paths: list[str] = []
+    seed: int | None = None
+    verdict: VerdictOut | None = None
+    keyframe_path: str | None = None   # the frame it was animated from
+    created_at: str = ""
+    batch: int = 0
+    active: bool = False
+
+
 class VariantOut(BaseModel):
     path: str
     url: str | None = None
@@ -104,6 +123,10 @@ class VariantOut(BaseModel):
     post_paths: list[str] = []
     source: str = "generated"   # "user" = an image the user chose, not generated
     asset_id: str | None = None
+    id: str = ""
+    created_at: str = ""
+    batch: int = 0              # which generation run made it
+    active: bool = False        # the scene's current keyframe
 
 
 class ScenePublic(BaseModel):
@@ -136,6 +159,7 @@ class ScenePublic(BaseModel):
     variants: list[VariantOut] = []
     raw_video_path: str | None = None
     post_paths: list[str] = []
+    clips: list[ClipOut] = []   # every clip ever rendered for this scene, oldest first
     # "user" when the chosen keyframe is an image the user picked instead of a generated one.
     keyframe_source: str = "generated"
     keyframe_asset_id: str | None = None

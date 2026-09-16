@@ -133,6 +133,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/scenes/{index}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Scene Version
+         * @description Drop one keyframe or clip version from a scene's history.
+         *
+         *     The generated file is kept on disk; only the reference is removed. Deleting the active
+         *     version falls back to the newest remaining one (for a keyframe, its clip follows).
+         */
+        delete: operations["delete_scene_version_api_jobs__job_id__scenes__index__versions__version_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/retry": {
         parameters: {
             query?: never;
@@ -896,6 +919,47 @@ export interface components {
              */
             label: string;
         };
+        /**
+         * ClipOut
+         * @description One clip a scene has rendered; the active one is the scene's deliverable.
+         */
+        ClipOut: {
+            /** Id */
+            id: string;
+            /** Video Path */
+            video_path: string;
+            /** Url */
+            url?: string | null;
+            /** Raw Video Path */
+            raw_video_path?: string | null;
+            /** Raw Url */
+            raw_url?: string | null;
+            /**
+             * Post Paths
+             * @default []
+             */
+            post_paths: string[];
+            /** Seed */
+            seed?: number | null;
+            verdict?: components["schemas"]["VerdictOut"] | null;
+            /** Keyframe Path */
+            keyframe_path?: string | null;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /**
+             * Batch
+             * @default 0
+             */
+            batch: number;
+            /**
+             * Active
+             * @default false
+             */
+            active: boolean;
+        };
         /** DecisionOut */
         DecisionOut: {
             /** Scene Index */
@@ -1439,6 +1503,10 @@ export interface components {
             identity_asset_id?: string | null;
             /** Chosen Variant */
             chosen_variant?: number | null;
+            /** Chosen Variant Id */
+            chosen_variant_id?: string | null;
+            /** Chosen Clip Id */
+            chosen_clip_id?: string | null;
         };
         /** SceneEdits */
         SceneEdits: {
@@ -1547,6 +1615,11 @@ export interface components {
              * @default []
              */
             post_paths: string[];
+            /**
+             * Clips
+             * @default []
+             */
+            clips: components["schemas"]["ClipOut"][];
             /**
              * Keyframe Source
              * @default generated
@@ -1662,6 +1735,26 @@ export interface components {
             source: string;
             /** Asset Id */
             asset_id?: string | null;
+            /**
+             * Id
+             * @default
+             */
+            id: string;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /**
+             * Batch
+             * @default 0
+             */
+            batch: number;
+            /**
+             * Active
+             * @default false
+             */
+            active: boolean;
         };
         /** VerdictOut */
         VerdictOut: {
@@ -2008,6 +2101,39 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_scene_version_api_jobs__job_id__scenes__index__versions__version_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

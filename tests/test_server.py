@@ -838,3 +838,30 @@ def test_project_describe_hint_is_editable(client):
     assert client.get(f"/api/projects/{pid}").json()["describe_hint"] == "lighthouses"
     r = client.put(f"/api/projects/{pid}", json={"describe_hint": "lighthouses; tag as fog_horn"})
     assert r.json()["describe_hint"] == "lighthouses; tag as fog_horn"
+
+
+def test_scene_versions_are_public_and_deletable(client):
+    from vorch.state import Clip, Scene, Variant, new_job
+
+    job = new_job(idea="versions", kind="video")
+    job.status = JobStatus.DONE
+    job.scenes = [Scene(index=0, keyframe_path="/kf2.png", video_path="/clip2.mp4",
+                        variants=[Variant("/kf1.png", id="k1"), Variant("/kf2.png", id="k2")],
+                        clips=[Clip("/clip1.mp4", id="c1", keyframe_path="/kf1.png"),
+                               Clip("/clip2.mp4", id="c2", keyframe_path="/kf2.png")])]
+    client.store.save_job(job)
+
+    s = client.get(f"/api/jobs/{job.id}").json()["scenes"][0]
+    assert [(v["id"], v["active"]) for v in s["variants"]] == [("k1", False), ("k2", True)]
+    assert [(c["id"], c["active"]) for c in s["clips"]] == [("c1", False), ("c2", True)]
+
+    r = client.put(f"/api/jobs/{job.id}/scenes", json={"scenes": [{"index": 0, "chosen_variant_id": "k1"}]})
+    assert r.status_code == 200
+    s = r.json()["scenes"][0]
+    assert s["keyframe_path"] == "/kf1.png" and s["video_path"] == "/clip1.mp4"  # its clip came back
+
+    r = client.delete(f"/api/jobs/{job.id}/scenes/0/versions/c1")
+    assert r.status_code == 200 and [c["id"] for c in r.json()["scenes"][0]["clips"]] == ["c2"]
+    assert client.delete(f"/api/jobs/{job.id}/scenes/0/versions/nope").status_code == 400
+    assert client.delete(f"/api/jobs/{job.id}/scenes/9/versions/k1").status_code == 404
+    assert client.delete(f"/api/jobs/nope/scenes/0/versions/k1").status_code == 404

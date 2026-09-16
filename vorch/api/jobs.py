@@ -176,6 +176,30 @@ async def stop(
     return job_to_public(job, store, manager)
 
 
+@router.delete("/{job_id}/scenes/{index}/versions/{version_id}", response_model=JobPublic)
+async def delete_scene_version(
+    job_id: str,
+    index: int,
+    version_id: str,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Drop one keyframe or clip version from a scene's history.
+
+    The generated file is kept on disk; only the reference is removed. Deleting the active
+    version falls back to the newest remaining one (for a keyframe, its clip follows)."""
+    _load(store, job_id)
+    try:
+        job = manager.delete_version(job_id, index, version_id)
+    except KeyError as e:
+        raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    except ValueError as e:
+        raise ApiError(400, "bad_request", str(e))
+    return job_to_public(job, store, manager)
+
+
 @router.post("/{job_id}/retry", response_model=JobPublic)
 async def retry(
     job_id: str,

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import cancel, config, media, pipeline, profiles, provenance, storyboard
@@ -30,12 +31,34 @@ from . import scene_assets
 from .genparams import DEFAULT, GenParams
 from .steps.edit import reference_slots
 from .steps.postprocess import run_chain
-from .state import Decision, Job, JobStatus, Scene, SceneStatus, Store, Variant, new_job
+from .state import Clip, Decision, Job, JobStatus, Scene, SceneStatus, Store, Variant, new_job
 
 log = logging.getLogger("vorch.orchestrator")
 
 GATE_STORYBOARD = "storyboard"
 GATE_KEYFRAMES = "keyframes"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def batch_of(scene: Scene) -> int:
+    """Which generation run the scene is on; every version records the batch that made it."""
+    return scene.regenerations
+
+
+def current_batch(scene: Scene) -> list[Variant]:
+    """The keyframes made by this run — what `choose_variant` may pick from.
+
+    History is kept, so choosing across *all* variants would let an old high scorer
+    silently override a fresh run (or the user's explicit pick).
+    """
+    return [v for v in scene.variants if v.batch == batch_of(scene)]
+
+
+def active_variant(scene: Scene) -> Variant | None:
+    return next((v for v in scene.variants if v.path == scene.keyframe_path), None)
 
 
 def choose_variant(variants: list[Variant]) -> Variant:
@@ -272,15 +295,17 @@ class Orchestrator:
             scene.swap_verdict = None
             if user_asset:
                 path, asset = self._install_user_keyframe(job, scene, user_asset)
-                scene.variants.append(Variant(path=str(path), source="user", asset_id=user_asset))
+                scene.variants.append(Variant(path=str(path), source="user", asset_id=user_asset,
+                                              created_at=_now(), batch=scene.regenerations + 1))
                 scene.keyframe_path = str(path)
             else:
+                # History is kept: only the pointer is cleared, which is what makes the next
+                # run generate a new batch. Every file stays on disk with its provenance.
                 scene.keyframe_path = None
-                scene.variants = []
         if what == "video":
             scene.swapped_path = None   # the swap is part of the video phase: redo it with the current identity
             scene.swap_verdict = None
-        scene.video_path = None
+        scene.video_path = None      # the clip projection; scene.clips keeps every rendered clip
         scene.raw_video_path = None
         scene.video_verdict = None
         scene.post_paths = []
@@ -463,23 +488,26 @@ class Orchestrator:
                 pipeline.stage_references(scene.references, self.params, cache=ref_cache)
                 if scene.mode == "edit" else ()
             )
+            batch = batch_of(scene)
+            done = len(current_batch(scene))   # resume: how many of this run's variants exist
             slots = reference_slots(self.params.edit_workflow) if scene.mode == "edit" else 0
-            if slots and len(scene.references) > slots and not scene.variants:
+            if slots and len(scene.references) > slots and not done:
                 self.store.log_decision(Decision(
                     job_id=job.id, scene_index=scene.index, phase="keyframe", attempt=1, action="warning",
                     reason=f"{len(scene.references)} references but {self.params.edit_workflow} uses the first {slots}",
                 ))
-            for v in range(len(scene.variants), n):
+            for v in range(done, n):
                 cancel.check()  # every earlier variant is already saved
                 provenance.set_context(scene=scene.index, variant=v if n > 1 else None)
                 seed = config.derive_seed(self.seed, scene=scene.index, variant=v,
                                           attempt=1 + 10 * scene.regenerations)
                 path, verdict = self._one_keyframe(job, scene, seed=seed, refs=refs, variant=v)
-                scene.variants.append(Variant(path=str(path), seed=_seed_used(path, seed), verdict=verdict))
+                scene.variants.append(Variant(path=str(path), seed=_seed_used(path, seed), verdict=verdict,
+                                              created_at=_now(), batch=batch))
                 self.store.save_job(job)  # persist per variant — resumable
                 if n > 1:
                     self._event(job, "variant", index=scene.index, variant=v, path=str(path))
-            chosen = choose_variant(scene.variants)
+            chosen = choose_variant(current_batch(scene))
             scene.keyframe_path = chosen.path
             scene.keyframe_verdict = chosen.verdict
             scene.status = SceneStatus.KEYFRAME
@@ -528,11 +556,13 @@ class Orchestrator:
 
     @staticmethod
     def _scene_needs_keyframes(scene: Scene, n: int) -> bool:
-        if scene.keyframe_path and any(v.source == "user" for v in scene.variants):
-            return False  # the user chose the keyframe: never generate over it or re-choose
+        active = active_variant(scene)
+        if active is not None and active.source == "user":
+            return False  # the active keyframe is the user's image: never generate over it
         if scene.keyframe_path is None or scene.status is SceneStatus.PENDING:
             return True
-        return n > 1 and len(scene.variants) < n
+        # Only this run's variants count: history from earlier runs must not look "already done".
+        return n > 1 and len(current_batch(scene)) < n
 
     def _phase_finish_stills(self, job: Job) -> None:
         """Stills jobs: impose the master face on every variant (when enabled) and
@@ -550,17 +580,20 @@ class Orchestrator:
             face = scene.identity if self.face_swap else ""
             do_swap = bool(face)
             master_name = pipeline.stage_identity(face, self.params, cache=face_cache) if do_swap else None
+            # Only this run's variants are finished; older ones keep the outputs they had.
+            batch = current_batch(scene) or scene.variants
+            many = len(batch) > 1
             if do_swap:
-                for v, variant in enumerate(scene.variants):
+                for v, variant in enumerate(batch):
                     if variant.swapped_path:
                         continue
                     cancel.check()
-                    provenance.set_context(variant=v if len(scene.variants) > 1 else None)
-                    self._event(job, "step", step="swap", index=scene.index, variant=v, variants=len(scene.variants))
+                    provenance.set_context(variant=v if many else None)
+                    self._event(job, "step", step="swap", index=scene.index, variant=v, variants=len(batch))
                     swapped = pipeline.swap_master_onto(
                         variant.path, master_name, params=self.params,
                         label=f"scene {scene.index} variant {v} faceswap",
-                        filename_prefix=output_prefix(job, scene.index, "swapped", v if len(scene.variants) > 1 else None),
+                        filename_prefix=output_prefix(job, scene.index, "swapped", v if many else None),
                     )
                     variant.swapped_path = str(swapped)
                     self.store.save_job(job)
@@ -573,7 +606,7 @@ class Orchestrator:
                         filename_prefix=output_prefix(job, scene.index, "swapped")))
                 scene.status = SceneStatus.SWAP
             if self.params.post_steps:
-                for v, variant in enumerate(scene.variants):
+                for v, variant in enumerate(batch):
                     if variant.post_paths:
                         continue
                     cancel.check()
@@ -582,7 +615,7 @@ class Orchestrator:
                     src = variant.swapped_path or variant.path
                     outs = run_chain(
                         src, self.params.post_steps, seed=variant.seed,
-                        filename_prefix=output_prefix(job, scene.index, "post", v if len(scene.variants) > 1 else None),
+                        filename_prefix=output_prefix(job, scene.index, "post", v if many else None),
                         master_face=scene.identity or None,
                         prompts={"positive": scene.keyframe_prompt},
                     )
@@ -594,10 +627,24 @@ class Orchestrator:
             scene.status = SceneStatus.COMPLETE
             self.store.log_decision(
                 Decision(job_id=job.id, scene_index=scene.index, phase="stills",
-                         attempt=1, action="generated", reason=f"{len(scene.variants)} variant(s)")
+                         attempt=1, action="generated", reason=f"{len(batch)} variant(s)")
             )
             self.store.save_job(job)
-            self._event(job, "stills", index=scene.index, variants=len(scene.variants))
+            self._event(job, "stills", index=scene.index, variants=len(batch))
+
+    @staticmethod
+    def _record_clip(scene: Scene, seed: int) -> Clip:
+        """Append the clip just finished to the scene's history (the scene's clip fields
+        stay the projection of the active one). Re-recording the same file is a no-op, so
+        a resumed run cannot duplicate an entry."""
+        existing = next((c for c in scene.clips if c.video_path == scene.video_path), None)
+        if existing is not None:
+            return existing
+        clip = Clip(video_path=str(scene.video_path), raw_video_path=scene.raw_video_path,
+                    post_paths=list(scene.post_paths), seed=seed, verdict=scene.video_verdict,
+                    keyframe_path=scene.keyframe_path, created_at=_now(), batch=scene.regenerations)
+        scene.clips.append(clip)
+        return clip
 
     def _flag_verdict(self, job: Job, scene_index: int, verdict, *, attempt: int = 1) -> None:
         """Log advisory flags alongside a recorded verdict (never blocks)."""
@@ -626,6 +673,9 @@ class Orchestrator:
         post-steps did not finish runs only the chain. ``video_path`` (the deliverable)
         is set only once the chain has finished — or together with the raw clip when
         the profile has no post-steps.
+
+        Each finished clip is appended to ``scene.clips`` and the scene's clip fields are
+        the projection of the active one, so re-animating keeps every earlier take.
         """
         face_cache: dict = {}  # (backend, face path) -> staged name; faces differ per scene
         self._event(job, "phase", phase="videos", total=len(job.scenes),
@@ -671,6 +721,7 @@ class Orchestrator:
                 scene.raw_video_path = str(video)
                 if not self.params.post_steps:
                     scene.video_path = str(video)
+                    self._record_clip(scene, seed)
                 self.store.log_decision(
                     Decision(job_id=job.id, scene_index=scene.index, phase="video",
                              attempt=1, action="generated")
@@ -692,6 +743,7 @@ class Orchestrator:
                 if outs:
                     scene.post_paths = [str(o) for o in outs]
                     scene.video_path = str(outs[-1])
+                    self._record_clip(scene, seed)
                     self.store.log_decision(
                         Decision(job_id=job.id, scene_index=scene.index, phase="post", attempt=1,
                                  action="generated", reason=", ".join(s.workflow for s in self.params.post_steps))
@@ -700,6 +752,7 @@ class Orchestrator:
                         self._event(job, "postprocess", index=scene.index, step=i, path=str(o))
                 else:
                     scene.video_path = scene.raw_video_path  # every step was skipped
+                    self._record_clip(scene, seed)
             scene.status = SceneStatus.COMPLETE
             self.store.save_job(job)
 

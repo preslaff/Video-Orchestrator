@@ -62,9 +62,18 @@ class SceneStatus(str, Enum):
 # --- Data model (DESIGN.md §6) -----------------------------------------------
 
 
+def new_version_id() -> str:
+    """Short stable id for one media version (list positions shift when versions are deleted)."""
+    return uuid.uuid4().hex[:8]
+
+
 @dataclass
 class Variant:
-    """One generated candidate for a scene's keyframe (stills jobs make several)."""
+    """One keyframe a scene has had: a generated candidate, or an image the user chose.
+
+    Kept forever — regenerating appends rather than replaces, and the files are never
+    overwritten on disk. ``Scene.keyframe_path`` points at the active one.
+    """
 
     path: str
     seed: int | None = None
@@ -73,6 +82,28 @@ class Variant:
     post_paths: list[str] = field(default_factory=list)
     source: str = "generated"      # "generated" | "user" (an image the user chose as the keyframe)
     asset_id: str | None = None    # the project asset behind a user keyframe
+    id: str = field(default_factory=new_version_id)
+    created_at: str = ""
+    batch: int = 0                 # the scene's `regenerations` when it was made: which run produced it
+
+
+@dataclass
+class Clip:
+    """One clip a scene has had: the Wan render plus its post-step chain.
+
+    ``Scene.video_path`` / ``raw_video_path`` / ``post_paths`` are the *projection* of the
+    active clip, so everything downstream (assembly, export, the API) keeps reading one clip.
+    """
+
+    video_path: str                      # the deliverable (last post-step output, else the raw clip)
+    raw_video_path: str | None = None    # Wan output before post-steps
+    post_paths: list[str] = field(default_factory=list)
+    seed: int | None = None
+    verdict: Verdict | None = None
+    keyframe_path: str | None = None     # the frame it was animated from (a Variant's path)
+    id: str = field(default_factory=new_version_id)
+    created_at: str = ""
+    batch: int = 0
 
 
 @dataclass
@@ -105,7 +136,8 @@ class Scene:
     swapped_path: str | None = None
     swap_verdict: Verdict | None = None
     status: SceneStatus = SceneStatus.PENDING
-    variants: list[Variant] = field(default_factory=list)   # keyframe candidates; keyframe_path = chosen
+    variants: list[Variant] = field(default_factory=list)   # every keyframe ever made; keyframe_path = active
+    clips: list[Clip] = field(default_factory=list)          # every clip ever rendered; video_path = active
     raw_video_path: str | None = None    # Wan output before post-steps (video_path = final)
     post_paths: list[str] = field(default_factory=list)      # post-step outputs in order
     regenerations: int = 0               # manual keyframe/clip redo count (seed offset)
@@ -218,7 +250,38 @@ def _variant_to_dict(v: Variant) -> dict:
         "post_paths": list(v.post_paths),
         "source": v.source,
         "asset_id": v.asset_id,
+        "id": v.id,
+        "created_at": v.created_at,
+        "batch": v.batch,
     }
+
+
+def _clip_to_dict(c: Clip) -> dict:
+    return {
+        "video_path": c.video_path,
+        "raw_video_path": c.raw_video_path,
+        "post_paths": list(c.post_paths),
+        "seed": c.seed,
+        "verdict": _verdict_to_dict(c.verdict),
+        "keyframe_path": c.keyframe_path,
+        "id": c.id,
+        "created_at": c.created_at,
+        "batch": c.batch,
+    }
+
+
+def _clip_from_dict(d: dict) -> Clip:
+    return Clip(
+        video_path=d["video_path"],
+        raw_video_path=d.get("raw_video_path"),
+        post_paths=list(d.get("post_paths", []) or []),
+        seed=d.get("seed"),
+        verdict=_verdict_from_dict(d.get("verdict")),
+        keyframe_path=d.get("keyframe_path"),
+        id=d.get("id") or new_version_id(),
+        created_at=d.get("created_at", "") or "",
+        batch=int(d.get("batch", 0) or 0),
+    )
 
 
 def _variant_from_dict(d: dict) -> Variant:
@@ -230,6 +293,9 @@ def _variant_from_dict(d: dict) -> Variant:
         post_paths=list(d.get("post_paths", []) or []),
         source=d.get("source", "generated") or "generated",
         asset_id=d.get("asset_id"),
+        id=d.get("id") or new_version_id(),   # jobs saved before versions had ids
+        created_at=d.get("created_at", "") or "",
+        batch=int(d.get("batch", 0) or 0),
     )
 
 
@@ -258,6 +324,7 @@ def _scene_to_dict(s: Scene) -> dict:
         "swap_verdict": _verdict_to_dict(s.swap_verdict),
         "status": s.status.value,
         "variants": [_variant_to_dict(v) for v in s.variants],
+        "clips": [_clip_to_dict(c) for c in s.clips],
         "raw_video_path": s.raw_video_path,
         "post_paths": list(s.post_paths),
         "regenerations": s.regenerations,
@@ -289,6 +356,7 @@ def _scene_from_dict(d: dict) -> Scene:
         swap_verdict=_verdict_from_dict(d.get("swap_verdict")),
         status=SceneStatus(d.get("status", "pending")),
         variants=[_variant_from_dict(v) for v in d.get("variants", []) or []],
+        clips=[_clip_from_dict(c) for c in d.get("clips", []) or []],
         raw_video_path=d.get("raw_video_path"),
         post_paths=list(d.get("post_paths", []) or []),
         regenerations=int(d.get("regenerations", 0) or 0),

@@ -24,6 +24,7 @@ from . import cancel
 from . import export as export_mod
 from . import projects as projects_mod
 from . import scene_assets
+from . import versions as versions_mod
 from .orchestrator import GATE_KEYFRAMES, Orchestrator
 from .state import Decision, Job, JobStatus, SceneStatus, Store
 from .submission import resolve_submission
@@ -285,6 +286,28 @@ class JobManager:
         self._spawn(self._execute(job, lambda o, j: o.regenerate(j, index, what=what, edits=edits), prev))
         return job
 
+    def delete_version(self, job_id: str, index: int, version_id: str) -> Job:
+        """Remove one keyframe or clip version from a scene's history.
+
+        The file stays on disk (with its provenance sidecar) — only the reference goes.
+        Deleting the active version falls back to the newest remaining one. Refused while a
+        run segment is in flight, like every other edit.
+        """
+        if job_id in self._active:
+            raise RuntimeError(f"job {job_id} is running; pause before editing")
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        scene = next((s for s in job.scenes if s.index == index), None)
+        if scene is None:
+            raise KeyError(f"scene {index}")
+        versions_mod.adopt_legacy(scene)
+        kind = versions_mod.delete_version(scene, version_id, kind=job.kind)  # ValueError -> 400
+        job.export = None
+        self.store.log_decision(Decision(job_id=job.id, scene_index=index, phase=kind, attempt=1,
+                                         action="deleted", reason=f"{kind} version {version_id}"))
+        return self.store.save_job(job)
+
     def _rehearse_regenerate(self, job: Job, scene, what: str, edits: dict) -> None:
         """Apply a regenerate's edits to a copy of the scene and validate the result.
 
@@ -347,6 +370,8 @@ class JobManager:
         if job is None:
             raise KeyError(job_id)
         by_index = {s.index: s for s in job.scenes}
+        for s in job.scenes:
+            versions_mod.adopt_legacy(s)  # a job from before versions can still have one selected
         project = (projects_mod.load(self.store, job.project_id)
                    if job.project_id and any(scene_assets.has_asset_edits(e) for e in edits) else None)
         reopen_keyframes = False
@@ -366,27 +391,18 @@ class JobManager:
             if (scene.identity, scene.identity_asset_id) != old_identity:
                 scene_assets.invalidate_after_identity_change(scene, job.kind)
                 job.export = None
-            chosen = edit.get("chosen_variant")
-            if chosen is not None:
-                if not 0 <= int(chosen) < len(scene.variants):
-                    raise ValueError(f"scene {scene.index}: no variant {chosen}")
-                v = scene.variants[int(chosen)]
-                if v.path != scene.keyframe_path:
-                    scene.keyframe_path, scene.keyframe_verdict = v.path, v.verdict
+            chosen, chosen_id = edit.get("chosen_variant"), edit.get("chosen_variant_id")
+            if chosen is not None or chosen_id is not None:
+                v = versions_mod.variant_by(scene, id=chosen_id, index=chosen)
+                outcome = versions_mod.select_variant(scene, v, kind=job.kind)
+                if outcome != "unchanged":
                     job.export = None
-                    if job.kind == "stills":
-                        # Stills finish every variant; the scene shows the chosen one's outputs.
-                        scene.swapped_path = v.swapped_path
-                        scene.post_paths = list(v.post_paths)
-                    else:
-                        # The clip was animated from the previous keyframe.
-                        scene.swapped_path = None
-                        scene.swap_verdict = None
-                        scene.raw_video_path = scene.video_path = None
-                        scene.video_verdict = None
-                        scene.post_paths = []
-                        scene.status = SceneStatus.KEYFRAME
-                        reopen_keyframes = True
+                    # A clip rendered from this keyframe is still in the history: it becomes the
+                    # deliverable again, so there is nothing to re-render and no gate to reopen.
+                    reopen_keyframes = reopen_keyframes or outcome == "clip_cleared"
+            if (clip_id := edit.get("chosen_clip_id")) is not None:
+                if versions_mod.select_clip(scene, versions_mod.clip_by(scene, clip_id)):
+                    job.export = None
         if reopen_keyframes and job.autonomy != "full":
             # The new keyframe must be reviewed before its clip is rendered again.
             self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase=GATE_KEYFRAMES,

@@ -10,11 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import config, provenance
+from .. import versions as versions_mod
 from ..evaluator import Verdict
 from ..orchestrator import Orchestrator
 from ..steps.edit import reference_slots
-from ..state import Job, Scene, Store, Variant, _scene_to_dict, job_to_dict
-from .schemas import JobPublic, ProvenanceOut, ScenePublic, VariantOut, VerdictOut
+from ..state import Clip, Job, Scene, Store, Variant, _scene_to_dict, job_to_dict
+from .schemas import ClipOut, JobPublic, ProvenanceOut, ScenePublic, VariantOut, VerdictOut
 
 
 def media_url(path: str | None) -> str | None:
@@ -34,17 +35,28 @@ def verdict_out(v: Verdict | None) -> VerdictOut | None:
     return VerdictOut(decision=v.decision, needs_review=v.needs_review, **v.model_dump())
 
 
-def variant_out(v: Variant) -> VariantOut:
+def variant_out(v: Variant, *, active: bool = False) -> VariantOut:
     return VariantOut(
         path=v.path, url=media_url(v.path), seed=v.seed, verdict=verdict_out(v.verdict),
         swapped_path=v.swapped_path, swapped_url=media_url(v.swapped_path), post_paths=list(v.post_paths),
-        source=v.source, asset_id=v.asset_id,
+        source=v.source, asset_id=v.asset_id, id=v.id, created_at=v.created_at, batch=v.batch, active=active,
+    )
+
+
+def clip_out(c: Clip, *, active: bool = False) -> ClipOut:
+    return ClipOut(
+        id=c.id, video_path=c.video_path, url=media_url(c.video_path),
+        raw_video_path=c.raw_video_path, raw_url=media_url(c.raw_video_path),
+        post_paths=list(c.post_paths), seed=c.seed, verdict=verdict_out(c.verdict),
+        keyframe_path=c.keyframe_path, created_at=c.created_at, batch=c.batch, active=active,
     )
 
 
 def scene_to_public(s: Scene, project_id: str | None = None) -> ScenePublic:
+    versions_mod.adopt_legacy(s)  # jobs from before versions still show their media in the strips
     d = _scene_to_dict(s)
-    d["variants"] = [variant_out(v) for v in s.variants]
+    d["variants"] = [variant_out(v, active=v.path == s.keyframe_path) for v in s.variants]
+    d["clips"] = [clip_out(c, active=c.video_path == s.video_path) for c in s.clips]
     chosen = next((v for v in s.variants if v.path == s.keyframe_path), None)
     if chosen is not None and chosen.source == "user":
         d["keyframe_source"], d["keyframe_asset_id"] = "user", chosen.asset_id
