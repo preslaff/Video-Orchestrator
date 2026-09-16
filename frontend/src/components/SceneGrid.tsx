@@ -1,6 +1,7 @@
 'use client'
 
 import type { AssetOut, JobPublic, ScenePublic, VerdictOut } from '@/api/types'
+import { Zoomable } from '@/components/Lightbox'
 import { MediaThumb } from '@/components/MediaThumb'
 
 export function profileSizes(job: JobPublic): { kf: [number, number] | null; clip: [number, number] | null } {
@@ -38,7 +39,8 @@ export function SceneCard({ job, scene, children, assets = [] }: { job: JobPubli
         <div className="grid grid-cols-2 gap-2">
           {scene.variants.map((v, i) => (
             <div key={i} className={`rounded p-1 ${v.path === scene.keyframe_path ? 'ring-2 ring-neutral-900' : ''}`}>
-              <MediaThumb url={v.swapped_url ?? v.url} width={kf?.[0]} height={kf?.[1]} alt={`variant ${i + 1}`} />
+              <MediaThumb url={v.swapped_url ?? v.url} width={kf?.[0]} height={kf?.[1]} alt={`variant ${i + 1}`}
+                group={scene.variants.map((x, j) => ({ url: (x.swapped_url ?? x.url) ?? '', caption: `Scene ${scene.index + 1} · variant ${j + 1}` }))} groupIndex={i} />
               <div className="mt-1 flex items-center justify-between text-xs text-neutral-500">
                 <span>v{i + 1}{v.seed != null ? ` · seed ${v.seed}` : ''}</span>
                 <VerdictChip v={v.verdict} />
@@ -47,18 +49,21 @@ export function SceneCard({ job, scene, children, assets = [] }: { job: JobPubli
           ))}
         </div>
       ) : (
-        <MediaThumb url={scene.swapped_url ?? scene.keyframe_url} width={kf?.[0]} height={kf?.[1]} alt="keyframe" />
+        <MediaThumb url={scene.swapped_url ?? scene.keyframe_url} width={kf?.[0]} height={kf?.[1]} alt="keyframe"
+          caption={`Scene ${scene.index + 1} · keyframe`} />
       )}
       {!stills && <MediaThumb url={scene.video_url} video width={clip?.[0]} height={clip?.[1]}
-        poster={scene.swapped_url ?? scene.keyframe_url} />}
+        poster={scene.swapped_url ?? scene.keyframe_url} caption={`Scene ${scene.index + 1} · clip`} />}
 
       <div className="flex flex-wrap items-center gap-2">
         <VerdictChip v={scene.keyframe_verdict} />
         {job.face_swap && (scene.identity ? (
           <span className="flex items-center gap-1 rounded bg-sky-100 px-1.5 py-0.5 text-xs text-sky-800" title={scene.identity}>
             {(face?.url ?? scene.identity_url) && (
-              // eslint-disable-next-line @next/next/no-img-element -- served by FastAPI
-              <img src={face?.url ?? scene.identity_url ?? ''} alt="" className="h-4 w-4 rounded-full object-cover" />
+              <Zoomable items={[{ url: face?.url ?? scene.identity_url ?? '', caption: faceLabel }]} className="shrink-0">
+                {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
+                <img src={face?.url ?? scene.identity_url ?? ''} alt="" className="h-4 w-4 rounded-full object-cover" />
+              </Zoomable>
             )}
             {faceLabel}
           </span>

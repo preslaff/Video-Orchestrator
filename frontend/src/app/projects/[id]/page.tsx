@@ -8,6 +8,7 @@ import { useDeleteAsset, useDeleteProject, useDescribeAssets, useProfiles, usePr
 import { useJobs } from '@/hooks/useJobs'
 import { Button, Card, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '@/components/ui'
 import { filterAssets } from '@/lib/assetFilter'
+import { Zoomable } from '@/components/Lightbox'
 
 const KINDS = ['master_face', 'reference', 'product', 'logo', 'other'] as const
 type Kind = (typeof KINDS)[number]
@@ -94,10 +95,14 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
             </div>
           )}
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {visible.slice(0, limit).map((a) => (
+            {visible.slice(0, limit).map((a, i) => (
               <div key={a.id} className="rounded border border-neutral-200 p-1">
-                {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
-                <img src={a.thumb_url || a.url} alt={a.name} loading="lazy" className="aspect-square w-full rounded object-cover" />
+                {/* click: the original, large; ← / → through every asset the filter shows */}
+                <Zoomable items={visible.map((x) => ({ url: x.url, caption: [x.label || x.name, x.note_caption].filter(Boolean).join(' — ') }))}
+                  index={i} className="w-full" testId={`asset-zoom-${a.id}`}>
+                  {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
+                  <img src={a.thumb_url || a.url} alt={a.name} loading="lazy" className="aspect-square w-full rounded object-cover" />
+                </Zoomable>
                 <div className="mt-1 flex items-center justify-between gap-1 text-xs">
                   <span className="min-w-0">
                     <select value={a.kind} aria-label={`kind of ${a.name}`} disabled={updateAsset.isPending}

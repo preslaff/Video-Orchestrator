@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '@/api/client'
 import type { AssetOut, DecisionOut, JobPublic, SceneEdit } from '@/api/types'
 import { AssetPicker } from '@/components/AssetPicker'
+import { Zoomable } from '@/components/Lightbox'
 import { MediaThumb } from '@/components/MediaThumb'
 import { VersionStrip } from '@/components/VersionStrip'
 import { profileSizes } from '@/components/SceneGrid'
@@ -24,8 +25,10 @@ function PickSummary({ assets, ids, empty }: { assets: AssetOut[]; ids: string[]
       {chosen.map((a, i) => (
         <span key={a.id} className="flex max-w-48 items-center gap-1 rounded bg-neutral-100 px-1 py-0.5 text-xs" title={a.note_caption || a.label || a.name}>
           {chosen.length > 1 && <span className="text-neutral-500">{i + 1}.</span>}
-          {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
-          <img src={a.thumb_url || a.url} alt="" loading="lazy" className="h-6 w-6 rounded object-cover" />
+          <Zoomable items={[{ url: a.url, caption: a.label || a.name }]} className="shrink-0">
+            {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
+            <img src={a.thumb_url || a.url} alt="" loading="lazy" className="h-6 w-6 rounded object-cover" />
+          </Zoomable>
           <span className="truncate">{a.label || a.name}</span>
         </span>
       ))}
@@ -44,8 +47,10 @@ function ReferenceHint({ scene, asset, why, fit, inUse, onUse, onUndo }: {
   const sameShot = fit === 'same_shot'
   return (
     <div className="flex items-start gap-2 rounded bg-sky-50 p-2 text-xs text-sky-950" data-testid={`hint-${scene}`}>
-      {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
-      <img src={asset.thumb_url || asset.url} alt="" loading="lazy" className="h-12 w-12 shrink-0 rounded object-cover" />
+      <Zoomable items={[{ url: asset.url, caption: asset.label || asset.name }]} className="shrink-0" testId={`hint-${scene}-zoom`}>
+        {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
+        <img src={asset.thumb_url || asset.url} alt="" loading="lazy" className="h-12 w-12 rounded object-cover" />
+      </Zoomable>
       <div className="min-w-0 flex-1">
         <div><span className="font-semibold">Suggested reference</span> · {sameShot ? 'same shot' : 'motif only'}</div>
         <div className="truncate" title={asset.note_caption || asset.label || asset.name}>{asset.label || asset.name}</div>
@@ -343,7 +348,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
               <div className={`grid gap-3 ${video ? 'sm:grid-cols-2' : 'sm:max-w-md'}`}>
                 <div className="space-y-2" data-testid={`keyframe-cell-${s.index}`}>
                   <MediaThumb url={s.swapped_url ?? s.keyframe_url} width={kf?.[0]} height={kf?.[1]}
-                    alt={`scene ${s.index + 1} keyframe`} />
+                    alt={`scene ${s.index + 1} keyframe`} caption={`Scene ${s.index + 1} · keyframe`} />
                   <div className="flex flex-wrap items-center gap-1">
                     {locked && <Button disabled={busy} onClick={() => regenerate(s.index, 'keyframe')} title="new keyframe (new seed, current prompts); the previous one stays in the strip below">Regenerate keyframe</Button>}
                     {job.project_id && (
@@ -360,7 +365,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                 {video && (
                   <div className="space-y-2" data-testid={`clip-cell-${s.index}`}>
                     <MediaThumb url={s.video_url} video width={clip?.[0]} height={clip?.[1]}
-                      poster={s.swapped_url ?? s.keyframe_url} />
+                      poster={s.swapped_url ?? s.keyframe_url} caption={`Scene ${s.index + 1} · clip`} />
                     {locked && (
                       <Button disabled={busy} onClick={() => regenerate(s.index, 'video')}
                         title={s.video_path ? 'keep the keyframe, render the clip again with the current animation prompt' : 'keep the keyframe, render the (missing) clip with the current animation prompt'}>

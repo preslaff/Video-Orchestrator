@@ -3,6 +3,8 @@
 import { useMemo, useState } from 'react'
 import type { AssetOut } from '@/api/types'
 import { filterAssets, topTags } from '@/lib/assetFilter'
+import { ZoomButton } from '@/components/Lightbox'
+import type { LightboxItem } from '@/components/Lightbox'
 
 /** Above this many assets the picker adds search, tag filters and paging. */
 export const SEARCH_THRESHOLD = 12
@@ -46,14 +48,17 @@ export function AssetPicker({
   }
   const toggleTag = (t: string) => { setTags((ts) => (ts.includes(t) ? ts.filter((x) => x !== t) : [...ts, t])); setLimit(PAGE) }
 
-  const tile = (a: AssetOut) => {
+  const tile = (a: AssetOut, i: number, list: AssetOut[]) => {
     const pos = selected.indexOf(a.id)
     const on = pos >= 0
     // The caption is what makes picking a reference for scene 23 out of seventy
     // thumbnails a decision rather than a guess.
     const caption = a.note_caption || ''
+    // ⤢ opens the original without touching the selection; ← / → step through the same tiles.
+    const group: LightboxItem[] = list.map((x) => ({ url: x.url, caption: [x.label || x.name, x.note_caption].filter(Boolean).join(' — ') }))
     return (
-      <button key={a.id} type="button" disabled={disabled} aria-pressed={on} onClick={() => toggle(a.id)}
+      <div key={a.id} className="group relative">
+      <button type="button" disabled={disabled} aria-pressed={on} onClick={() => toggle(a.id)}
         title={[`${a.kind}: ${a.label || a.name}`, caption].filter(Boolean).join('\n')}
         data-testid={sid(a.id)}
         className={`relative overflow-hidden rounded border text-left ${on ? 'border-neutral-900 ring-2 ring-neutral-900' : 'border-neutral-300 hover:border-neutral-500'}`}>
@@ -66,6 +71,8 @@ export function AssetPicker({
         <span className="block truncate px-1 pt-0.5 text-[11px] text-neutral-700">{a.label || a.name}</span>
         {caption && <span className="block truncate px-1 pb-0.5 text-[10px] text-neutral-500">{caption}</span>}
       </button>
+      <ZoomButton items={group} index={i} className="bottom-10 right-1" testId={`${sid(a.id)}-zoom`} />
+      </div>
     )
   }
   const grid = 'grid grid-cols-3 gap-1 sm:grid-cols-4 lg:grid-cols-6'
@@ -95,7 +102,7 @@ export function AssetPicker({
       {pinned.length > 0 && (
         <div className="mb-1">
           <span className="text-[11px] text-neutral-500">selected</span>
-          <div className={grid}>{pinned.map(tile)}</div>
+          <div className={grid}>{pinned.map((a, i) => tile(a, i, pinned))}</div>
         </div>
       )}
       <div className={large ? 'max-h-80 overflow-y-auto rounded border border-neutral-100 p-1' : ''}>
@@ -106,7 +113,7 @@ export function AssetPicker({
               {none}
             </button>
           )}
-          {shown.map(tile)}
+          {shown.map((a, i) => tile(a, i, shown))}
           {onUpload && (
             <label className={`flex aspect-square cursor-pointer flex-col items-center justify-center rounded border border-dashed text-xs ${disabled || uploading ? 'border-neutral-200 text-neutral-400' : 'border-neutral-400 text-neutral-600 hover:border-neutral-700'}`}
               title="add an image from your computer to the project">

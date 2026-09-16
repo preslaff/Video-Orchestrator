@@ -57,7 +57,7 @@ export function AssemblyVersions({ jobId, versions, size, disabled }: { jobId: s
       </ul>
       {shown && (
         <div className="max-w-md">
-          <MediaThumb key={shown.url ?? shown.version} url={shown.url} video width={shown.width ?? size?.[0]} height={shown.height ?? size?.[1]} />
+          <MediaThumb key={shown.url ?? shown.version} url={shown.url} video width={shown.width ?? size?.[0]} height={shown.height ?? size?.[1]} caption={`assembly v${shown.version}`} />
         </div>
       )}
     </div>

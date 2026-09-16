@@ -190,7 +190,7 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
               <div className={`flex items-center gap-3 rounded border p-2 ${r.selected ? 'border-neutral-300 bg-white' : 'border-neutral-100 bg-neutral-50 opacity-60'}`}>
                 <input type="checkbox" checked={r.selected} onChange={() => toggle(i)} aria-label={`include scene ${r.scene_index + 1}`} />
                 <div className="w-28 shrink-0">
-                  <MediaThumb url={clip?.url} video width={size?.[0]} height={size?.[1]} />
+                  <MediaThumb url={clip?.url} video width={size?.[0]} height={size?.[1]} caption={`Scene ${r.scene_index + 1} · clip`} />
                 </div>
                 <div className="flex-1 text-sm">
                   <div className="font-medium">Scene {r.scene_index + 1} <span className="text-xs font-normal text-neutral-500">{fmtSeconds(clip?.duration)} · {clip?.width}×{clip?.height} @ {clip?.fps} fps</span></div>
@@ -270,7 +270,7 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
       {rec && !active && (
         rec.ok ? (
           <div className="grid gap-3 md:grid-cols-[minmax(0,28rem)_1fr]">
-            <MediaThumb key={rec.url ?? rec.created_at} url={rec.url} video width={rec.width ?? size?.[0]} height={rec.height ?? size?.[1]} />
+            <MediaThumb key={rec.url ?? rec.created_at} url={rec.url} video width={rec.width ?? size?.[0]} height={rec.height ?? size?.[1]} caption={`assembly v${rec.version}`} />
             <div className="space-y-1 text-sm">
               <div className="font-medium">assembly.mp4 <span className="font-mono text-xs text-neutral-500">v{rec.version}</span> {rec.exported ? <span className="rounded bg-green-100 px-1.5 py-0.5 text-xs text-green-800">exported</span> : <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs">not exported yet</span>}</div>
               <div className="text-neutral-600">{rec.n_clips} clip(s) · {fmtSeconds(rec.duration)} · {rec.width}×{rec.height} @ {rec.fps} fps · {fmtBytes(rec.size_bytes)}</div>

@@ -7,6 +7,7 @@ import type { JobSpec, OutputProfile } from '@/api/types'
 import { useCreateJob } from '@/hooks/useJobs'
 import { useEnv, useProfiles, useProject, useProjects, type EnvReport } from '@/hooks/useSetup'
 import { EnvSummary } from '@/components/EnvSummary'
+import { ZoomButton, Zoomable } from '@/components/Lightbox'
 import { Button, Card, ErrorBox } from '@/components/ui'
 import { clipSeconds } from '@/lib/wan'
 import { estimateClip, fmtDuration, fmtRange, vramWarning } from '@/lib/render'
@@ -127,8 +128,10 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
           {project.data && (
             <div className="mt-3 flex items-start gap-4">
               {masterAsset ? (
-                // eslint-disable-next-line @next/next/no-img-element -- served by FastAPI
-                <img src={masterAsset.url} alt={masterAsset.label || masterAsset.name} className="h-24 w-24 rounded object-cover ring-1 ring-neutral-200" />
+                <Zoomable items={[{ url: masterAsset.url, caption: masterAsset.label || masterAsset.name }]} className="shrink-0">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
+                  <img src={masterAsset.url} alt={masterAsset.label || masterAsset.name} className="h-24 w-24 rounded object-cover ring-1 ring-neutral-200" />
+                </Zoomable>
               ) : (
                 <div className="flex h-24 w-24 items-center justify-center rounded bg-neutral-100 text-center text-xs text-neutral-400">no master face</div>
               )}
@@ -196,13 +199,13 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
                       const pos = refIds.indexOf(a.id)
                       const selected = pos >= 0
                       return (
+                        <div key={a.id} className="group relative">
                         <button
-                          key={a.id}
                           type="button"
                           data-testid={`ref-${a.id}`}
                           aria-pressed={selected}
                           onClick={() => setRefIds(selected ? refIds.filter((x) => x !== a.id) : [...refIds, a.id])}
-                          className={`group relative overflow-hidden rounded border text-left ${selected ? 'border-neutral-900 ring-2 ring-neutral-900' : 'border-neutral-200 hover:border-neutral-400'}`}
+                          className={`relative w-full overflow-hidden rounded border text-left ${selected ? 'border-neutral-900 ring-2 ring-neutral-900' : 'border-neutral-200 hover:border-neutral-400'}`}
                           title={a.label || a.name}
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
@@ -212,6 +215,9 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
                             <span className="rounded bg-neutral-100 px-1">{a.kind}</span> {a.label || a.name}
                           </span>
                         </button>
+                        <ZoomButton items={refAssets.map((x) => ({ url: x.url, caption: x.label || x.name }))} index={refAssets.indexOf(a)}
+                          className="right-1 top-1" testId={`ref-${a.id}-zoom`} />
+                        </div>
                       )
                     })}
                   </div>

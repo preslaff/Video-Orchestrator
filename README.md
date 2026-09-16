@@ -141,6 +141,11 @@ the UI).
 | `/setup/profiles` | Output profiles: clone, edit (aspect presets, sizes, 4n+1 helper, style vocabulary, workflow pickers, post-steps), delete. Built-ins are read-only. |
 | `/projects` | The projects list (default profile, assets, jobs, last activity, plus an **Unassigned** row for jobs without a project) and the project page: settings, asset uploads (master face, references, products, logos), the project's jobs and **New job in this project** (opens the wizard with the project preselected). `/setup/projects` redirects here. |
 
+**Every preview opens the original.** Click an image (keyframe, variant, asset, face, reference chip)
+to see the full file in a lightbox; videos (clips, clip versions, assemblies) and tiles whose click
+selects something (asset pickers, version strips) have a ⤢ corner button instead. ← / → step
+through a grid, Esc closes, *open original ↗* opens the file in a new tab.
+
 ## Setup phase
 
 ### Environment check

@@ -1,6 +1,7 @@
 'use client'
 
 import type { ScenePublic } from '@/api/types'
+import { ZoomButton } from '@/components/Lightbox'
 
 type Variant = ScenePublic['variants'][number]
 type Clip = ScenePublic['clips'][number]
@@ -65,7 +66,7 @@ export function VersionStrip({
   return (
     <div className="flex gap-1 overflow-x-auto pb-1" data-testid={`versions-${kind}-${scene.index}`}>
       {entries.map((e, i) => (
-        <div key={e.id} className="relative shrink-0">
+        <div key={e.id} className="group relative shrink-0">
           {i > 0 && entries[i - 1].batch !== e.batch && (
             // where one generation run ends and the previous begins
             <span className="absolute -left-0.5 top-0 h-full w-px bg-neutral-300" aria-hidden />
@@ -86,6 +87,9 @@ export function VersionStrip({
               {e.score != null && <span className="shrink-0 text-neutral-500">{e.score}/10</span>}
             </span>
           </button>
+          {/* ⤢ opens the version itself: the image, or for a clip the video (the tile shows its keyframe) */}
+          <ZoomButton items={e.url ? [{ url: e.url, video: kind === 'clip', caption: `Scene ${scene.index + 1} · ${kind} · ${e.label}` }] : []}
+            className="left-0.5 top-0.5" testId={`version-zoom-${kind}-${scene.index}-${e.id}`} />
           <button type="button" disabled={disabled} onClick={() => onDelete(e.id, e.label)}
             data-testid={`version-delete-${kind}-${scene.index}-${e.id}`}
             title="remove this version from the job (the file stays on disk)"
