@@ -61,6 +61,18 @@ DEFAULT_KEYFRAME_NEGATIVE = "smooth, digital render, 3d, airbrushed"
 DEFAULT_WAN_NEGATIVE = "distorted, morphing, jitter"
 
 
+def call_timeout(max_tokens: int, prompt: str = "") -> int:
+    """HTTP timeout for one non-streaming Gemma call, sized to the work asked for.
+
+    llama-server sends nothing until the answer is complete, so the read timeout must cover the
+    whole generation. CPU Gemma measured ~15 tok/s generating and ~45 tok/s reading the prompt;
+    budget half those speeds (a busy machine) plus two minutes. A 40-scene storyboard asks for
+    ~6600 tokens — about seven minutes at 15 tok/s, far past a flat 300 s.
+    """
+    prompt_tokens = len(prompt) // 3
+    return max(300, int(120 + max_tokens / 7.5 + prompt_tokens / 22))
+
+
 def motion_hint(clip_seconds: float) -> str:
     if clip_seconds <= 3.5:
         return "едно малко, локализирано движение (кратък клип)"
@@ -154,7 +166,7 @@ def generate_storyboard(
     n_scenes: int | None = None,
     context: PromptContext | None = None,
     max_tokens: int | None = None,
-    timeout: int = 300,
+    timeout: int | None = None,
 ) -> list[SceneBrief]:
     """Break an idea into a list of scene briefs (description/character/setting/mood).
 
@@ -179,7 +191,8 @@ def generate_storyboard(
         "Само JSON, без друг текст."
     )
     raw = gemma.complete_text(
-        _SYSTEM_STORYBOARD, user, max_tokens=max_tokens, temperature=GEN_TEMPERATURE, timeout=timeout
+        _SYSTEM_STORYBOARD, user, max_tokens=max_tokens, temperature=GEN_TEMPERATURE,
+        timeout=timeout or call_timeout(max_tokens, _SYSTEM_STORYBOARD + user),
     )
     data = _parse(raw, "storyboard")
     if not isinstance(data, list) or not data:
@@ -212,7 +225,7 @@ def suggest_references(
     briefs: list[SceneBrief],
     assets: tuple[tuple[str, str, str], ...],
     *,
-    timeout: int = 300,
+    timeout: int | None = None,
 ) -> tuple[dict[int, ReferencePick], list[str]]:
     """Suggest, per scene, the project photo that best matches it — by the assets' labels.
 
@@ -237,8 +250,10 @@ def suggest_references(
         '"fit": "same_shot | motif_only"}]\n'
         "Само JSON, без друг текст."
     )
+    budget = 90 * len(briefs) + 200
     raw = gemma.complete_text(
-        _SYSTEM_SUGGEST, user, max_tokens=90 * len(briefs) + 200, temperature=0.2, timeout=timeout
+        _SYSTEM_SUGGEST, user, max_tokens=budget, temperature=0.2,
+        timeout=timeout or call_timeout(budget, _SYSTEM_SUGGEST + user),
     )
     data = _parse(raw, "reference suggestions")
     if not isinstance(data, list):

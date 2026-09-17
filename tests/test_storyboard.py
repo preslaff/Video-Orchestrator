@@ -229,3 +229,14 @@ def test_storyboard_budget_grows_with_scene_count(monkeypatch):
     monkeypatch.setattr(storyboard.gemma, "complete_text", lambda *a, **k: seen.update(k) or STORYBOARD_JSON)
     generate_storyboard("idea", n_scenes=40)
     assert seen["max_tokens"] >= 160 * 40
+
+
+def test_long_calls_get_a_timeout_that_covers_the_generation(monkeypatch):
+    """llama-server answers only when done: 40 scenes at ~15 tok/s outlast a flat 300 s."""
+    seen = {}
+    monkeypatch.setattr(storyboard.gemma, "complete_text", lambda *a, **k: seen.update(k) or STORYBOARD_JSON)
+    generate_storyboard("idea", n_scenes=40)
+    assert seen["timeout"] >= seen["max_tokens"] / 15 + 60
+    generate_storyboard("idea", n_scenes=2)
+    assert 300 <= seen["timeout"] < 400                 # short calls stay near the old ceiling
+    assert storyboard.call_timeout(100, "x" * 30_000) > storyboard.call_timeout(100)  # a long prompt counts
