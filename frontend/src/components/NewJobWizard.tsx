@@ -199,13 +199,13 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
                       const pos = refIds.indexOf(a.id)
                       const selected = pos >= 0
                       return (
-                        <div key={a.id} className="group relative">
+                        <div key={a.id} className="group relative min-w-0">
                         <button
                           type="button"
                           data-testid={`ref-${a.id}`}
                           aria-pressed={selected}
                           onClick={() => setRefIds(selected ? refIds.filter((x) => x !== a.id) : [...refIds, a.id])}
-                          className={`relative w-full overflow-hidden rounded border text-left ${selected ? 'border-neutral-900 ring-2 ring-neutral-900' : 'border-neutral-200 hover:border-neutral-400'}`}
+                          className={`relative block w-full overflow-hidden rounded border text-left ${selected ? 'border-neutral-900 ring-2 ring-neutral-900' : 'border-neutral-200 hover:border-neutral-400'}`}
                           title={a.label || a.name}
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}

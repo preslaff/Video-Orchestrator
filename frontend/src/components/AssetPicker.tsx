@@ -56,12 +56,16 @@ export function AssetPicker({
     const caption = a.note_caption || ''
     // ⤢ opens the original without touching the selection; ← / → step through the same tiles.
     const group: LightboxItem[] = list.map((x) => ({ url: x.url, caption: [x.label || x.name, x.note_caption].filter(Boolean).join(' — ') }))
+    // The wrapper (needed so ⤢ is not a button inside a button) is the grid item now: `min-w-0`
+    // lets it shrink to its column despite the nowrap label, and the tile must fill it with
+    // `block w-full` — a button sizes to its content otherwise, and the w-full image then falls
+    // back to the thumbnail's natural 320 px.
     return (
-      <div key={a.id} className="group relative">
+      <div key={a.id} className="group relative min-w-0">
       <button type="button" disabled={disabled} aria-pressed={on} onClick={() => toggle(a.id)}
         title={[`${a.kind}: ${a.label || a.name}`, caption].filter(Boolean).join('\n')}
         data-testid={sid(a.id)}
-        className={`relative overflow-hidden rounded border text-left ${on ? 'border-neutral-900 ring-2 ring-neutral-900' : 'border-neutral-300 hover:border-neutral-500'}`}>
+        className={`relative block w-full overflow-hidden rounded border text-left ${on ? 'border-neutral-900 ring-2 ring-neutral-900' : 'border-neutral-300 hover:border-neutral-500'}`}>
         {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
         <img src={a.thumb_url || a.url} alt={a.label || a.name} loading="lazy" className="aspect-square w-full object-cover" />
         {multi && on && <span className="absolute left-1 top-1 rounded bg-neutral-900 px-1 text-xs text-white">{pos + 1}</span>}
@@ -71,7 +75,7 @@ export function AssetPicker({
         <span className="block truncate px-1 pt-0.5 text-[11px] text-neutral-700">{a.label || a.name}</span>
         {caption && <span className="block truncate px-1 pb-0.5 text-[10px] text-neutral-500">{caption}</span>}
       </button>
-      <ZoomButton items={group} index={i} className="bottom-10 right-1" testId={`${sid(a.id)}-zoom`} />
+      <ZoomButton items={group} index={i} className="right-1 top-6" testId={`${sid(a.id)}-zoom`} />
       </div>
     )
   }

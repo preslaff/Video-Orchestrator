@@ -73,6 +73,10 @@ describe('Lightbox', () => {
       note_tags: [], note_text: '', describe_state: '', describe_error: '', thumb_url: '/thumb/x.jpg', sha256: '', created_at: '',
       path: '/x.jpg', url: '/file/x.jpg' } as unknown as AssetOut
     withBox(<AssetPicker assets={[a]} selected={[]} onChange={onChange} testId="p" />)
+    // The ⤢ wrapper is the grid item: without these the tile sizes to its content and the
+    // image falls back to the thumbnail's natural 320 px (jsdom cannot measure layout).
+    expect(screen.getByTestId('p-x')).toHaveClass('block', 'w-full')
+    expect(screen.getByTestId('p-x').parentElement).toHaveClass('min-w-0')
     await user.click(screen.getByTestId('p-x-zoom'))
     expect(screen.getByTestId('lightbox-image')).toHaveAttribute('src', '/file/x.jpg')
     expect(screen.getByText('lens — Fresnel lens')).toBeInTheDocument()
