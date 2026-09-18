@@ -35,6 +35,10 @@ export function useJob(id: string | undefined) {
       if (error) throw error
       return data
     },
+    // Live updates come over SSE; this is the safety net for when that stream is not there
+    // (a dropped connection, a proxy timeout), so a finished segment never waits for F5.
+    refetchInterval: (query) =>
+      query.state.data?.status === 'running' || query.state.data?.status === 'pending' ? 5000 : false,
   })
 }
 

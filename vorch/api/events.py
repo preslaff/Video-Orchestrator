@@ -4,6 +4,13 @@ Events are named (``event: <type>``) and carry a per-job ``id`` so a browser
 reconnect (``Last-Event-ID``) or an explicit ``?after=N`` replays what was
 missed from the Broker's ring buffer. A terminal job with nothing to replay
 gets a synthetic ``end`` so the client stops instead of reconnecting forever.
+
+The ring buffer holds **every** segment of a job, so a replay can contain the
+``end`` of an earlier segment. Each stream therefore opens with an ``open``
+event carrying ``last_id`` — the watermark where the replay stops and live
+events begin — so a client can tell "this segment finished" from "a previous
+segment finished, keep listening". Without it a client stops at the first
+replayed ``end`` and silently misses everything a new run emits.
 """
 
 from __future__ import annotations
@@ -49,21 +56,34 @@ async def job_events(
     if job is None:
         raise ApiError(404, "not_found", "no such job")
     after = _after(request)
+    watermark = manager.broker.last_id(job_id)
     q = manager.events(job_id, after=after)
     if (
         job.status in _TERMINAL
         and not manager.is_active(job_id)  # the run's own `end` is still coming
-        and manager.broker.last_id(job_id) <= after
+        and watermark <= after
     ):
         # Nothing buffered beyond what the client has (e.g. after a restart).
-        q.put_nowait({"job_id": job_id, "type": "end", "id": after})
+        q.put_nowait({"job_id": job_id, "type": "end", "id": after, "final": True})
+    # `last_id` says where the replay ends and `active` whether a segment is running now.
+    # While one is, a buffered `end` is an earlier segment's history and the stream stays open
+    # for the live one; with nothing running, a replayed `end` is still the end of the story.
+    active = manager.is_active(job_id)
+    opening = {"job_id": job_id, "type": "open", "last_id": watermark,
+               "active": active, "status": job.status.value}
+
+    def terminal(ev: dict) -> bool:
+        return ev.get("type") == "end" and bool(
+            ev.get("final") or not active or ev.get("id", 0) > watermark
+        )
 
     async def stream():
+        yield _sse(opening)
         try:
             while True:
                 ev = await q.get()
                 yield _sse(ev)
-                if ev.get("type") == "end":
+                if terminal(ev):
                     break
         finally:
             manager.broker.unsubscribe(job_id, q)

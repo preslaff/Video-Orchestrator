@@ -398,6 +398,14 @@ sidecar manifest).
   separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
   the storyboard's own token budget now scales with the scene count (~160 per scene).
 
+- **SSE replay watermark**: a job's ring buffer holds *every* run segment, so a replay can carry
+  the `end` of an earlier one. Each stream now opens with an `open` event (`last_id`, `active`,
+  `status`); server and client both treat an `end` as terminal only when it is `final`, newer than
+  `last_id`, or no segment is running. Before this, a client that had replayed an old `end` closed
+  its stream and missed the live segment entirely — a regenerated keyframe stayed invisible until
+  the page was reloaded by hand. `useJob` also polls every 5 s while a job is running, as the net
+  for a dropped stream.
+
 - **Stale-server guard**: `GET /api/setup/config` reports `started_at` and
   `code_changed_since_start` (any `vorch/**/*.py` newer than the process). The UI and the server come
   from one checkout, so an edited module the running process predates means new routes answer a bare

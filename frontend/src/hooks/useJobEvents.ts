@@ -34,6 +34,10 @@ export function useJobEvents(jobId: string | undefined, opts: UseJobEventsOption
   const [generation, setGeneration] = useState(0)
   const lastId = useRef(0)
   const endedRef = useRef(false)
+  // Where this connection's replay stops. A job's ring buffer holds every run segment, so a
+  // replay can carry the `end` of an earlier one; stopping there used to leave the page blind
+  // to the segment now running (a regenerated keyframe appeared only after a manual reload).
+  const watermark = useRef(0)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const onEventRef = useRef(onEvent)
 
@@ -47,6 +51,9 @@ export function useJobEvents(jobId: string | undefined, opts: UseJobEventsOption
     if (endedRef.current && !active) return
     const url = `${apiOrigin()}/api/jobs/${jobId}/events?after=${lastId.current}`
     const es = new EventSource(url)
+    watermark.current = 0
+    let replayEndsHere = 0        // set by the `open` event; 0 until then
+    let liveSegment = false
 
     const invalidateJob = () => {
       if (timer.current) clearTimeout(timer.current)
@@ -62,6 +69,12 @@ export function useJobEvents(jobId: string | undefined, opts: UseJobEventsOption
       } catch {
         return
       }
+      if (data.type === 'open') {
+        replayEndsHere = typeof data.last_id === 'number' ? data.last_id : 0
+        watermark.current = replayEndsHere
+        liveSegment = data.active === true
+        return                     // a protocol marker, not something to show or invalidate
+      }
       if (typeof data.id === 'number') lastId.current = Math.max(lastId.current, data.id)
       setEvents((prev) => [...prev, { ...data, _at: Date.now() }])
       invalidateJob()
@@ -73,7 +86,10 @@ export function useJobEvents(jobId: string | undefined, opts: UseJobEventsOption
         void qc.invalidateQueries({ queryKey: keys.assembly(jobId) })
       }
       onEventRef.current?.(data)
-      if (data.type === 'end') {
+      // Mirror the server's rule: an `end` from the replay of an earlier segment is history
+      // while a segment is running — the stream (and this page) stays live for the real one.
+      const historical = liveSegment && !data.final && (data.id ?? 0) <= replayEndsHere
+      if (data.type === 'end' && !historical) {
         es.close()
         endedRef.current = true
         setEnded(true)

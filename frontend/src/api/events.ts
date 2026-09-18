@@ -1,5 +1,6 @@
 /** SSE contract with the backend (vorch/api/events.py). `id` is per-job and monotonic. */
 export const EVENT_TYPES = [
+  'open',        // first event of a stream: the replay watermark (see vorch/api/events.py)
   'status',
   'phase',
   'step',

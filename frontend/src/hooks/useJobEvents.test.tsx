@@ -113,3 +113,45 @@ describe('useJobEvents', () => {
     expect(FakeEventSource.instances).toHaveLength(0)
   })
 })
+
+describe('useJobEvents across run segments', () => {
+  let qc: QueryClient
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+
+  beforeEach(() => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+    qc = new QueryClient()
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('keeps listening past a replayed end while a segment is running', async () => {
+    const invalidate = vi.spyOn(qc, 'invalidateQueries')
+    const { result } = renderHook(() => useJobEvents('j1', { active: true }), { wrapper })
+    const es = FakeEventSource.instances[0]
+    act(() => es.onopen?.())
+    // The buffer holds an earlier segment: open says the replay ends at id 3 and a run is live.
+    act(() => es.emit('open', { job_id: 'j1', last_id: 3, active: true, status: 'running' }))
+    act(() => es.emit('keyframe', { id: 2, job_id: 'j1', index: 0 }))
+    act(() => es.emit('end', { id: 3, job_id: 'j1' }))
+    expect(es.closed).toBe(false)                       // history, not this segment's end
+    expect(result.current.ended).toBe(false)
+
+    invalidate.mockClear()
+    act(() => es.emit('keyframe', { id: 4, job_id: 'j1', index: 0, path: '/k2.png' }))
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['job', 'j1'] }))
+
+    act(() => es.emit('end', { id: 5, job_id: 'j1' }))   // the live segment really finished
+    expect(es.closed).toBe(true)
+    expect(result.current.ended).toBe(true)
+    expect(result.current.events.some((e) => e.type === 'open')).toBe(false)  // a marker, not history
+  })
+
+  it('still stops on a final end when nothing is running', () => {
+    renderHook(() => useJobEvents('j1'), { wrapper })
+    const es = FakeEventSource.instances[0]
+    act(() => es.emit('open', { job_id: 'j1', last_id: 9, active: false, status: 'done' }))
+    act(() => es.emit('end', { id: 9, job_id: 'j1', final: true }))
+    expect(es.closed).toBe(true)
+  })
+})

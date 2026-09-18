@@ -299,8 +299,10 @@ def test_sse_named_events_and_ids(client):
         assert r.headers["content-type"].startswith("text/event-stream")
         body = "".join(r.iter_text())
     evs = _sse_events(body)
-    assert [e["event"] for e in evs][-1] == "end"
-    assert [int(e["id"]) for e in evs] == list(range(1, len(evs) + 1))
+    assert evs[0]["event"] == "open" and "id" not in evs[0]   # the watermark, not a buffered event
+    rest = evs[1:]
+    assert [e["event"] for e in rest][-1] == "end"
+    assert [int(e["id"]) for e in rest] == list(range(1, len(rest) + 1))
     assert all("job_id" in e["data"] for e in evs)
 
 
@@ -315,10 +317,11 @@ def test_sse_replays_after_last_event_id(client):
     broker.publish(job.id, {"type": "end"})
     with client.stream("GET", f"/api/jobs/{job.id}/events", headers={"Last-Event-ID": "1"}) as r:
         body = "".join(r.iter_text())
-    assert [(e["event"], e["id"]) for e in _sse_events(body)] == [("keyframe", "2"), ("end", "3")]
+    assert [(e["event"], e.get("id")) for e in _sse_events(body)] == [
+        ("open", None), ("keyframe", "2"), ("end", "3")]
     with client.stream("GET", f"/api/jobs/{job.id}/events?after=2") as r:
         body = "".join(r.iter_text())
-    assert [e["event"] for e in _sse_events(body)] == ["end"]
+    assert [e["event"] for e in _sse_events(body)] == ["open", "end"]
 
 
 def test_sse_terminal_job_without_history_ends(client):
@@ -328,7 +331,10 @@ def test_sse_terminal_job_without_history_ends(client):
     with client.stream("GET", f"/api/jobs/{job.id}/events") as r:
         body = "".join(r.iter_text())
     evs = _sse_events(body)
-    assert len(evs) == 1 and evs[0]["event"] == "end"
+    assert [e["event"] for e in evs] == ["open", "end"]
+    import json as _json
+
+    assert _json.loads(evs[1]["data"])["final"] is True
 
 
 def test_sse_missing_job_404_and_bad_after_400(client):
@@ -960,3 +966,42 @@ def test_save_scene_asset_rejects_what_it_cannot_save(client, tmp_path, monkeypa
     free, _ = _job_with_keyframe(client, tmp_path, monkeypatch, with_project=False)
     r = client.post(f"/api/jobs/{free.id}/scenes/0/save-asset", json={})
     assert r.status_code == 400 and "no project" in r.json()["error"]["message"]
+
+
+def test_sse_keeps_listening_past_an_earlier_segment_end(store):
+    """A job's ring buffer holds every segment, so a replay can contain an old `end`.
+
+    While a segment is running that `end` is history: stopping there is what used to leave a
+    regenerated keyframe invisible until the page was reloaded by hand. Driven directly, like
+    the global stream test, because this stream deliberately does not close.
+    """
+    import json as _json
+
+    from vorch.api.events import job_events
+    from vorch.state import new_job
+
+    job = new_job(idea="many segments")
+    store.save_job(job)
+
+    class _Req:
+        headers: dict = {}
+        query_params: dict = {"after": "0"}
+
+    async def go():
+        manager = JobManager(store, orchestrator_factory=lambda s, j: FakeOrch(s, j))
+        for ev in ({"type": "status", "status": "running"}, {"type": "keyframe", "index": 0}, {"type": "end"}):
+            manager.broker.publish(job.id, ev)      # segment 1, already finished
+        manager._active.add(job.id)                 # segment 2 is in flight
+        resp = await job_events(job.id, _Req(), manager=manager, store=store)
+        it = resp.body_iterator.__aiter__()
+        seen = [await asyncio.wait_for(it.__anext__(), 2) for _ in range(4)]   # open + the replay
+        manager.broker.publish(job.id, {"type": "keyframe", "index": 1})       # a live event after it
+        seen.append(await asyncio.wait_for(it.__anext__(), 2))
+        await it.aclose()
+        return seen
+
+    seen = asyncio.run(go())
+    assert [e.event for e in seen] == ["open", "status", "keyframe", "end", "keyframe"]
+    opening = _json.loads(seen[0].data)
+    assert opening["last_id"] == 3 and opening["active"] is True
+    assert _json.loads(seen[-1].data)["index"] == 1     # the live event the old client never saw
