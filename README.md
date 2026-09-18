@@ -338,6 +338,11 @@ stopped.
   composition, so t2i is often better). **Use as reference** switches the scene to edit mode with that
   photo (save to keep it); nothing is applied by itself. Suggestions are logged as `suggested`
   decisions; a failed pass leaves the storyboard intact, just without hints.
+- **Save as reference**: copies a scene's keyframe into the project as a reference asset, so
+  another scene can be generated from it (the picker only offers project assets). It is a copy, so
+  regenerating the source scene never changes the scenes using it; saving the same frame twice
+  returns the asset already there, and an unnamed one is captioned in the background like any
+  upload. This is how a tower or a staircase keeps the same look across several scenes.
 - **Use my image as keyframe**: pick or upload an image. It is cropped to the job's frame size and
   replaces the keyframe without being generated or evaluated. The generated candidates stay
   selectable, and the gate reopens for review as for a regenerated keyframe.

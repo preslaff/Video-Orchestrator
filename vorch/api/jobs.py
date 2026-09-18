@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from pathlib import Path
 
+from fastapi import APIRouter, Depends, Query, Response
+
+from .. import projects as projects_mod
+from .. import versions as versions_mod
+from ..describer import AssetDescriber
 from ..envcheck import EnvironmentNotReady
 from ..queue import JobManager
 from ..state import JobStatus, Store
-from .deps import get_manager, get_store
+from .deps import get_describer, get_manager, get_store
 from .errors import ApiError
 from .public import job_to_public, provenance_rows
+from .projects import AssetOut, asset_out
 from .schemas import (
-    DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SceneEdits, SceneRegenerate,
+    DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SaveSceneAsset, SceneEdits,
+    SceneRegenerate,
 )
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -151,6 +158,55 @@ async def regenerate_scene(
     except ValueError as e:
         raise ApiError(400, "bad_request", str(e))
     return job_to_public(job, store, manager)
+
+
+@router.post("/{job_id}/scenes/{index}/save-asset", response_model=AssetOut, status_code=201)
+async def save_scene_asset(
+    job_id: str,
+    index: int,
+    body: SaveSceneAsset,
+    response: Response,
+    store: Store = Depends(get_store),
+    describer: AssetDescriber | None = Depends(get_describer),
+) -> AssetOut:
+    """Copy a scene's keyframe into the job's project as an asset, so other scenes can use it
+    as a reference (the picker only offers project assets).
+
+    A copy, not a pointer: regenerating the source scene never changes a scene that uses it.
+    Importing the same frame twice returns the asset already holding those bytes (200).
+    """
+    job = _load(store, job_id)
+    if not job.project_id:
+        raise ApiError(400, "bad_request", "the job has no project: save it to a project to reuse the image")
+    scene = next((s for s in job.scenes if s.index == index), None)
+    if scene is None:
+        raise ApiError(404, "not_found", f"no scene {index}")
+    if body.version_id:
+        try:
+            variant = versions_mod.variant_by(scene, id=body.version_id)
+        except ValueError as e:
+            raise ApiError(404, "not_found", str(e))
+        source = variant.swapped_path or variant.path
+    else:
+        source = scene.swapped_path or scene.keyframe_path
+    if not source or not Path(source).is_file():
+        raise ApiError(404, "not_found", f"scene {index + 1} has no keyframe image yet")
+    digest = projects_mod.file_sha256(source)
+    with projects_mod.editing(store, job.project_id) as p:
+        if p is None:
+            raise ApiError(404, "not_found", "no such project")
+        existing = projects_mod.find_asset_by_sha256(p, digest)
+        a = existing or projects_mod.add_asset(
+            p, source, kind=body.kind, name=f"scene-{index + 1}-keyframe{Path(source).suffix or '.png'}",
+            label=body.label,
+        )
+        if existing is None:
+            projects_mod.save(store, p)
+    if existing is not None:
+        response.status_code = 200
+    elif describer is not None and describer.auto and not a.label:
+        describer.enqueue(p.id, [a.id])       # a caption makes it findable and suggestible
+    return asset_out(p, a, describer)
 
 
 @router.post("/{job_id}/stop", response_model=JobPublic, status_code=202)

@@ -8,6 +8,7 @@ streaming/queue behaviour itself is covered by test_queue.py.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -900,3 +901,62 @@ def test_assembly_status_offers_delivery_targets_and_accepts_one(client, stub_me
         time.sleep(0.02)
     assert bad.status_code == 400 and "unknown delivery" in bad.json()["error"]["message"]
     assert client.post(f"/api/jobs/{job.id}/assemble", json={"grain": 9}).status_code == 400
+
+
+# --- save a generated keyframe into the project (reuse it as a reference) --------------
+
+
+def _job_with_keyframe(client, tmp_path, monkeypatch, *, with_project=True):
+    from vorch import config, projects as projects_mod
+    from vorch.state import Scene, Variant, new_job
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects_mod.save(client.store, projects_mod.new_project(name="Coast Co")) if with_project else None
+    kf = client.media / "s00_keyframe.png"
+    kf.write_bytes(b"tower-bytes")
+    other = client.media / "s00_keyframe_v2.png"
+    other.write_bytes(b"second-candidate")
+    job = new_job(idea="towers", project_id=p.id if p else None)
+    job.status = JobStatus.NEEDS_APPROVAL
+    job.scenes = [Scene(index=0, keyframe_path=str(kf),
+                        variants=[Variant(path=str(kf), id="v1"), Variant(path=str(other), id="v2")]),
+                  Scene(index=1)]
+    client.store.save_job(job)
+    return job, p
+
+
+def test_save_scene_keyframe_as_project_asset(client, tmp_path, monkeypatch):
+    job, p = _job_with_keyframe(client, tmp_path, monkeypatch)
+    r = client.post(f"/api/jobs/{job.id}/scenes/0/save-asset", json={})
+    assert r.status_code == 201
+    a = r.json()
+    assert a["kind"] == "reference" and a["name"] == "scene-1-keyframe.png"
+    assert a["label_source"] == "" and a["label"] == ""          # Gemma describes it in the background
+    assert Path(a["path"]).read_bytes() == b"tower-bytes"        # a copy, not a pointer
+    assert str(tmp_path / "projects") in a["path"]
+    ids = [x["id"] for x in client.get(f"/api/projects/{p.id}").json()["assets"]]
+    assert ids == [a["id"]]
+
+    # The same frame again: the asset already holding those bytes, and no second copy.
+    again = client.post(f"/api/jobs/{job.id}/scenes/0/save-asset", json={})
+    assert again.status_code == 200 and again.json()["id"] == a["id"]
+    assert len(client.get(f"/api/projects/{p.id}").json()["assets"]) == 1
+
+    # A named version saves that candidate, labelled by the person who named it.
+    v2 = client.post(f"/api/jobs/{job.id}/scenes/0/save-asset",
+                     json={"version_id": "v2", "label": "striped tower"})
+    assert v2.status_code == 201 and v2.json()["label_source"] == "human"
+    assert Path(v2.json()["path"]).read_bytes() == b"second-candidate"
+
+
+def test_save_scene_asset_rejects_what_it_cannot_save(client, tmp_path, monkeypatch):
+    job, _ = _job_with_keyframe(client, tmp_path, monkeypatch)
+    assert client.post(f"/api/jobs/{job.id}/scenes/9/save-asset", json={}).status_code == 404
+    assert client.post(f"/api/jobs/{job.id}/scenes/1/save-asset", json={}).status_code == 404   # no keyframe yet
+    bad = client.post(f"/api/jobs/{job.id}/scenes/0/save-asset", json={"version_id": "nope"})
+    assert bad.status_code == 404 and "no keyframe version" in bad.json()["error"]["message"]
+    assert client.post(f"/api/jobs/nope/scenes/0/save-asset", json={}).status_code == 404
+
+    free, _ = _job_with_keyframe(client, tmp_path, monkeypatch, with_project=False)
+    r = client.post(f"/api/jobs/{free.id}/scenes/0/save-asset", json={})
+    assert r.status_code == 400 and "no project" in r.json()["error"]["message"]

@@ -54,6 +54,14 @@ class SceneEdit(BaseModel):
     chosen_clip_id: str | None = None      # pick which rendered clip is the deliverable
 
 
+class SaveSceneAsset(BaseModel):
+    """Copy a scene's generated keyframe into the job's project, to reuse as a reference."""
+
+    version_id: str | None = None                 # a keyframe version; default: the active one
+    kind: Literal["reference", "product", "logo", "other"] = "reference"
+    label: str = ""                               # given = a person named it; empty = Gemma describes it
+
+
 class SceneEdits(BaseModel):
     scenes: list[SceneEdit]
 

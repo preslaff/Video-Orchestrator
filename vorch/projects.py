@@ -193,6 +193,20 @@ def set_asset_note(project: Project, asset_id: str, note: dict, *, label: str | 
     return a
 
 
+def file_sha256(path: str | Path) -> str:
+    """Streamed digest of a file — the same value ``add_asset`` stores, without reading it whole."""
+    h = hashlib.sha256()
+    with open(Path(path).expanduser(), "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def find_asset_by_sha256(project: Project, digest: str) -> Asset | None:
+    """The project's asset with these bytes, if it already holds them (import idempotence)."""
+    return next((a for a in project.assets if a.sha256 and a.sha256 == digest), None)
+
+
 def add_asset(
     project: Project,
     source: str | Path | bytes,

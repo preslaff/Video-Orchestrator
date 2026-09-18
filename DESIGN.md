@@ -398,6 +398,15 @@ sidecar manifest).
   separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
   the storyboard's own token budget now scales with the scene count (~160 per scene).
 
+- **Generated frames can become assets** (`POST /api/jobs/{id}/scenes/{i}/save-asset`): the scene's
+  keyframe (or a named variant) is copied into the job's project with `projects.add_asset`'s path
+  branch, and from there it is an ordinary asset — picker, thumbnail, background description, and a
+  candidate for the storyboard's reference suggestions. A copy rather than a path reference on
+  purpose: `Scene.references` holds raw paths with no back-link, so pointing at a generated file
+  would go stale the moment that scene is regenerated, and `stage_references`' `fit_image` would
+  write an unprovenanced sibling into the job's output folder. `projects.find_asset_by_sha256`
+  makes the import idempotent (200 with the existing asset, 201 for a new copy).
+
 ## 16. Scene media versions
 
 A scene keeps **every keyframe it has had** (`Scene.variants`) and **every clip it has rendered**

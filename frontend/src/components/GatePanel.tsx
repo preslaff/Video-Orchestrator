@@ -8,7 +8,7 @@ import { Zoomable } from '@/components/Lightbox'
 import { MediaThumb } from '@/components/MediaThumb'
 import { VersionStrip } from '@/components/VersionStrip'
 import { profileSizes } from '@/components/SceneGrid'
-import { useApprove, useDeleteVersion, useRegenerateScene, useUpdateScenes } from '@/hooks/useJobs'
+import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useUpdateScenes } from '@/hooks/useJobs'
 import { useUploadAsset } from '@/hooks/useSetup'
 import { Button, ErrorBox } from '@/components/ui'
 
@@ -116,12 +116,13 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   const regen = useRegenerateScene(job.id)
   const upload = useUploadAsset(job.project_id ?? '')
   const removeVersion = useDeleteVersion(job.id)
+  const saveAsset = useSaveSceneAsset(job.id, job.project_id)
   const { kf, clip } = profileSizes(job)
   const orphaned = job.status === 'running' && !job.active
   const editable = job.status === 'needs_approval' || job.status === 'done' || job.status === 'failed' || job.status === 'cancelled' || orphaned
   if (!editable) return null
   const video = job.kind === 'video'
-  const busy = update.isPending || approve.isPending || regen.isPending || upload.isPending || removeVersion.isPending
+  const busy = update.isPending || approve.isPending || regen.isPending || upload.isPending || removeVersion.isPending || saveAsset.isPending
   const slots = job.edit_reference_slots ?? 0
   const faces = assets.filter((a) => a.kind === 'master_face')
   const refAssets = assets.filter((a) => a.kind !== 'master_face')
@@ -243,7 +244,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
           )}
         </div>
       </div>
-      <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : upload.error ? errorMessage(upload.error) : removeVersion.error ? errorMessage(removeVersion.error) : null} />
+      <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : upload.error ? errorMessage(upload.error) : removeVersion.error ? errorMessage(removeVersion.error) : saveAsset.error ? errorMessage(saveAsset.error) : null} />
       {update.isSuccess && !update.isPending && <p className="text-xs text-green-700">Saved.</p>}
 
       <div className="space-y-3">
@@ -357,7 +358,23 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                         {isOpen(s.index, 'image') ? 'Cancel' : 'Use my image…'}
                       </button>
                     )}
+                    {job.project_id && locked && (
+                      // The picker only offers project assets, so a generated frame has to be
+                      // copied into the project before another scene can reference it.
+                      <button type="button" disabled={busy} className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-50"
+                        data-testid={`save-asset-${s.index}`} title="copy this keyframe into the project, to use it as a reference in other scenes"
+                        onClick={() => saveAsset.mutate({ index: s.index })}>
+                        Save as reference
+                      </button>
+                    )}
                   </div>
+                  {saveAsset.isSuccess && saveAsset.data?.index === s.index && (
+                    <p className="text-xs text-green-700" data-testid={`save-asset-done-${s.index}`}>
+                      {saveAsset.data.existed
+                        ? 'Already in the project — pick it under references.'
+                        : 'Saved to the project — pick it under any scene’s references.'}
+                    </p>
+                  )}
                   <VersionStrip scene={s} kind="keyframe" disabled={busy}
                     onSelect={(id) => selectVersion(s.index, 'keyframe', id)}
                     onDelete={(id, label) => deleteVersion(s.index, 'keyframe', id, label)} />

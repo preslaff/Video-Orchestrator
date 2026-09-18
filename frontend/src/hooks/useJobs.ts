@@ -200,6 +200,27 @@ export function useDeleteVersion(id: string) {
   })
 }
 
+/** Copy a scene's keyframe into the job's project as an asset, to reuse it as a reference
+ *  in other scenes (the reference picker only offers project assets). */
+export function useSaveSceneAsset(id: string, projectId?: string | null) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ index, versionId, label }: { index: number; versionId?: string; label?: string }) => {
+      const { data, error, response } = await api.POST('/api/jobs/{job_id}/scenes/{index}/save-asset', {
+        params: { path: { job_id: id, index } },
+        body: { version_id: versionId ?? null, kind: 'reference', label: label ?? '' },
+      })
+      if (error) throw error
+      // 200 = the project already held these bytes; 201 = a new asset was copied in.
+      return { asset: data, existed: response.status === 200, index }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.projects })
+      if (projectId) void qc.invalidateQueries({ queryKey: keys.project(projectId) })
+    },
+  })
+}
+
 export function useAssembly(id: string | undefined) {
   return useQuery({
     queryKey: keys.assembly(id ?? ''),

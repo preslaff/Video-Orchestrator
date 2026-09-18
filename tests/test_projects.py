@@ -181,3 +181,16 @@ def test_describe_hint_round_trips_and_removing_an_asset_removes_its_thumbnail(t
     thumb.write_bytes(b"jpg")
     projects.remove_asset(p, a.id)
     assert not thumb.exists()
+
+
+def test_find_asset_by_sha256_matches_the_bytes_already_in_the_project(tmp_path, monkeypatch):
+    from vorch import config, projects
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects.new_project("Coast")
+    a = projects.add_asset(p, b"tower", kind="reference", name="t.png")
+    src = tmp_path / "same.png"
+    src.write_bytes(b"tower")
+    assert projects.file_sha256(src) == a.sha256
+    assert projects.find_asset_by_sha256(p, a.sha256) is a
+    assert projects.find_asset_by_sha256(p, "0" * 64) is None

@@ -424,6 +424,68 @@
         }
       }
     },
+    "/api/jobs/{job_id}/scenes/{index}/save-asset": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Save Scene Asset",
+        "description": "Copy a scene's keyframe into the job's project as an asset, so other scenes can use it\nas a reference (the picker only offers project assets).\n\nA copy, not a pointer: regenerating the source scene never changes a scene that uses it.\nImporting the same frame twice returns the asset already holding those bytes (200).",
+        "operationId": "save_scene_asset_api_jobs__job_id__scenes__index__save_asset_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveSceneAsset"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/stop": {
       "post": {
         "tags": [
@@ -4046,6 +4108,40 @@
           "asset_id"
         ],
         "title": "ReferenceSuggestionOut"
+      },
+      "SaveSceneAsset": {
+        "properties": {
+          "version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "reference",
+              "product",
+              "logo",
+              "other"
+            ],
+            "title": "Kind",
+            "default": "reference"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "SaveSceneAsset",
+        "description": "Copy a scene's generated keyframe into the job's project, to reuse as a reference."
       },
       "SceneEdit": {
         "properties": {

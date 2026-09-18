@@ -91,7 +91,7 @@ class ProjectPatch(BaseModel):
     describe_hint: str | None = None
 
 
-def _asset_out(project: Project, a, describer: AssetDescriber | None = None) -> AssetOut:
+def asset_out(project: Project, a, describer: AssetDescriber | None = None) -> AssetOut:
     note = a.note or {}
     state, error = describer.state(a.id) if describer is not None else ("", "")
     base = f"/api/projects/{project.id}/assets/{a.id}"
@@ -109,7 +109,7 @@ def _out(store: Store, p: Project, describer: AssetDescriber | None = None) -> P
         id=p.id, slug=p.slug, name=p.name, brand_notes=p.brand_notes, style_notes=p.style_notes,
         default_profile_id=p.default_profile_id, export_root=p.export_root,
         export_root_effective=str(projects.export_root(p)), describe_hint=p.describe_hint,
-        assets=[_asset_out(p, a, describer) for a in p.assets], created_at=p.created_at, updated_at=p.updated_at,
+        assets=[asset_out(p, a, describer) for a in p.assets], created_at=p.created_at, updated_at=p.updated_at,
         n_jobs=store.count_jobs(project_id=p.id),
     )
 
@@ -227,7 +227,7 @@ async def upload_asset(
         _save(store, p)
     if describer is not None and describer.auto and not a.label:
         describer.enqueue(p.id, [a.id])
-    return _asset_out(p, a, describer)
+    return asset_out(p, a, describer)
 
 
 class DescribeRequest(BaseModel):
@@ -335,7 +335,7 @@ async def update_asset(
         except KeyError:
             raise ApiError(404, "not_found", "no such asset")
         _save(store, p)
-        return _asset_out(p, a, describer)
+        return asset_out(p, a, describer)
 
 
 @router.delete("/{project_id}/assets/{asset_id}", status_code=204)

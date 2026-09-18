@@ -106,3 +106,53 @@ describe('GatePanel reference hints', () => {
     expect(screen.getByTestId('hint-0-use')).toBeInTheDocument()
   })
 })
+
+describe('GatePanel save keyframe as project reference', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  /** fetch stub that records POSTs to the save-asset route and answers with an asset. */
+  function stubSave(posts: { url: string; body: unknown }[], status = 201) {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const url = new URL(raw, 'http://localhost').pathname
+      const body = init?.body ? JSON.parse(String(init.body)) : input instanceof Request ? await input.json() : null
+      posts.push({ url, body })
+      return new Response(JSON.stringify(asset('new', 'reference', 'scene-1-keyframe.png')),
+        { status, headers: { 'content-type': 'application/json' } })
+    }))
+  }
+
+  const withKeyframe = {
+    ...job, face_swap: false,
+    scenes: [scene(0, { keyframe_path: '/k0.png', keyframe_url: '/media/k0.png' }), scene(1)],
+  } as unknown as JobPublic
+
+  it('copies the keyframe into the project and says so', async () => {
+    const posts: { url: string; body: unknown }[] = []
+    stubSave(posts)
+    const user = userEvent.setup()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={qc}><GatePanel job={withKeyframe} assets={assets} /></QueryClientProvider>)
+    expect(screen.queryByTestId('save-asset-1')).toBeNull()        // scene 2 has no keyframe yet
+    await user.click(screen.getByTestId('save-asset-0'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].url).toBe('/api/jobs/j1/scenes/0/save-asset')
+    expect(posts[0].body).toMatchObject({ kind: 'reference' })
+    expect(await screen.findByTestId('save-asset-done-0')).toHaveTextContent('Saved to the project')
+  })
+
+  it('says when the project already holds that frame, and hides the button without a project', async () => {
+    const posts: { url: string; body: unknown }[] = []
+    stubSave(posts, 200)
+    const user = userEvent.setup()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { unmount } = render(<QueryClientProvider client={qc}><GatePanel job={withKeyframe} assets={assets} /></QueryClientProvider>)
+    await user.click(screen.getByTestId('save-asset-0'))
+    expect(await screen.findByTestId('save-asset-done-0')).toHaveTextContent('Already in the project')
+    unmount()
+
+    const free = { ...withKeyframe, project_id: null } as unknown as JobPublic
+    render(<QueryClientProvider client={new QueryClient()}><GatePanel job={free} assets={[]} /></QueryClientProvider>)
+    expect(screen.queryByTestId('save-asset-0')).toBeNull()
+  })
+})

@@ -108,6 +108,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/scenes/{index}/save-asset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save Scene Asset
+         * @description Copy a scene's keyframe into the job's project as an asset, so other scenes can use it
+         *     as a reference (the picker only offers project assets).
+         *
+         *     A copy, not a pointer: regenerating the source scene never changes a scene that uses it.
+         *     Importing the same frame twice returns the asset already holding those bytes (200).
+         */
+        post: operations["save_scene_asset_api_jobs__job_id__scenes__index__save_asset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/stop": {
         parameters: {
             query?: never;
@@ -1535,6 +1559,25 @@ export interface components {
             fit: string;
         };
         /**
+         * SaveSceneAsset
+         * @description Copy a scene's generated keyframe into the job's project, to reuse as a reference.
+         */
+        SaveSceneAsset: {
+            /** Version Id */
+            version_id?: string | null;
+            /**
+             * Kind
+             * @default reference
+             * @enum {string}
+             */
+            kind: "reference" | "product" | "logo" | "other";
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+        };
+        /**
          * SceneEdit
          * @description One scene's editable fields (storyboard gate review). Index is required.
          */
@@ -2134,6 +2177,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_scene_asset_api_jobs__job_id__scenes__index__save_asset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveSceneAsset"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetOut"];
                 };
             };
             /** @description Validation Error */
