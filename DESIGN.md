@@ -398,6 +398,19 @@ sidecar manifest).
   separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
   the storyboard's own token budget now scales with the scene count (~160 per scene).
 
+- **Structural storyboard edits** (`vorch/scenes.py`, `queue.add_scene/delete_scene/reorder_scenes`):
+  a scene carries **two identities**. `Scene.index` is its *position* — renumbered after every
+  insert, delete and reorder, because export file names, assembly order and every "Scene 12" in the
+  UI derive from it. `Scene.id` (8 hex, like `Variant`/`Clip`) is its *identity*, so browser drafts,
+  the reorder payload and new decision rows (`Decision.scene_id`, migration `0003`) survive a
+  renumber that would otherwise re-attribute them. A saved assembly spec is remapped to the new
+  numbers (`scenes.remap_assembly`), `job.export` is cleared and a finished job returns to the
+  keyframes gate. Deleting keeps the rendered files unless asked; generated files keep the name they
+  were born with (paths are stored, never re-derived) and the export folder renames on copy.
+  Writing an inserted scene's prompts is a Gemma-only background task — no GPU lock, following the
+  assembly task rather than `_execute` — flagged on the scene as `writing_prompts` so a crash leaves
+  something the UI can retry.
+
 - **SSE replay watermark**: a job's ring buffer holds *every* run segment, so a replay can carry
   the `end` of an earlier one. Each stream now opens with an `open` event (`last_id`, `active`,
   `status`); server and client both treat an `end` as terminal only when it is `final`, newer than

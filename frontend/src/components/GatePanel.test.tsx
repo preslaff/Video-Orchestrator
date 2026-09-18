@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -6,7 +6,7 @@ import { GOTO_SCENE, GatePanel } from './GatePanel'
 import type { AssetOut, JobPublic } from '@/api/types'
 
 const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) => ({
-  index, description: 'd', character: '', setting: '', mood: '', continuous: false, status: 'pending',
+  index, id: `s${index}`, writing_prompts: false, description: 'd', character: '', setting: '', mood: '', continuous: false, status: 'pending',
   keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', references: [],
   keyframe_path: null, keyframe_url: null, keyframe_verdict: null, video_path: null, video_url: null, video_verdict: null,
   swapped_path: null, swapped_url: null, swap_verdict: null, variants: [], raw_video_path: null, post_paths: [],
@@ -234,5 +234,111 @@ describe('GatePanel with many scenes', () => {
     show({ ...bigJob, scenes: bigJob.scenes.slice(0, 3) } as unknown as JobPublic)
     expect(screen.getAllByDisplayValue('kf')).toHaveLength(3)
     expect(screen.getByTestId('scene-count')).toHaveTextContent('3 scenes · 3 open')
+  })
+})
+
+describe('GatePanel storyboard structure', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  type Call = { method: string; path: string; body: unknown; query: string }
+
+  /** Records every call and answers with the job the test hands it back. */
+  function stubCalls(calls: Call[], reply: () => unknown) {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const url = new URL(raw, 'http://localhost')
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+      const body = init?.body ? JSON.parse(String(init.body)) : input instanceof Request ? await input.json().catch(() => null) : null
+      calls.push({ method, path: url.pathname, body, query: url.search })
+      return new Response(JSON.stringify(reply()), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+  }
+
+  const threeScenes = {
+    ...job, face_swap: false,
+    scenes: [scene(0, { description: 'first' }), scene(1, { description: 'second' }), scene(2, { description: 'third' })],
+  } as unknown as JobPublic
+
+  const show = (j: JobPublic = threeScenes) =>
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <GatePanel job={j} assets={assets} /></QueryClientProvider>)
+
+  it('moves a scene with the arrows, sending the whole id order', async () => {
+    const calls: Call[] = []
+    stubCalls(calls, () => threeScenes)
+    const user = userEvent.setup()
+    show()
+    expect(screen.getByTestId('scene-up-0')).toBeDisabled()          // nothing above the first
+    expect(screen.getByTestId('scene-down-2')).toBeDisabled()
+    await user.click(screen.getByTestId('scene-down-0'))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].method).toBe('PUT')
+    expect(calls[0].path).toBe('/api/jobs/j1/scenes/order')
+    expect(calls[0].body).toEqual({ scene_ids: ['s1', 's0', 's2'] })
+  })
+
+  it('reorders by dropping a row into a gap', async () => {
+    const calls: Call[] = []
+    stubCalls(calls, () => threeScenes)
+    show()
+    // Drag scene 3 (id s2) into the gap before scene 1.
+    const row = screen.getByTestId('scene-toggle-2').closest('[draggable]')!
+    fireEvent.dragStart(row)
+    fireEvent.dragOver(screen.getByTestId('scene-gap-0'))
+    fireEvent.drop(screen.getByTestId('scene-gap-0'))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].body).toEqual({ scene_ids: ['s2', 's0', 's1'] })
+  })
+
+  it('offers both delete choices and sends the one clicked', async () => {
+    const calls: Call[] = []
+    stubCalls(calls, () => threeScenes)
+    const user = userEvent.setup()
+    show()
+    expect(screen.queryByTestId('confirm-delete-1')).toBeNull()
+    await user.click(screen.getByTestId('scene-delete-1'))
+    expect(screen.getByTestId('confirm-delete-1')).toHaveTextContent('Delete scene 2?')
+    await user.click(screen.getByTestId('confirm-delete-files-1'))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].method).toBe('DELETE')
+    expect(calls[0].path).toBe('/api/jobs/j1/scenes/1')
+    expect(calls[0].query).toContain('delete_files=true')
+  })
+
+  it('adds a scene from a description and shows the writing marker', async () => {
+    const calls: Call[] = []
+    stubCalls(calls, () => threeScenes)
+    const user = userEvent.setup()
+    show()
+    await user.click(screen.getByTestId('add-scene-1'))               // the gap before scene 2
+    await user.type(screen.getByTestId('add-scene-description'), 'the lamp at night')
+    await user.type(screen.getByTestId('add-scene-setting'), 'Atlantic coast')
+    await user.click(screen.getByTestId('add-scene-submit'))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].path).toBe('/api/jobs/j1/scenes')
+    expect(calls[0].body).toMatchObject({ position: 1, description: 'the lamp at night', setting: 'Atlantic coast', generate: true })
+
+    const writing = { ...threeScenes, scenes: [scene(0, { writing_prompts: true, description: 'new' })] } as unknown as JobPublic
+    show(writing)
+    expect(screen.getByTestId('writing-prompts-0')).toBeInTheDocument()
+  })
+
+  it('keeps a scene’s unsaved edit on that scene when another is deleted', async () => {
+    const calls: Call[] = []
+    let current = threeScenes
+    stubCalls(calls, () => current)
+    const user = userEvent.setup()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { rerender } = render(<QueryClientProvider client={qc}><GatePanel job={current} assets={assets} /></QueryClientProvider>)
+    // Three scenes stay expanded, so [1] is the second scene's keyframe prompt.
+    await user.type(screen.getAllByDisplayValue('kf')[1], ' mine')
+    expect(screen.getByDisplayValue('kf mine')).toBeInTheDocument()
+
+    // The server deletes scene 1; the remaining scenes keep their ids but are renumbered.
+    // Renumbered: the ids stay s1/s2, the positions become 0/1 — exactly what the server sends.
+    current = { ...threeScenes, scenes: [scene(0, { id: 's1', description: 'second' }), scene(1, { id: 's2', description: 'third' })] } as unknown as JobPublic
+    rerender(<QueryClientProvider client={qc}><GatePanel job={current} assets={assets} /></QueryClientProvider>)
+    expect(screen.getByDisplayValue('kf mine')).toBeInTheDocument()   // still on the scene it was typed in
+    expect(screen.getByTestId('scene-dirty-0')).toBeInTheDocument()   // which is now number 1
   })
 })

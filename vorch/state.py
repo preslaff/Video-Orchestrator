@@ -129,7 +129,8 @@ class Scene:
     flag). This is the *persisted* scene the orchestrator advances and the UI reads.
     """
 
-    index: int
+    index: int                        # the scene's position in the job, renumbered on a reorder
+    id: str = field(default_factory=new_version_id)   # stable identity: survives insert/delete/reorder
     description: str = ""
     character: str = ""
     setting: str = ""
@@ -157,6 +158,7 @@ class Scene:
     post_paths: list[str] = field(default_factory=list)      # post-step outputs in order
     regenerations: int = 0               # manual keyframe/clip redo count (seed offset)
     reference_suggestion: ReferenceSuggestion | None = None  # a photo the storyboard thinks fits
+    writing_prompts: bool = False        # Gemma is writing this (inserted) scene's prompts
 
 
 @dataclass
@@ -196,6 +198,9 @@ class Decision:
     phase: str  # "storyboard" | "keyframe" | "video" | "swap"
     attempt: int
     action: str  # "accept" | "retry" | "approved" | "rejected" | "failed" | ...
+    # The scene's stable id: `scene_index` is only the position it had when this was logged, and a
+    # reorder renumbers positions. Optional, so every existing caller keeps working.
+    scene_id: str | None = None
     score: int | None = None
     reason: str = ""
     created_at: str = ""
@@ -318,6 +323,7 @@ def _variant_from_dict(d: dict) -> Variant:
 def _scene_to_dict(s: Scene) -> dict:
     return {
         "index": s.index,
+        "id": s.id,
         "description": s.description,
         "character": s.character,
         "setting": s.setting,
@@ -344,6 +350,7 @@ def _scene_to_dict(s: Scene) -> dict:
         "raw_video_path": s.raw_video_path,
         "post_paths": list(s.post_paths),
         "regenerations": s.regenerations,
+        "writing_prompts": s.writing_prompts,
         "reference_suggestion": (
             {"asset_id": s.reference_suggestion.asset_id, "why": s.reference_suggestion.why,
              "fit": s.reference_suggestion.fit} if s.reference_suggestion else None
@@ -354,6 +361,7 @@ def _scene_to_dict(s: Scene) -> dict:
 def _scene_from_dict(d: dict) -> Scene:
     return Scene(
         index=d["index"],
+        id=d.get("id") or new_version_id(),   # jobs written before scenes had ids
         description=d.get("description", ""),
         character=d.get("character", ""),
         setting=d.get("setting", ""),
@@ -380,6 +388,7 @@ def _scene_from_dict(d: dict) -> Scene:
         raw_video_path=d.get("raw_video_path"),
         post_paths=list(d.get("post_paths", []) or []),
         regenerations=int(d.get("regenerations", 0) or 0),
+        writing_prompts=bool(d.get("writing_prompts", False)),
         reference_suggestion=_suggestion_from_dict(d.get("reference_suggestion")),
     )
 
@@ -635,13 +644,14 @@ class Store:
             row = conn.execute(
                 """
                 INSERT INTO decisions
-                    (job_id, scene_index, phase, attempt, action, score, reason, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (job_id, scene_index, scene_id, phase, attempt, action, score, reason, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
                     decision.job_id,
                     decision.scene_index,
+                    decision.scene_id,
                     decision.phase,
                     decision.attempt,
                     decision.action,
@@ -687,6 +697,7 @@ class Store:
                 id=r["id"],
                 job_id=r["job_id"],
                 scene_index=r["scene_index"],
+                scene_id=r.get("scene_id"),
                 phase=r["phase"],
                 attempt=r["attempt"],
                 action=r["action"],

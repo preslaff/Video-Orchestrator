@@ -24,6 +24,8 @@ from . import cancel
 from . import export as export_mod
 from . import projects as projects_mod
 from . import scene_assets
+from . import scenes as scenes_mod
+from . import storyboard
 from . import versions as versions_mod
 from .orchestrator import GATE_KEYFRAMES, Orchestrator
 from .state import Decision, Job, JobStatus, SceneStatus, Store
@@ -411,6 +413,128 @@ class JobManager:
                 job.status = JobStatus.NEEDS_APPROVAL
         return self.store.save_job(job)
 
+    # -- structural edits: add / delete / reorder scenes --
+
+    def _editable_job(self, job_id: str) -> Job:
+        """A job nothing is generating right now — structural edits would race its writes."""
+        if job_id in self._active:
+            raise RuntimeError(f"job {job_id} is running; pause before editing")
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return job
+
+    def _after_structural_change(self, job: Job, *, moved: dict, removed=(), action: str,
+                                 scene_id: str | None = None, reason: str = "") -> Job:
+        """Renumber, keep a saved assembly pointing at the right clips, log it, save.
+
+        A finished job goes back to the keyframes gate: an inserted scene has no keyframe, and a
+        new order is something a person should see before the clips are re-joined.
+        """
+        scenes_mod.remap_assembly(job, moved, removed)
+        job.export = None
+        self.store.log_decision(Decision(job_id=job.id, scene_index=None, scene_id=scene_id,
+                                         phase="scenes", attempt=1, action=action, reason=reason))
+        if job.status is JobStatus.DONE and job.autonomy != "full":
+            self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase=GATE_KEYFRAMES,
+                                             attempt=1, action="reopened"))
+            job.status = JobStatus.NEEDS_APPROVAL
+        return self.store.save_job(job)
+
+    def add_scene(self, job_id: str, position: int, brief: dict, *, generate: bool = True) -> Job:
+        """Insert a scene and (by default) have Gemma write its prompts in the background.
+
+        The row appears at once — marked ``writing_prompts`` — so the person who typed the
+        description sees it land; the model call follows on its own.
+        """
+        job = self._editable_job(job_id)
+        before = {s.id: s.index for s in job.scenes}
+        scene = scenes_mod.insert(job, position, writing_prompts=generate, **brief)
+        job = self._after_structural_change(
+            job, moved=_moved(before, job), action="added", scene_id=scene.id,
+            reason=f"scene {scene.index + 1}: {scene.description[:120]}")
+        if generate:
+            self._spawn(self._write_prompts_task(job.id, scene.id))
+        return job
+
+    def delete_scene(self, job_id: str, index: int, *, delete_files: bool = False) -> Job:
+        """Remove a scene; its rendered files stay on disk unless ``delete_files``."""
+        job = self._editable_job(job_id)
+        scene = next((s for s in job.scenes if s.index == index), None)
+        if scene is None:
+            raise KeyError(f"scene {index}")
+        label = f"scene {index + 1}: {scene.description[:120]}"
+        before = {s.id: s.index for s in job.scenes}
+        removed, was = scenes_mod.remove(job, scene.id, delete_files=delete_files)
+        return self._after_structural_change(
+            job, moved=_moved(before, job), removed=[was], action="deleted", scene_id=removed.id,
+            reason=label + (" (files deleted)" if delete_files else ""))
+
+    def reorder_scenes(self, job_id: str, scene_ids: list[str]) -> Job:
+        """Put the scenes in this order (every scene, once) and renumber them."""
+        job = self._editable_job(job_id)
+        before = {s.id: s.index for s in job.scenes}
+        scenes_mod.reorder(job, scene_ids)      # ValueError -> 400
+        return self._after_structural_change(job, moved=_moved(before, job), action="reordered",
+                                             reason=", ".join(str(s.index + 1) for s in job.scenes)[:200])
+
+    def write_prompts(self, job_id: str, index: int) -> Job:
+        """(Re)write one scene's keyframe/animation prompts from its description, with Gemma."""
+        job = self._editable_job(job_id)
+        scene = next((s for s in job.scenes if s.index == index), None)
+        if scene is None:
+            raise KeyError(f"scene {index}")
+        if not scene.description.strip():
+            raise ValueError(f"scene {index + 1} has no description to write prompts from")
+        scene.writing_prompts = True
+        job = self.store.save_job(job)
+        self._spawn(self._write_prompts_task(job.id, scene.id))
+        return job
+
+    async def _write_prompts_task(self, job_id: str, scene_id: str) -> None:
+        """Gemma writes one scene's two prompts, off the GPU lock.
+
+        Gemma is CPU-pinned (invariant #1), so this follows the assembly task rather than
+        ``_execute``: no lock, no RUNNING status, just events. A failure leaves the scene
+        editable by hand and says so in the decision log.
+        """
+        loop = asyncio.get_running_loop()
+        self.broker.publish(job_id, {"type": "step", "step": "prompts", "detail": "Gemma writes the scene's prompts"})
+        try:
+            job = self.store.load_job(job_id)
+            if job is None:
+                return
+            scene = scenes_mod.by_id(job, scene_id)
+            # The real orchestrator, not self._factory: this needs the job's frozen profile
+            # (format, style, negatives) and touches Gemma only — no GPU, nothing to stub.
+            orch = Orchestrator.from_job(self.store, job)
+            pair = await loop.run_in_executor(None, lambda: _scene_prompts(orch, job, scene))
+            fresh = self.store.load_job(job_id) or job
+            target = scenes_mod.by_id(fresh, scene_id)
+            target.keyframe_prompt, target.keyframe_negative = pair[0].positive, pair[0].negative
+            target.animation_prompt, target.animation_negative = pair[1].positive, pair[1].negative
+            target.writing_prompts = False
+            self.store.save_job(fresh)
+            self.store.log_decision(Decision(job_id=job_id, scene_index=target.index, scene_id=scene_id,
+                                             phase="scenes", attempt=1, action="prompts",
+                                             reason=target.keyframe_prompt[:200]))
+            self.broker.publish(job_id, {"type": "storyboard", "scenes": len(fresh.scenes)})
+        except Exception as e:  # noqa: BLE001 - a failed write must not cost the scene
+            log.exception("job %s: writing prompts for scene %s failed", job_id, scene_id)
+            fresh = self.store.load_job(job_id)
+            if fresh is not None:
+                try:
+                    scenes_mod.by_id(fresh, scene_id).writing_prompts = False
+                    self.store.save_job(fresh)
+                except KeyError:
+                    pass
+            self.store.log_decision(Decision(job_id=job_id, scene_index=None, scene_id=scene_id,
+                                             phase="scenes", attempt=1, action="warning",
+                                             reason=f"writing prompts failed: {e}"[:500]))
+            self.broker.publish(job_id, {"type": "error", "error": f"writing prompts: {e}"})
+        finally:
+            self.broker.publish(job_id, {"job_id": job_id, "type": "end"})
+
     # -- internals --
 
     async def _execute(self, job: Job, fn: Callable[[Orchestrator, Job], None],
@@ -567,3 +691,29 @@ class JobManager:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
+
+
+def _moved(before: dict[str, int], job: Job) -> dict[int, int]:
+    """``{old index: new index}`` for the scenes a structural change shifted."""
+    return {old: s.index for s in job.scenes if (old := before.get(s.id)) is not None and old != s.index}
+
+
+def _scene_prompts(orch: Orchestrator, job: Job, scene):
+    """The keyframe and animation prompts for one scene, written the way the storyboard writes them.
+
+    Same context as ``_phase_storyboard``: the job's profile decides format, style and negatives,
+    and the project's assets are offered only when the job is in edit mode.
+    """
+    project = projects_mod.load(orch.store, job.project_id) if job.project_id else None
+    asset_list = tuple(
+        (a.id, a.kind, a.label or a.name) for a in (project.assets if project else [])
+        if a.kind in ("master_face", "reference", "product", "logo")
+    )
+    context = storyboard.PromptContext.from_params(
+        orch.params, assets=asset_list if (orch.face_swap or job.mode == "edit") else (),
+        edit_mode=job.mode == "edit",
+    )
+    brief = storyboard.SceneBrief(scene=scene.index + 1, description=scene.description,
+                                  character=scene.character, setting=scene.setting, mood=scene.mood)
+    return (storyboard.keyframe_prompt(brief, style=job.style, context=context),
+            storyboard.animation_prompt(brief, context=context))

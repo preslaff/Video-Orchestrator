@@ -84,7 +84,74 @@ export interface paths {
         get?: never;
         /** Update Scenes */
         put: operations["update_scenes_api_jobs__job_id__scenes_put"];
+        /**
+         * Add Scene
+         * @description Insert a scene into the storyboard. With ``generate`` (the default) Gemma writes its
+         *     keyframe and animation prompts in the background; the scene is returned at once, flagged
+         *     ``writing_prompts``, and the next run renders only it.
+         */
+        post: operations["add_scene_api_jobs__job_id__scenes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/scenes/{index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
         post?: never;
+        /**
+         * Delete Scene
+         * @description Remove a scene and renumber the rest. Its generated files stay on disk unless asked.
+         */
+        delete: operations["delete_scene_api_jobs__job_id__scenes__index__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/scenes/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Reorder Scenes
+         * @description Reorder the storyboard: the ids of every scene, in the order they should play.
+         */
+        put: operations["reorder_scenes_api_jobs__job_id__scenes_order_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/scenes/{index}/write-prompts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write Prompts
+         * @description (Re)write this scene's prompts from its description with Gemma — for a scene whose
+         *     description changed, or whose first write failed.
+         */
+        post: operations["write_prompts_api_jobs__job_id__scenes__index__write_prompts_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1010,6 +1077,8 @@ export interface components {
         DecisionOut: {
             /** Scene Index */
             scene_index: number | null;
+            /** Scene Id */
+            scene_id?: string | null;
             /** Phase */
             phase: string;
             /** Attempt */
@@ -1614,10 +1683,61 @@ export interface components {
             /** Scenes */
             scenes: components["schemas"]["SceneEdit"][];
         };
+        /**
+         * SceneInsert
+         * @description Add a scene at ``position`` (0 = first, len = last); Gemma writes its prompts.
+         */
+        SceneInsert: {
+            /** Position */
+            position: number;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Character
+             * @default
+             */
+            character: string;
+            /**
+             * Setting
+             * @default
+             */
+            setting: string;
+            /**
+             * Mood
+             * @default
+             */
+            mood: string;
+            /**
+             * Generate
+             * @default true
+             */
+            generate: boolean;
+        };
+        /**
+         * SceneOrder
+         * @description The job's scenes in their new order — every scene's id, exactly once.
+         */
+        SceneOrder: {
+            /** Scene Ids */
+            scene_ids: string[];
+        };
         /** ScenePublic */
         ScenePublic: {
             /** Index */
             index: number;
+            /**
+             * Id
+             * @default
+             */
+            id: string;
+            /**
+             * Writing Prompts
+             * @default false
+             */
+            writing_prompts: boolean;
             /**
              * Description
              * @default
@@ -2136,6 +2256,143 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_scene_api_jobs__job_id__scenes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SceneInsert"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_scene_api_jobs__job_id__scenes__index__delete: {
+        parameters: {
+            query?: {
+                /** @description also unlink the images and clips it generated */
+                delete_files?: boolean;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reorder_scenes_api_jobs__job_id__scenes_order_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SceneOrder"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    write_prompts_api_jobs__job_id__scenes__index__write_prompts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };

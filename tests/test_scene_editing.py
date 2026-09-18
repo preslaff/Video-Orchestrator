@@ -191,3 +191,129 @@ def test_reference_slot_warning_when_a_scene_has_more_than_the_workflow_uses(mak
     warnings = [d.reason for d in store.decisions(job.id) if d.action == "warning"]
     assert warnings == [f"3 references but {o.params.edit_workflow} uses the first 2"]
     assert om.reference_slots(o.params.edit_workflow) == 2
+
+
+# --- structural edits: add / delete / reorder scenes -----------------------------------
+
+
+def _paused_job(store, n=3):
+    job = new_job(idea="coast", kind="video", autonomy="semi", n_scenes=n)
+    job.status = JobStatus.NEEDS_APPROVAL
+    job.scenes = [Scene(index=i, description=f"scene {i}", keyframe_prompt=f"kf{i}") for i in range(n)]
+    return store.save_job(job)
+
+
+def test_add_scene_inserts_at_once_and_asks_gemma_for_its_prompts(mgr, monkeypatch):
+    from vorch import storyboard
+    from vorch.storyboard import PromptPair
+
+    seen = {}
+
+    def keyframe_prompt(brief, *, style="", context=None, **kw):
+        seen["brief"] = brief
+        return PromptPair(positive="impasto oil painting, the lamp turning", negative="smooth")
+
+    monkeypatch.setattr(storyboard, "keyframe_prompt", keyframe_prompt)
+    monkeypatch.setattr(storyboard, "animation_prompt",
+                        lambda brief, **kw: PromptPair(positive="slow pan", negative="jitter"))
+    job = _paused_job(mgr.store)
+
+    async def go():
+        j = mgr.add_scene(job.id, 1, {"description": "the lamp turning at night", "character": "",
+                                      "setting": "Atlantic coast", "mood": "triumphant"})
+        assert [s.description for s in j.scenes][1] == "the lamp turning at night"
+        assert j.scenes[1].writing_prompts is True          # the row appears before Gemma answers
+        await asyncio.sleep(0)                               # let the background task run
+        for _ in range(50):
+            fresh = mgr.store.load_job(job.id)
+            if not fresh.scenes[1].writing_prompts:
+                return fresh
+            await asyncio.sleep(0.02)
+        raise AssertionError("prompts were never written")
+
+    fresh = asyncio.run(go())
+    new = fresh.scenes[1]
+    assert new.keyframe_prompt.startswith("impasto oil painting") and new.animation_prompt == "slow pan"
+    assert [s.index for s in fresh.scenes] == [0, 1, 2, 3] and fresh.n_scenes == 4
+    assert seen["brief"].description == "the lamp turning at night" and seen["brief"].setting == "Atlantic coast"
+    actions = [(d.phase, d.action, d.scene_id) for d in mgr.store.decisions(job.id)]
+    assert ("scenes", "added", new.id) in actions and ("scenes", "prompts", new.id) in actions
+
+
+def test_a_failed_prompt_write_leaves_the_scene_editable(mgr, monkeypatch):
+    from vorch import storyboard
+
+    def boom(*a, **kw):
+        raise storyboard.StoryboardError("Gemma is down")
+
+    monkeypatch.setattr(storyboard, "keyframe_prompt", boom)
+    job = _paused_job(mgr.store)
+
+    async def go():
+        mgr.add_scene(job.id, 3, {"description": "a new ending", "character": "", "setting": "", "mood": ""})
+        for _ in range(50):
+            fresh = mgr.store.load_job(job.id)
+            if not fresh.scenes[3].writing_prompts:
+                return fresh
+            await asyncio.sleep(0.02)
+        raise AssertionError("the writing flag was never cleared")
+
+    fresh = asyncio.run(go())
+    assert fresh.scenes[3].description == "a new ending" and fresh.scenes[3].keyframe_prompt == ""
+    assert any(d.action == "warning" and "Gemma is down" in d.reason for d in mgr.store.decisions(job.id))
+
+
+def test_delete_scene_renumbers_reopens_the_gate_and_keeps_the_files(mgr, tmp_path):
+    kf = tmp_path / "k.png"
+    kf.write_bytes(b"x")
+    job = _done_video_job(mgr.store)
+    job.scenes.append(Scene(index=1, description="filler", keyframe_path=str(kf)))
+    mgr.store.save_job(job)
+
+    fresh = mgr.delete_scene(job.id, 1)
+    assert [s.index for s in fresh.scenes] == [0] and fresh.n_scenes == 1
+    assert kf.exists()                                   # kept unless asked otherwise
+    assert fresh.status is JobStatus.NEEDS_APPROVAL and fresh.export is None
+    log = [(d.phase, d.action) for d in mgr.store.decisions(job.id)]
+    assert ("scenes", "deleted") in log and (GATE_KEYFRAMES, "reopened") in log
+
+    with pytest.raises(KeyError):
+        mgr.delete_scene(job.id, 9)
+
+
+def test_reorder_moves_scenes_and_follows_a_saved_assembly(mgr):
+    job = _paused_job(mgr.store, n=3)
+    job.assembly = {"spec": {"items": [{"scene_index": 0}, {"scene_index": 1}, {"scene_index": 2}]}}
+    mgr.store.save_job(job)
+    ids = [s.id for s in job.scenes]
+
+    fresh = mgr.reorder_scenes(job.id, [ids[2], ids[0], ids[1]])
+    assert [s.description for s in fresh.scenes] == ["scene 2", "scene 0", "scene 1"]
+    assert [s.index for s in fresh.scenes] == [0, 1, 2]
+    # The stored cut list still names the same three clips, not the numbers they used to have.
+    assert [i["scene_index"] for i in fresh.assembly["spec"]["items"]] == [1, 2, 0]
+
+    with pytest.raises(ValueError, match="every scene exactly once"):
+        mgr.reorder_scenes(job.id, ids[:2])
+
+
+def test_structural_edits_are_refused_while_a_segment_runs(mgr):
+    job = _paused_job(mgr.store)
+    mgr._active.add(job.id)
+    try:
+        for call in (lambda: mgr.add_scene(job.id, 0, {"description": "x", "character": "", "setting": "", "mood": ""}),
+                     lambda: mgr.delete_scene(job.id, 0),
+                     lambda: mgr.reorder_scenes(job.id, [s.id for s in job.scenes]),
+                     lambda: mgr.write_prompts(job.id, 0)):
+            with pytest.raises(RuntimeError, match="running"):
+                call()
+    finally:
+        mgr._active.discard(job.id)
+
+
+def test_write_prompts_needs_a_description(mgr):
+    job = _paused_job(mgr.store)
+    job.scenes[0].description = ""
+    mgr.store.save_job(job)
+    with pytest.raises(ValueError, match="no description"):
+        mgr.write_prompts(job.id, 0)

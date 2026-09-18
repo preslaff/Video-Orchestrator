@@ -1005,3 +1005,64 @@ def test_sse_keeps_listening_past_an_earlier_segment_end(store):
     opening = _json.loads(seen[0].data)
     assert opening["last_id"] == 3 and opening["active"] is True
     assert _json.loads(seen[-1].data)["index"] == 1     # the live event the old client never saw
+
+
+# --- structural scene edits over HTTP ---------------------------------------------------
+
+
+def _storyboard_job(client, n=3):
+    from vorch.state import Scene, new_job
+
+    job = new_job(idea="coast", kind="video", n_scenes=n)
+    job.status = JobStatus.NEEDS_APPROVAL
+    job.scenes = [Scene(index=i, description=f"scene {i}") for i in range(n)]
+    client.store.save_job(job)
+    return job
+
+
+def test_scene_routes_add_delete_and_reorder(client, monkeypatch):
+    from vorch import storyboard
+    from vorch.storyboard import PromptPair
+
+    monkeypatch.setattr(storyboard, "keyframe_prompt", lambda b, **kw: PromptPair(positive="kf", negative=""))
+    monkeypatch.setattr(storyboard, "animation_prompt", lambda b, **kw: PromptPair(positive="an", negative=""))
+    job = _storyboard_job(client)
+
+    r = client.post(f"/api/jobs/{job.id}/scenes", json={"position": 1, "description": "the lamp at night"})
+    assert r.status_code == 201
+    body = r.json()
+    assert [s["description"] for s in body["scenes"]][1] == "the lamp at night"
+    assert [s["index"] for s in body["scenes"]] == [0, 1, 2, 3] and body["n_scenes"] == 4
+    ids = [s["id"] for s in body["scenes"]]
+    assert all(ids) and len(set(ids)) == 4          # every scene has its own stable id
+
+    order = [ids[3], ids[2], ids[1], ids[0]]
+    r = client.put(f"/api/jobs/{job.id}/scenes/order", json={"scene_ids": order})
+    assert r.status_code == 200 and [s["id"] for s in r.json()["scenes"]] == order
+    assert [s["index"] for s in r.json()["scenes"]] == [0, 1, 2, 3]
+
+    bad = client.put(f"/api/jobs/{job.id}/scenes/order", json={"scene_ids": order[:2]})
+    assert bad.status_code == 400 and "every scene exactly once" in bad.json()["error"]["message"]
+
+    r = client.delete(f"/api/jobs/{job.id}/scenes/0")
+    assert r.status_code == 200 and [s["id"] for s in r.json()["scenes"]] == order[1:]
+    assert client.delete(f"/api/jobs/{job.id}/scenes/9").status_code == 404
+    assert client.post("/api/jobs/nope/scenes", json={"position": 0}).status_code == 404
+
+
+def test_write_prompts_route_flags_the_scene_and_needs_a_description(client, monkeypatch):
+    from vorch import storyboard
+    from vorch.storyboard import PromptPair
+
+    monkeypatch.setattr(storyboard, "keyframe_prompt", lambda b, **kw: PromptPair(positive="kf", negative=""))
+    monkeypatch.setattr(storyboard, "animation_prompt", lambda b, **kw: PromptPair(positive="an", negative=""))
+    job = _storyboard_job(client)
+    r = client.post(f"/api/jobs/{job.id}/scenes/0/write-prompts")
+    assert r.status_code == 202 and r.json()["scenes"][0]["writing_prompts"] is True
+
+    blank = _storyboard_job(client)
+    blank.scenes[0].description = ""
+    client.store.save_job(blank)
+    bad = client.post(f"/api/jobs/{blank.id}/scenes/0/write-prompts")
+    assert bad.status_code == 400 and "no description" in bad.json()["error"]["message"]
+    assert client.post(f"/api/jobs/{job.id}/scenes/9/write-prompts").status_code == 404

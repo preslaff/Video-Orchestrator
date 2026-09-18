@@ -361,6 +361,226 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Add Scene",
+        "description": "Insert a scene into the storyboard. With ``generate`` (the default) Gemma writes its\nkeyframe and animation prompts in the background; the scene is returned at once, flagged\n``writing_prompts``, and the next run renders only it.",
+        "operationId": "add_scene_api_jobs__job_id__scenes_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SceneInsert"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/scenes/{index}": {
+      "delete": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Delete Scene",
+        "description": "Remove a scene and renumber the rest. Its generated files stay on disk unless asked.",
+        "operationId": "delete_scene_api_jobs__job_id__scenes__index__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          },
+          {
+            "name": "delete_files",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "also unlink the images and clips it generated",
+              "default": false,
+              "title": "Delete Files"
+            },
+            "description": "also unlink the images and clips it generated"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/scenes/order": {
+      "put": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Reorder Scenes",
+        "description": "Reorder the storyboard: the ids of every scene, in the order they should play.",
+        "operationId": "reorder_scenes_api_jobs__job_id__scenes_order_put",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SceneOrder"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/scenes/{index}/write-prompts": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Write Prompts",
+        "description": "(Re)write this scene's prompts from its description with Gemma — for a scene whose\ndescription changed, or whose first write failed.",
+        "operationId": "write_prompts_api_jobs__job_id__scenes__index__write_prompts_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/jobs/{job_id}/scenes/{index}/regenerate": {
@@ -2888,6 +3108,17 @@
             ],
             "title": "Scene Index"
           },
+          "scene_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scene Id"
+          },
           "phase": {
             "type": "string",
             "title": "Phase"
@@ -4315,11 +4546,79 @@
         ],
         "title": "SceneEdits"
       },
+      "SceneInsert": {
+        "properties": {
+          "position": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Position"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Description",
+            "default": ""
+          },
+          "character": {
+            "type": "string",
+            "title": "Character",
+            "default": ""
+          },
+          "setting": {
+            "type": "string",
+            "title": "Setting",
+            "default": ""
+          },
+          "mood": {
+            "type": "string",
+            "title": "Mood",
+            "default": ""
+          },
+          "generate": {
+            "type": "boolean",
+            "title": "Generate",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "position"
+        ],
+        "title": "SceneInsert",
+        "description": "Add a scene at ``position`` (0 = first, len = last); Gemma writes its prompts."
+      },
+      "SceneOrder": {
+        "properties": {
+          "scene_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scene Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scene_ids"
+        ],
+        "title": "SceneOrder",
+        "description": "The job's scenes in their new order — every scene's id, exactly once."
+      },
       "ScenePublic": {
         "properties": {
           "index": {
             "type": "integer",
             "title": "Index"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "default": ""
+          },
+          "writing_prompts": {
+            "type": "boolean",
+            "title": "Writing Prompts",
+            "default": false
           },
           "description": {
             "type": "string",

@@ -328,6 +328,13 @@ running* and resumes the same way.
 
 Scenes are editable whenever the job isn't running: at either gate, and after it is done, failed or
 stopped.
+- **Change the storyboard itself**: drag a row (or use ▲▼) to reorder, `✕` to delete — asking each
+  time whether to delete what it rendered — and **+ add scene here** between any two rows. A new
+  scene is described in one sentence; Gemma writes its keyframe and animation prompts in the
+  background (~40 s), and the next run generates only it. Scenes are renumbered, so the export
+  folder and the assembly follow the new order; a saved cut list is remapped rather than silently
+  pointing at another scene. **Write prompts with Gemma** rewrites one scene's prompts after its
+  description changed.
 - **Collapsed rows**: above six scenes each one is a single row — number, keyframe thumbnail,
   description, and an **unsaved** badge when it holds edits you have not saved — and clicking it
   opens the full editor in place (several can be open; *Expand all* / *Collapse all* in the header).

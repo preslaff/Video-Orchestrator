@@ -8,7 +8,7 @@ import { Zoomable } from '@/components/Lightbox'
 import { MediaThumb } from '@/components/MediaThumb'
 import { VersionStrip } from '@/components/VersionStrip'
 import { profileSizes } from '@/components/SceneGrid'
-import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useUpdateScenes } from '@/hooks/useJobs'
+import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneStructure, useUpdateScenes } from '@/hooks/useJobs'
 import { useUploadAsset } from '@/hooks/useSetup'
 import { Button, ErrorBox } from '@/components/ui'
 
@@ -70,10 +70,70 @@ function ReferenceHint({ scene, asset, why, fit, inUse, onUse, onUndo }: {
   )
 }
 
-function draftsFrom(job: JobPublic): Record<number, Draft> {
-  const out: Record<number, Draft> = {}
+/** The space between two scenes: the drop target for a dragged row, and where a new scene goes. */
+function Gap({ at, active, onOver, onDrop, onAdd, adding }: {
+  at: number; active: boolean; onOver: (at: number | null) => void; onDrop: (at: number) => void
+  onAdd: () => void; adding: boolean
+}) {
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); onOver(at) }}
+      onDragLeave={() => onOver(null)}
+      onDrop={(e) => { e.preventDefault(); onDrop(at) }}
+      data-testid={`scene-gap-${at}`}
+      className={`group flex h-6 items-center justify-center ${active ? 'h-8' : ''}`}>
+      {active ? (
+        <span className="h-1 w-full rounded bg-blue-400" />
+      ) : (
+        <button type="button" onClick={onAdd} data-testid={`add-scene-${at}`}
+          className="rounded px-2 py-0.5 text-xs text-neutral-400 opacity-0 transition hover:bg-neutral-100 hover:text-neutral-700 focus:opacity-100 group-hover:opacity-100">
+          {adding ? 'adding…' : '+ add scene here'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** "Add scene here": a description is all Gemma needs to write the scene's two prompts. */
+function AddScene({ position, busy, onAdd, onCancel }: {
+  position: number; busy: boolean; onAdd: (b: { description: string; setting: string; mood: string }) => void; onCancel: () => void
+}) {
+  const [description, setDescription] = useState('')
+  const [setting, setSetting] = useState('')
+  const [mood, setMood] = useState('')
+  return (
+    <div className="space-y-2 rounded-lg border-2 border-dashed border-neutral-300 bg-white p-3 text-sm" data-testid={`add-scene-form-${position}`}>
+      <div className="font-medium">New scene at position {position + 1}</div>
+      <label className="block"><span className="text-xs text-neutral-500">what happens in this scene</span>
+        <textarea autoFocus value={description} onChange={(e) => setDescription(e.target.value)} rows={2}
+          data-testid="add-scene-description" className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1"
+          placeholder="the tower's lamp turning at night, seen from the sea" /></label>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="block"><span className="text-xs text-neutral-500">setting (optional)</span>
+          <input value={setting} onChange={(e) => setSetting(e.target.value)} data-testid="add-scene-setting"
+            className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+        <label className="block"><span className="text-xs text-neutral-500">mood (optional)</span>
+          <input value={mood} onChange={(e) => setMood(e.target.value)} data-testid="add-scene-mood"
+            className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button variant="primary" disabled={busy || !description.trim()} data-testid="add-scene-submit"
+          onClick={() => onAdd({ description: description.trim(), setting: setting.trim(), mood: mood.trim() })}>
+          {busy ? 'Adding…' : 'Add and write prompts'}
+        </Button>
+        <button type="button" className="text-xs text-neutral-600 hover:underline" onClick={onCancel}>Cancel</button>
+        <span className="text-xs text-neutral-500">Gemma writes the keyframe and animation prompts (~40 s).</span>
+      </div>
+    </div>
+  )
+}
+
+/** Drafts are keyed by the scene's **stable id**, never its index: a delete or a reorder
+ *  renumbers positions, and keying by number would graft a half-typed prompt onto its neighbour. */
+function draftsFrom(job: JobPublic): Record<string, Draft> {
+  const out: Record<string, Draft> = {}
   for (const s of job.scenes) {
-    out[s.index] = {
+    out[s.id] = {
       description: s.description, keyframe_prompt: s.keyframe_prompt, keyframe_negative: s.keyframe_negative,
       animation_prompt: s.animation_prompt, animation_negative: s.animation_negative,
       mode: s.mode as 't2i' | 'edit', references: s.references.join('\n'), reference_asset_ids: [...(s.reference_asset_ids ?? [])],
@@ -102,14 +162,14 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   useEffect(() => {
     const next = draftsFrom(job)
     setDrafts((current) => {
-      const merged: Record<number, Draft> = {}
+      const merged: Record<string, Draft> = {}
       for (const s of job.scenes) {
-        const mine = current[s.index], was = serverDrafts.current[s.index], now = next[s.index]
-        if (!mine || !was) { merged[s.index] = now; continue }
-        merged[s.index] = { ...now }
+        const mine = current[s.id], was = serverDrafts.current[s.id], now = next[s.id]
+        if (!mine || !was) { merged[s.id] = now; continue }
+        merged[s.id] = { ...now }
         for (const key of Object.keys(now) as (keyof Draft)[]) {
           const dirty = JSON.stringify(mine[key]) !== JSON.stringify(was[key])
-          if (dirty) (merged[s.index] as Record<string, unknown>)[key] = mine[key]
+          if (dirty) (merged[s.id] as Record<string, unknown>)[key] = mine[key]
         }
       }
       return merged
@@ -119,26 +179,27 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   }, [job])
   // Which scenes show their editor. A 40-scene job is unreadable fully expanded — reaching scene 33
   // meant scrolling past 32 editors — so above a handful every scene starts as a one-line row.
-  const [open, setOpen] = useState<Set<number>>(
-    () => new Set(job.scenes.length > AUTO_COLLAPSE_ABOVE ? [] : job.scenes.map((s) => s.index)),
+  const [open, setOpen] = useState<Set<string>>(
+    () => new Set(job.scenes.length > AUTO_COLLAPSE_ABOVE ? [] : job.scenes.map((s) => s.id)),
   )
-  const expanded = (i: number) => open.has(i)
-  const toggleScene = (i: number) =>
+  const expanded = (id: string) => open.has(id)
+  const toggleScene = (id: string) =>
     setOpen((cur) => {
       const next = new Set(cur)
-      if (next.has(i)) next.delete(i)
-      else next.add(i)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   // The progress panel's scene chips jump to a row that may be collapsed: open it as well.
   useEffect(() => {
     const onGoto = (e: Event) => {
-      const i = (e as CustomEvent<number>).detail
-      if (typeof i === 'number') setOpen((cur) => new Set(cur).add(i))
+      const i = (e as CustomEvent<number>).detail      // the chips know positions, not ids
+      const id = job.scenes.find((s) => s.index === i)?.id
+      if (id) setOpen((cur) => new Set(cur).add(id))
     }
     window.addEventListener(GOTO_SCENE, onGoto)
     return () => window.removeEventListener(GOTO_SCENE, onGoto)
-  }, [])
+  }, [job.scenes])
   // At most one picker is open across the whole panel: a 40-scene job renders one full picker, not 120.
   const [openPicker, setOpenPicker] = useState<{ scene: number; kind: PickerKind } | null>(null)
   const isOpen = (scene: number, kind: PickerKind) => openPicker?.scene === scene && openPicker.kind === kind
@@ -149,6 +210,12 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   const upload = useUploadAsset(job.project_id ?? '')
   const removeVersion = useDeleteVersion(job.id)
   const saveAsset = useSaveSceneAsset(job.id, job.project_id)
+  const structure = useSceneStructure(job.id)
+  // Which row is asking "delete — and the files too?", and where a new scene is being written.
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [addAt, setAddAt] = useState<number | null>(null)
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dropAt, setDropAt] = useState<number | null>(null)
   const { kf, clip } = profileSizes(job)
   const orphaned = job.status === 'running' && !job.active
   const editable = job.status === 'needs_approval' || job.status === 'done' || job.status === 'failed' || job.status === 'cancelled' || orphaned
@@ -164,8 +231,8 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   const assetRefs = refAssets.length > 0 || !!job.project_id
   const refsEdit = (d: Draft): string[] | null => (assetRefs ? d.reference_asset_ids : null)
 
-  const regenerate = (index: number, what: 'keyframe' | 'video') => {
-    const d = drafts[index]
+  const regenerate = (index: number, sceneId: string, what: 'keyframe' | 'video') => {
+    const d = drafts[sceneId]
     const cost = what === 'keyframe'
       ? `Regenerate the keyframe of scene ${index + 1}? Its face swap and clip are discarded and the keyframes gate reopens for review.`
       : `Re-animate scene ${index + 1} with Wan (several minutes on this GPU)?`
@@ -188,12 +255,37 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
     }, { onSuccess: () => onStarted?.() })
   }
 
-  const set = (i: number, patch: Partial<Draft>) => setDrafts((d) => ({ ...d, [i]: { ...d[i], ...patch } }))
+  /** Send the whole order after a move or a drop: the server renumbers and returns the job. */
+  const applyOrder = (ids: string[]) => structure.reorder.mutate(ids)
+
+  const moveScene = (index: number, dir: -1 | 1) => {
+    const ids = job.scenes.map((s) => s.id)
+    const to = index + dir
+    if (to < 0 || to >= ids.length) return
+    ;[ids[index], ids[to]] = [ids[to], ids[index]]
+    applyOrder(ids)
+  }
+
+  /** Drop the dragged scene into gap `at` (0 = before the first row, n = after the last). */
+  const dropScene = (at: number) => {
+    const ids = job.scenes.map((s) => s.id)
+    const from = ids.indexOf(draggingId ?? '')
+    setDraggingId(null)
+    setDropAt(null)
+    if (from < 0) return
+    const without = ids.filter((id) => id !== draggingId)
+    const target = at > from ? at - 1 : at            // removing the row shifts the later gaps
+    if (target === from) return
+    without.splice(target, 0, ids[from])
+    applyOrder(without)
+  }
+
+  const set = (id: string, patch: Partial<Draft>) => setDrafts((d) => ({ ...d, [id]: { ...d[id], ...patch } }))
 
   /** Unsaved edits in this scene: what the merge effect calls "dirty", per scene rather than
    *  per field — a collapsed row must never hide work you have not saved. */
-  const isDirty = (i: number) => {
-    const mine = drafts[i], was = saved[i]
+  const isDirty = (id: string) => {
+    const mine = drafts[id], was = saved[id]
     return !!mine && !!was && JSON.stringify(mine) !== JSON.stringify(was)
   }
 
@@ -238,15 +330,15 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
     return out
   }
 
-  const applySuggestion = (index: number, text: string) => {
-    const d = drafts[index]
+  const applySuggestion = (sceneId: string, text: string) => {
+    const d = drafts[sceneId]
     if (d.keyframe_prompt.includes(text)) return
-    set(index, { keyframe_prompt: `${d.keyframe_prompt.replace(/[.\s]+$/, '')}. Correction: ${text}` })
+    set(sceneId, { keyframe_prompt: `${d.keyframe_prompt.replace(/[.\s]+$/, '')}. Correction: ${text}` })
   }
 
   const save = () => {
     const scenes: SceneEdit[] = job.scenes.map((s) => {
-      const d = drafts[s.index]
+      const d = drafts[s.id]
       return {
         index: s.index,
         description: d.description,
@@ -275,7 +367,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
           </span>
           <button type="button" data-testid="toggle-all-scenes"
             className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
-            onClick={() => setOpen(open.size ? new Set() : new Set(job.scenes.map((s) => s.index)))}>
+            onClick={() => setOpen(open.size ? new Set() : new Set(job.scenes.map((s) => s.id)))}>
             {open.size ? 'Collapse all' : 'Expand all'}
           </button>
           <Button onClick={save} disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save changes'}</Button>
@@ -294,44 +386,101 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
       <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : upload.error ? errorMessage(upload.error) : removeVersion.error ? errorMessage(removeVersion.error) : null} />
       {update.isSuccess && !update.isPending && <p className="text-xs text-green-700">Saved.</p>}
 
+      <ErrorBox message={structure.addScene.error ? errorMessage(structure.addScene.error)
+        : structure.deleteScene.error ? errorMessage(structure.deleteScene.error)
+        : structure.reorder.error ? errorMessage(structure.reorder.error)
+        : structure.writePrompts.error ? errorMessage(structure.writePrompts.error) : null} />
+
       <div className="space-y-4">
         {job.scenes.map((s) => {
-          const d = drafts[s.index]
+          const d = drafts[s.id]
           const locked = !!s.keyframe_path
-          const isExp = expanded(s.index)
+          const isExp = expanded(s.id)
           const thumb = s.swapped_url ?? s.keyframe_url
           return (
-            <div key={s.index} id={`scene-${s.index}`} className="scroll-mt-20 overflow-hidden rounded-lg border-2 border-neutral-300 bg-white text-sm shadow-sm">
+            <div key={s.id}>
+            <Gap at={s.index} active={dropAt === s.index && !!draggingId} onOver={setDropAt} onDrop={dropScene}
+              onAdd={() => setAddAt(s.index)} adding={addAt === s.index} />
+            {addAt === s.index && (
+              <AddScene position={s.index} busy={structure.addScene.isPending} onCancel={() => setAddAt(null)}
+                onAdd={(b) => structure.addScene.mutate({ position: s.index, ...b }, { onSuccess: () => setAddAt(null) })} />
+            )}
+            <div id={`scene-${s.index}`} draggable={!busy && !isExp}
+              onDragStart={() => setDraggingId(s.id)} onDragEnd={() => { setDraggingId(null); setDropAt(null) }}
+              className={`scroll-mt-20 overflow-hidden rounded-lg border-2 bg-white text-sm shadow-sm ${draggingId === s.id ? 'border-blue-400 opacity-60' : 'border-neutral-300'}`}>
               {/* The row header is the whole navigation: a filled number badge scans down the page.
                   It is deliberately NOT sticky when open — floating it over the section hid the
                   description and the negative field behind the number and thumbnail. */}
-              <button type="button" aria-expanded={isExp} data-testid={`scene-toggle-${s.index}`}
-                onClick={() => toggleScene(s.index)}
-                className={`flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-neutral-50 ${isExp ? 'border-b border-neutral-200 bg-neutral-50' : ''}`}>
-                <span className="text-xs text-neutral-400">{isExp ? '▾' : '▸'}</span>
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-neutral-900 text-xs font-semibold text-white">{s.index + 1}</span>
-                {thumb ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- local media served by FastAPI
-                  <img src={thumb} alt="" loading="lazy" className="h-10 w-10 shrink-0 rounded object-cover" />
-                ) : (
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-dashed border-neutral-300 text-[10px] text-neutral-400">—</span>
-                )}
-                <span className="min-w-0 flex-1 truncate text-neutral-800">{d?.description || s.description || <span className="text-neutral-400">no description</span>}</span>
-                {isDirty(s.index) && (
-                  <span className="shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-medium text-white"
-                    data-testid={`scene-dirty-${s.index}`} title="unsaved edits in this scene">unsaved</span>
-                )}
-                <span className="shrink-0 text-xs text-neutral-500">{isExp ? 'collapse' : locked ? 'keyframe made' : 'edit'}</span>
-              </button>
+              <div className={`flex w-full items-center gap-2 px-2 py-2 ${isExp ? 'border-b border-neutral-200 bg-neutral-50' : ''}`}>
+                <span className="cursor-grab select-none px-1 text-neutral-400" title="drag to move this scene" aria-hidden>∷</span>
+                <button type="button" aria-expanded={isExp} data-testid={`scene-toggle-${s.index}`}
+                  onClick={() => toggleScene(s.id)}
+                  className="flex min-w-0 flex-1 items-center gap-3 rounded text-left hover:bg-neutral-50">
+                  <span className="text-xs text-neutral-400">{isExp ? '▾' : '▸'}</span>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-neutral-900 text-xs font-semibold text-white">{s.index + 1}</span>
+                  {thumb ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- local media served by FastAPI
+                    <img src={thumb} alt="" loading="lazy" className="h-10 w-10 shrink-0 rounded object-cover" />
+                  ) : (
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-dashed border-neutral-300 text-[10px] text-neutral-400">—</span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-neutral-800">{d?.description || s.description || <span className="text-neutral-400">no description</span>}</span>
+                  {s.writing_prompts && (
+                    <span className="shrink-0 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-900" data-testid={`writing-prompts-${s.index}`}>writing prompts…</span>
+                  )}
+                  {isDirty(s.id) && (
+                    <span className="shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-medium text-white"
+                      data-testid={`scene-dirty-${s.index}`} title="unsaved edits in this scene">unsaved</span>
+                  )}
+                  <span className="shrink-0 text-xs text-neutral-500">{isExp ? 'collapse' : locked ? 'keyframe made' : 'edit'}</span>
+                </button>
+                <span className="flex shrink-0 items-center gap-1">
+                  <button type="button" aria-label={`move scene ${s.index + 1} up`} disabled={busy || s.index === 0}
+                    data-testid={`scene-up-${s.index}`} onClick={() => moveScene(s.index, -1)}
+                    className="rounded border border-neutral-300 px-1 text-xs text-neutral-600 disabled:opacity-30">▲</button>
+                  <button type="button" aria-label={`move scene ${s.index + 1} down`} disabled={busy || s.index === job.scenes.length - 1}
+                    data-testid={`scene-down-${s.index}`} onClick={() => moveScene(s.index, 1)}
+                    className="rounded border border-neutral-300 px-1 text-xs text-neutral-600 disabled:opacity-30">▼</button>
+                  <button type="button" aria-label={`delete scene ${s.index + 1}`} disabled={busy}
+                    data-testid={`scene-delete-${s.index}`} onClick={() => setConfirmDelete(confirmDelete === s.id ? null : s.id)}
+                    className="rounded border border-neutral-300 px-1 text-xs text-neutral-600 hover:border-red-300 hover:text-red-700 disabled:opacity-30">✕</button>
+                </span>
+              </div>
+              {confirmDelete === s.id && (
+                // The choice is real (a clip costs ten minutes of GPU), so it is spelled out
+                // rather than hidden behind a yes/no confirm.
+                <div className="flex flex-wrap items-center gap-2 border-b border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900" data-testid={`confirm-delete-${s.index}`}>
+                  <span className="font-medium">Delete scene {s.index + 1}?</span>
+                  <button type="button" className="rounded border border-red-300 bg-white px-2 py-0.5 font-medium" data-testid={`confirm-delete-keep-${s.index}`}
+                    onClick={() => structure.deleteScene.mutate({ index: s.index, deleteFiles: false },
+                      { onSuccess: () => setConfirmDelete(null) })}>Remove, keep files</button>
+                  <button type="button" className="rounded border border-red-300 bg-white px-2 py-0.5 font-medium" data-testid={`confirm-delete-files-${s.index}`}
+                    onClick={() => structure.deleteScene.mutate({ index: s.index, deleteFiles: true },
+                      { onSuccess: () => setConfirmDelete(null) })}>Remove and delete its files</button>
+                  <button type="button" className="hover:underline" onClick={() => setConfirmDelete(null)}>Cancel</button>
+                </div>
+              )}
               {isExp && (
               <div className="space-y-3 p-3">
                 <div className="space-y-2">
                 <label className="block"><span className="text-xs text-neutral-500">description</span>
-                  <textarea value={d.description} onChange={(e) => set(s.index, { description: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+                  <textarea value={d.description} onChange={(e) => set(s.id, { description: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-neutral-500">
+                    {s.writing_prompts ? 'Gemma is writing this scene’s prompts…' : 'prompts'}
+                  </span>
+                  {/* For a scene whose description changed, and for one whose first write failed. */}
+                  <button type="button" disabled={busy || s.writing_prompts || !d.description.trim()}
+                    data-testid={`write-prompts-${s.index}`} onClick={() => structure.writePrompts.mutate(s.index)}
+                    title="rewrite the keyframe and animation prompts from this description, with Gemma"
+                    className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-40">
+                    {s.writing_prompts ? 'writing…' : 'Write prompts with Gemma'}
+                  </button>
+                </div>
                 <label className="block"><span className="text-xs text-neutral-500">keyframe prompt</span>
-                  <textarea value={d.keyframe_prompt} onChange={(e) => set(s.index, { keyframe_prompt: e.target.value })} rows={3} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+                  <textarea value={d.keyframe_prompt} onChange={(e) => set(s.id, { keyframe_prompt: e.target.value })} rows={3} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
                 <label className="block"><span className="text-xs text-neutral-500">keyframe negative</span>
-                  <input value={d.keyframe_negative} onChange={(e) => set(s.index, { keyframe_negative: e.target.value })} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+                  <input value={d.keyframe_negative} onChange={(e) => set(s.id, { keyframe_negative: e.target.value })} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
                 {suggestionsFor(s.index).length > 0 && (
                   <div className="space-y-1 rounded bg-amber-50 p-2 text-xs text-amber-900">
                     <div className="font-semibold">Evaluator suggestions{s.keyframe_verdict?.decision === 'retry' ? ' (last verdict: retry)' : ''}</div>
@@ -340,7 +489,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                       return (
                         <div key={i} className="flex items-start gap-2">
                           <p className="flex-1">{text}</p>
-                          <button type="button" disabled={applied} onClick={() => applySuggestion(s.index, text)}
+                          <button type="button" disabled={applied} onClick={() => applySuggestion(s.id, text)}
                             className="shrink-0 rounded border border-amber-300 bg-white px-2 py-0.5 font-medium disabled:opacity-50">
                             {applied ? 'applied' : 'Apply to prompt'}
                           </button>
@@ -357,20 +506,20 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                   const inUse = d.mode === 'edit' && d.reference_asset_ids.includes(hint.asset_id)
                   return (
                     <ReferenceHint scene={s.index} asset={hintAsset} why={hint.why ?? ''} fit={hint.fit ?? 'motif_only'} inUse={inUse}
-                      onUse={() => set(s.index, { mode: 'edit', reference_asset_ids: [hint.asset_id, ...d.reference_asset_ids.filter((x) => x !== hint.asset_id)] })}
+                      onUse={() => set(s.id, { mode: 'edit', reference_asset_ids: [hint.asset_id, ...d.reference_asset_ids.filter((x) => x !== hint.asset_id)] })}
                       onUndo={() => {
                         const rest = d.reference_asset_ids.filter((x) => x !== hint.asset_id)
-                        set(s.index, { reference_asset_ids: rest, mode: rest.length ? 'edit' : 't2i' })
+                        set(s.id, { reference_asset_ids: rest, mode: rest.length ? 'edit' : 't2i' })
                       }} />
                   )
                 })()}
                 <div className="grid grid-cols-[8rem_1fr] gap-2">
                   {locked && <span className="col-span-2 text-xs text-neutral-500">mode &amp; references apply on Regenerate keyframe</span>}
                   <label className="block"><span className="text-xs text-neutral-500">mode</span>
-                    <select value={d.mode} onChange={(e) => set(s.index, { mode: e.target.value as 't2i' | 'edit' })} className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1"><option value="t2i">t2i</option><option value="edit">edit</option></select></label>
+                    <select value={d.mode} onChange={(e) => set(s.id, { mode: e.target.value as 't2i' | 'edit' })} className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1"><option value="t2i">t2i</option><option value="edit">edit</option></select></label>
                   {d.mode === 'edit' && !assetRefs && (
                     <label className="block"><span className="text-xs text-neutral-500">reference paths (one per line)</span>
-                      <textarea value={d.references} onChange={(e) => set(s.index, { references: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs" /></label>
+                      <textarea value={d.references} onChange={(e) => set(s.id, { references: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs" /></label>
                   )}
                   {d.mode === 'edit' && assetRefs && (
                     <div className="min-w-0"><span className="text-xs text-neutral-500">references (project assets, in order){slots > 0 ? ` — the first ${slots} are used` : ''}</span>
@@ -380,9 +529,9 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                           onClick={() => togglePicker(s.index, 'refs')}>{isOpen(s.index, 'refs') ? 'Done' : 'Choose…'}</button>
                       </div>
                       {isOpen(s.index, 'refs') && (
-                        <AssetPicker assets={refAssets} selected={d.reference_asset_ids} multi onChange={(ids) => set(s.index, { reference_asset_ids: ids })} testId={`refs-${s.index}`}
+                        <AssetPicker assets={refAssets} selected={d.reference_asset_ids} multi onChange={(ids) => set(s.id, { reference_asset_ids: ids })} testId={`refs-${s.index}`}
                           onUpload={job.project_id ? (f) => uploadThen(f, (id) => setDrafts((all) => ({
-                            ...all, [s.index]: { ...all[s.index], reference_asset_ids: [...all[s.index].reference_asset_ids, id] },
+                            ...all, [s.id]: { ...all[s.id], reference_asset_ids: [...all[s.id].reference_asset_ids, id] },
                           }))) : undefined}
                           uploading={upload.isPending} />
                       )}
@@ -401,16 +550,16 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                     </div>
                     {isOpen(s.index, 'identity') && (
                       <AssetPicker assets={faces} selected={d.identity_asset_id ? [d.identity_asset_id] : []} none="none" testId={`identity-${s.index}`}
-                        onChange={(ids) => set(s.index, { identity_asset_id: ids[0] ?? null })} />
+                        onChange={(ids) => set(s.id, { identity_asset_id: ids[0] ?? null })} />
                     )}
                   </div>
                 )}
                 {video && (
                   <>
                     <label className="block"><span className="text-xs text-neutral-500">animation prompt{s.video_path ? ' (edits apply on re-animate)' : ''}</span>
-                      <textarea value={d.animation_prompt} onChange={(e) => set(s.index, { animation_prompt: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+                      <textarea value={d.animation_prompt} onChange={(e) => set(s.id, { animation_prompt: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
                     <label className="block"><span className="text-xs text-neutral-500">animation negative</span>
-                      <input value={d.animation_negative} onChange={(e) => set(s.index, { animation_negative: e.target.value })} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
+                      <input value={d.animation_negative} onChange={(e) => set(s.id, { animation_negative: e.target.value })} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
                   </>
                 )}
                 </div>
@@ -421,7 +570,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                   <MediaThumb url={s.swapped_url ?? s.keyframe_url} width={kf?.[0]} height={kf?.[1]}
                     alt={`scene ${s.index + 1} keyframe`} caption={`Scene ${s.index + 1} · keyframe`} />
                   <div className="flex flex-wrap items-center gap-1">
-                    {locked && <Button disabled={busy} onClick={() => regenerate(s.index, 'keyframe')} title="new keyframe (new seed, current prompts); the previous one stays in the strip below">Regenerate keyframe</Button>}
+                    {locked && <Button disabled={busy} onClick={() => regenerate(s.index, s.id, 'keyframe')} title="new keyframe (new seed, current prompts); the previous one stays in the strip below">Regenerate keyframe</Button>}
                     {job.project_id && (
                       <button type="button" disabled={busy} className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-50"
                         data-testid={`use-image-${s.index}`} onClick={() => togglePicker(s.index, 'image')}>
@@ -461,7 +610,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                     <MediaThumb url={s.video_url} video width={clip?.[0]} height={clip?.[1]}
                       poster={s.swapped_url ?? s.keyframe_url} caption={`Scene ${s.index + 1} · clip`} />
                     {locked && (
-                      <Button disabled={busy} onClick={() => regenerate(s.index, 'video')}
+                      <Button disabled={busy} onClick={() => regenerate(s.index, s.id, 'video')}
                         title={s.video_path ? 'keep the keyframe, render the clip again with the current animation prompt' : 'keep the keyframe, render the (missing) clip with the current animation prompt'}>
                         {s.video_path ? 'Re-animate' : 'Animate'}
                       </Button>
@@ -484,8 +633,16 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
               </div>
               )}
             </div>
+            </div>
           )
         })}
+        {/* The last gap: drop a scene at the end, or add one there. */}
+        <Gap at={job.scenes.length} active={dropAt === job.scenes.length && !!draggingId} onOver={setDropAt}
+          onDrop={dropScene} onAdd={() => setAddAt(job.scenes.length)} adding={addAt === job.scenes.length} />
+        {addAt === job.scenes.length && (
+          <AddScene position={job.scenes.length} busy={structure.addScene.isPending} onCancel={() => setAddAt(null)}
+            onAdd={(b) => structure.addScene.mutate({ position: job.scenes.length, ...b }, { onSuccess: () => setAddAt(null) })} />
+        )}
       </div>
     </div>
   )

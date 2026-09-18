@@ -54,6 +54,23 @@ class SceneEdit(BaseModel):
     chosen_clip_id: str | None = None      # pick which rendered clip is the deliverable
 
 
+class SceneInsert(BaseModel):
+    """Add a scene at ``position`` (0 = first, len = last); Gemma writes its prompts."""
+
+    position: int = Field(..., ge=0)
+    description: str = Field("", max_length=2000)
+    character: str = ""
+    setting: str = ""
+    mood: str = ""
+    generate: bool = True      # False = an empty scene to write by hand
+
+
+class SceneOrder(BaseModel):
+    """The job's scenes in their new order — every scene's id, exactly once."""
+
+    scene_ids: list[str]
+
+
 class SaveSceneAsset(BaseModel):
     """Copy a scene's generated keyframe into the job's project, to reuse as a reference."""
 
@@ -144,7 +161,9 @@ class ReferenceSuggestionOut(BaseModel):
 
 
 class ScenePublic(BaseModel):
-    index: int
+    index: int                  # position in the job; renumbered when scenes are added/moved
+    id: str = ""                # stable identity, survives a renumber (edits, reorder payloads)
+    writing_prompts: bool = False   # Gemma is writing this scene's prompts right now
     description: str = ""
     character: str = ""
     setting: str = ""
@@ -232,6 +251,7 @@ class Page(BaseModel, Generic[T]):
 
 class DecisionOut(BaseModel):
     scene_index: int | None
+    scene_id: str | None = None   # set since scenes could be reordered; older rows have only the index
     phase: str
     attempt: int
     action: str

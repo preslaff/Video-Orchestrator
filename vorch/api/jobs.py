@@ -18,7 +18,7 @@ from .public import job_to_public, provenance_rows
 from .projects import AssetOut, asset_out
 from .schemas import (
     DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SaveSceneAsset, SceneEdits,
-    SceneRegenerate,
+    SceneInsert, SceneOrder, SceneRegenerate,
 )
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -111,6 +111,7 @@ async def get_decisions(job_id: str, store: Store = Depends(get_store)) -> list[
         DecisionOut(
             scene_index=d.scene_index, phase=d.phase, attempt=d.attempt,
             action=d.action, score=d.score, reason=d.reason, created_at=d.created_at,
+            scene_id=d.scene_id,
         )
         for d in store.decisions(job_id)
     ]
@@ -132,6 +133,85 @@ async def update_scenes(
         job = manager.update_scenes(job_id, [e.model_dump() for e in edits.scenes])
     except KeyError:
         raise ApiError(404, "not_found", "no such job")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    except ValueError as e:
+        raise ApiError(400, "bad_request", str(e))
+    return job_to_public(job, store, manager)
+
+
+@router.post("/{job_id}/scenes", response_model=JobPublic, status_code=201)
+async def add_scene(
+    job_id: str,
+    body: SceneInsert,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Insert a scene into the storyboard. With ``generate`` (the default) Gemma writes its
+    keyframe and animation prompts in the background; the scene is returned at once, flagged
+    ``writing_prompts``, and the next run renders only it."""
+    try:
+        job = manager.add_scene(job_id, body.position, body.model_dump(
+            include={"description", "character", "setting", "mood"}), generate=body.generate)
+    except KeyError:
+        raise ApiError(404, "not_found", "no such job")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    except ValueError as e:
+        raise ApiError(400, "bad_request", str(e))
+    return job_to_public(job, store, manager)
+
+
+@router.delete("/{job_id}/scenes/{index}", response_model=JobPublic)
+async def delete_scene(
+    job_id: str,
+    index: int,
+    delete_files: bool = Query(False, description="also unlink the images and clips it generated"),
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Remove a scene and renumber the rest. Its generated files stay on disk unless asked."""
+    try:
+        job = manager.delete_scene(job_id, index, delete_files=delete_files)
+    except KeyError as e:
+        raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    return job_to_public(job, store, manager)
+
+
+@router.put("/{job_id}/scenes/order", response_model=JobPublic)
+async def reorder_scenes(
+    job_id: str,
+    body: SceneOrder,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Reorder the storyboard: the ids of every scene, in the order they should play."""
+    try:
+        job = manager.reorder_scenes(job_id, body.scene_ids)
+    except KeyError:
+        raise ApiError(404, "not_found", "no such job")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    except ValueError as e:
+        raise ApiError(400, "bad_request", str(e))
+    return job_to_public(job, store, manager)
+
+
+@router.post("/{job_id}/scenes/{index}/write-prompts", response_model=JobPublic, status_code=202)
+async def write_prompts(
+    job_id: str,
+    index: int,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """(Re)write this scene's prompts from its description with Gemma — for a scene whose
+    description changed, or whose first write failed."""
+    try:
+        job = manager.write_prompts(job_id, index)
+    except KeyError as e:
+        raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
     except RuntimeError as e:
         raise ApiError(409, "conflict", str(e))
     except ValueError as e:

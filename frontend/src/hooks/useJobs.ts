@@ -225,6 +225,60 @@ export function useSaveSceneAsset(id: string, projectId?: string | null) {
   })
 }
 
+/** Structural storyboard edits: insert a scene, drop one, put them in a new order, or ask
+ *  Gemma to (re)write one scene's prompts. Each returns the whole job, so the cache is written
+ *  through — the scene list must never lag behind a reorder the user just made. */
+export function useSceneStructure(id: string) {
+  const qc = useQueryClient()
+  const done = (job: unknown) => {
+    qc.setQueryData(keys.job(id), job)
+    void qc.invalidateQueries({ queryKey: keys.job(id) })
+    void qc.invalidateQueries({ queryKey: keys.decisions(id) })
+  }
+  const addScene = useMutation({
+    mutationFn: async (body: { position: number; description: string; setting?: string; mood?: string; generate?: boolean }) => {
+      const { data, error } = await api.POST('/api/jobs/{job_id}/scenes', {
+        params: { path: { job_id: id } },
+        body: { generate: true, character: '', setting: '', mood: '', ...body },
+      })
+      if (error) throw error
+      return data
+    },
+    onSuccess: done,
+  })
+  const deleteScene = useMutation({
+    mutationFn: async ({ index, deleteFiles }: { index: number; deleteFiles: boolean }) => {
+      const { data, error } = await api.DELETE('/api/jobs/{job_id}/scenes/{index}', {
+        params: { path: { job_id: id, index }, query: { delete_files: deleteFiles } },
+      })
+      if (error) throw error
+      return data
+    },
+    onSuccess: done,
+  })
+  const reorder = useMutation({
+    mutationFn: async (scene_ids: string[]) => {
+      const { data, error } = await api.PUT('/api/jobs/{job_id}/scenes/order', {
+        params: { path: { job_id: id } }, body: { scene_ids },
+      })
+      if (error) throw error
+      return data
+    },
+    onSuccess: done,
+  })
+  const writePrompts = useMutation({
+    mutationFn: async (index: number) => {
+      const { data, error } = await api.POST('/api/jobs/{job_id}/scenes/{index}/write-prompts', {
+        params: { path: { job_id: id, index } },
+      })
+      if (error) throw error
+      return data
+    },
+    onSuccess: done,
+  })
+  return { addScene, deleteScene, reorder, writePrompts }
+}
+
 export function useAssembly(id: string | undefined) {
   return useQuery({
     queryKey: keys.assembly(id ?? ''),
