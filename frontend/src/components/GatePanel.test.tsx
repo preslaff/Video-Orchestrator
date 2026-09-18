@@ -1,8 +1,8 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { GatePanel } from './GatePanel'
+import { GOTO_SCENE, GatePanel } from './GatePanel'
 import type { AssetOut, JobPublic } from '@/api/types'
 
 const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) => ({
@@ -171,5 +171,68 @@ describe('GatePanel save failure', () => {
     render(<QueryClientProvider client={qc}><GatePanel job={withKeyframe} assets={assets} /></QueryClientProvider>)
     await user.click(screen.getByTestId('save-asset-0'))
     expect(await screen.findByTestId('save-asset-error-0')).toHaveTextContent('restart vorch serve')
+  })
+})
+
+describe('GatePanel with many scenes', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const bigJob = {
+    ...job, face_swap: false,
+    scenes: Array.from({ length: 8 }, (_, i) => scene(i, {
+      description: `scene ${i + 1} description`,
+      keyframe_url: i === 0 ? '/media/k0.png' : null,
+      keyframe_path: i === 0 ? '/k0.png' : null,
+    })),
+  } as unknown as JobPublic
+
+  const show = (j: JobPublic = bigJob) =>
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <GatePanel job={j} assets={assets} /></QueryClientProvider>)
+
+  it('collapses the rows and expands the one you click', async () => {
+    const user = userEvent.setup()
+    show()
+    expect(screen.getByTestId('scene-count')).toHaveTextContent('8 scenes · 0 open')
+    expect(screen.queryByDisplayValue('kf')).toBeNull()                 // no editor rendered yet
+    expect(screen.getByText('scene 4 description')).toBeInTheDocument() // but every row is listed
+
+    await user.click(screen.getByTestId('scene-toggle-3'))
+    expect(screen.getByTestId('scene-toggle-3')).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getAllByDisplayValue('kf')).toHaveLength(1)           // only that scene's editor
+    expect(screen.getByTestId('scene-count')).toHaveTextContent('1 open')
+
+    await user.click(screen.getByTestId('toggle-all-scenes'))           // Collapse all
+    expect(screen.queryByDisplayValue('kf')).toBeNull()
+  })
+
+  it('keeps an unsaved edit while collapsed and flags the row', async () => {
+    const user = userEvent.setup()
+    show()
+    await user.click(screen.getByTestId('scene-toggle-2'))
+    const prompt = screen.getAllByDisplayValue('kf')[0]
+    await user.type(prompt, ' extra')
+    expect(screen.getByTestId('scene-dirty-2')).toBeInTheDocument()
+    await user.click(screen.getByTestId('scene-toggle-2'))              // collapse again
+    expect(screen.queryByDisplayValue('kf extra')).toBeNull()
+    expect(screen.getByTestId('scene-dirty-2')).toBeInTheDocument()     // the work is still there
+    await user.click(screen.getByTestId('scene-toggle-2'))
+    expect(screen.getByDisplayValue('kf extra')).toBeInTheDocument()
+  })
+
+  it('shows the keyframe thumbnail on a row that has one, and opens on a jump event', () => {
+    show()
+    const row = screen.getByTestId('scene-toggle-0')
+    expect(row.querySelector('img')).toHaveAttribute('src', '/media/k0.png')
+    expect(screen.getByTestId('scene-toggle-1').querySelector('img')).toBeNull()
+
+    act(() => { window.dispatchEvent(new CustomEvent(GOTO_SCENE, { detail: 5 })) })
+    expect(screen.getByTestId('scene-toggle-5')).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('leaves a small job fully expanded', () => {
+    show({ ...bigJob, scenes: bigJob.scenes.slice(0, 3) } as unknown as JobPublic)
+    expect(screen.getAllByDisplayValue('kf')).toHaveLength(3)
+    expect(screen.getByTestId('scene-count')).toHaveTextContent('3 scenes · 3 open')
   })
 })

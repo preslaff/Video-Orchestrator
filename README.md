@@ -328,6 +328,11 @@ running* and resumes the same way.
 
 Scenes are editable whenever the job isn't running: at either gate, and after it is done, failed or
 stopped.
+- **Collapsed rows**: above six scenes each one is a single row — number, keyframe thumbnail,
+  description, and an **unsaved** badge when it holds edits you have not saved — and clicking it
+  opens the full editor in place (several can be open; *Expand all* / *Collapse all* in the header).
+  A 40-scene storyboard is then a list you can scan instead of forty stacked editors, and the
+  progress panel's scene chips open the scene they jump to.
 - **Mode (t2i/edit) and references**: pick project assets in priority order, or **Upload…** a file
   from the scene card, which adds it to the project. On a scene that already has a keyframe, they
   apply on *Regenerate keyframe*. The picker says how many references the edit workflow uses.

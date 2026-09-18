@@ -16,6 +16,12 @@ type Draft = { description: string; keyframe_prompt: string; keyframe_negative: 
 
 type PickerKind = 'refs' | 'identity' | 'image'
 
+/** Above this many scenes the rows start collapsed (a 3-scene job stays as it was). */
+const AUTO_COLLAPSE_ABOVE = 6
+
+/** Dispatched by the progress panel's scene chips; the gate panel opens that scene. */
+export const GOTO_SCENE = 'vorch:goto-scene'
+
 /** A one-line summary of chosen assets (small thumbnails + labels) for a collapsed picker. */
 function PickSummary({ assets, ids, empty }: { assets: AssetOut[]; ids: string[]; empty: string }) {
   const chosen = ids.map((id) => assets.find((a) => a.id === id)).filter((a): a is AssetOut => !!a)
@@ -90,6 +96,9 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   // everything else follows the server, so regenerated media and other people's edits land here
   // without discarding a half-typed prompt (the page used to remount the whole panel instead).
   const serverDrafts = useRef(draftsFrom(job))
+  // The same snapshot as state, because the dirty marker on a collapsed row is read while
+  // rendering and a ref must not be (react-hooks/refs).
+  const [saved, setSaved] = useState(() => draftsFrom(job))
   useEffect(() => {
     const next = draftsFrom(job)
     setDrafts((current) => {
@@ -106,7 +115,30 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
       return merged
     })
     serverDrafts.current = next
+    setSaved(next)
   }, [job])
+  // Which scenes show their editor. A 40-scene job is unreadable fully expanded — reaching scene 33
+  // meant scrolling past 32 editors — so above a handful every scene starts as a one-line row.
+  const [open, setOpen] = useState<Set<number>>(
+    () => new Set(job.scenes.length > AUTO_COLLAPSE_ABOVE ? [] : job.scenes.map((s) => s.index)),
+  )
+  const expanded = (i: number) => open.has(i)
+  const toggleScene = (i: number) =>
+    setOpen((cur) => {
+      const next = new Set(cur)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return next
+    })
+  // The progress panel's scene chips jump to a row that may be collapsed: open it as well.
+  useEffect(() => {
+    const onGoto = (e: Event) => {
+      const i = (e as CustomEvent<number>).detail
+      if (typeof i === 'number') setOpen((cur) => new Set(cur).add(i))
+    }
+    window.addEventListener(GOTO_SCENE, onGoto)
+    return () => window.removeEventListener(GOTO_SCENE, onGoto)
+  }, [])
   // At most one picker is open across the whole panel: a 40-scene job renders one full picker, not 120.
   const [openPicker, setOpenPicker] = useState<{ scene: number; kind: PickerKind } | null>(null)
   const isOpen = (scene: number, kind: PickerKind) => openPicker?.scene === scene && openPicker.kind === kind
@@ -157,6 +189,13 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   }
 
   const set = (i: number, patch: Partial<Draft>) => setDrafts((d) => ({ ...d, [i]: { ...d[i], ...patch } }))
+
+  /** Unsaved edits in this scene: what the merge effect calls "dirty", per scene rather than
+   *  per field — a collapsed row must never hide work you have not saved. */
+  const isDirty = (i: number) => {
+    const mine = drafts[i], was = saved[i]
+    return !!mine && !!was && JSON.stringify(mine) !== JSON.stringify(was)
+  }
 
   /** Picking a version only moves a pointer, so it applies at once — no Save, no regeneration. */
   const selectVersion = (index: number, kind: 'keyframe' | 'clip', id: string) =>
@@ -235,7 +274,15 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
             {!job.pending_gate && 'Regenerate a keyframe or re-animate a scene (the export folder is rebuilt when the job completes again), or pick a different variant and re-export.'}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-neutral-600" data-testid="scene-count">
+            {job.scenes.length} scene{job.scenes.length === 1 ? '' : 's'} · {open.size} open
+          </span>
+          <button type="button" data-testid="toggle-all-scenes"
+            className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-100"
+            onClick={() => setOpen(open.size ? new Set() : new Set(job.scenes.map((s) => s.index)))}>
+            {open.size ? 'Collapse all' : 'Expand all'}
+          </button>
           <Button onClick={save} disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save changes'}</Button>
           {job.pending_gate && (
             <Button variant="primary" disabled={approve.isPending} onClick={() => approve.mutate(job.pending_gate!, { onSuccess: () => onStarted?.() })}>
@@ -247,14 +294,36 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
       <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : upload.error ? errorMessage(upload.error) : removeVersion.error ? errorMessage(removeVersion.error) : null} />
       {update.isSuccess && !update.isPending && <p className="text-xs text-green-700">Saved.</p>}
 
-      <div className="space-y-3">
+      <div className="space-y-4">
         {job.scenes.map((s) => {
           const d = drafts[s.index]
           const locked = !!s.keyframe_path
+          const isExp = expanded(s.index)
+          const thumb = s.swapped_url ?? s.keyframe_url
           return (
-            <div key={s.index} id={`scene-${s.index}`} className="scroll-mt-4 rounded border border-neutral-200 bg-white p-3 text-sm">
-              <div className="mb-2 font-medium">Scene {s.index + 1} <span className="text-xs font-normal text-neutral-500">{locked ? 'keyframe made — prompt edits apply on regenerate' : 'prompts editable'}</span></div>
-              <div className="space-y-3">
+            <div key={s.index} id={`scene-${s.index}`} className="scroll-mt-20 overflow-hidden rounded-lg border-2 border-neutral-300 bg-white text-sm shadow-sm">
+              {/* The row header is the whole navigation: a filled number badge scans down the page,
+                  and while a scene is open it stays put under the panel's own sticky bar. */}
+              <button type="button" aria-expanded={isExp} data-testid={`scene-toggle-${s.index}`}
+                onClick={() => toggleScene(s.index)}
+                className={`flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-neutral-50 ${isExp ? 'sticky top-16 z-[5] border-b border-neutral-200 bg-white/95 backdrop-blur' : ''}`}>
+                <span className="text-xs text-neutral-400">{isExp ? '▾' : '▸'}</span>
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-neutral-900 text-xs font-semibold text-white">{s.index + 1}</span>
+                {thumb ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- local media served by FastAPI
+                  <img src={thumb} alt="" loading="lazy" className="h-10 w-10 shrink-0 rounded object-cover" />
+                ) : (
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-dashed border-neutral-300 text-[10px] text-neutral-400">—</span>
+                )}
+                <span className="min-w-0 flex-1 truncate text-neutral-800">{d?.description || s.description || <span className="text-neutral-400">no description</span>}</span>
+                {isDirty(s.index) && (
+                  <span className="shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-medium text-white"
+                    data-testid={`scene-dirty-${s.index}`} title="unsaved edits in this scene">unsaved</span>
+                )}
+                <span className="shrink-0 text-xs text-neutral-500">{isExp ? 'collapse' : locked ? 'keyframe made' : 'edit'}</span>
+              </button>
+              {isExp && (
+              <div className="space-y-3 p-3">
                 <div className="space-y-2">
                 <label className="block"><span className="text-xs text-neutral-500">description</span>
                   <textarea value={d.description} onChange={(e) => set(s.index, { description: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
@@ -412,6 +481,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                 </div>
               )}
               </div>
+              )}
             </div>
           )
         })}
