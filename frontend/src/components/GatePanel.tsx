@@ -265,15 +265,10 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
 
   return (
     <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
-      <div className="sticky top-0 z-10 -mx-4 -mt-4 flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3">
-        <div>
-          <h2 className="font-semibold">{job.pending_gate ? `Gate: ${job.pending_gate}` : 'Post-run edits'}</h2>
-          <p className="text-sm text-neutral-700">
-            {job.pending_gate === 'storyboard' && 'Review the storyboard and prompts, then approve to generate keyframes.'}
-            {job.pending_gate === 'keyframes' && 'Review the keyframes: regenerate any scene (optionally with an edited prompt), pick a variant, tweak animation prompts, then approve to render the clips (the expensive Wan phase).'}
-            {!job.pending_gate && 'Regenerate a keyframe or re-animate a scene (the export folder is rebuilt when the job completes again), or pick a different variant and re-export.'}
-          </p>
-        </div>
+      {/* Only the title and the actions stay sticky: with the explanation inside it the bar was
+          tall enough to cover the top of whichever scene you were reading. */}
+      <div className="sticky top-0 z-10 -mx-4 -mt-4 flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2">
+        <h2 className="font-semibold">{job.pending_gate ? `Gate: ${job.pending_gate}` : 'Post-run edits'}</h2>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-neutral-600" data-testid="scene-count">
             {job.scenes.length} scene{job.scenes.length === 1 ? '' : 's'} · {open.size} open
@@ -291,6 +286,11 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
           )}
         </div>
       </div>
+      <p className="text-sm text-neutral-700">
+        {job.pending_gate === 'storyboard' && 'Review the storyboard and prompts, then approve to generate keyframes.'}
+        {job.pending_gate === 'keyframes' && 'Review the keyframes: regenerate any scene (optionally with an edited prompt), pick a variant, tweak animation prompts, then approve to render the clips (the expensive Wan phase).'}
+        {!job.pending_gate && 'Regenerate a keyframe or re-animate a scene (the export folder is rebuilt when the job completes again), or pick a different variant and re-export.'}
+      </p>
       <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : upload.error ? errorMessage(upload.error) : removeVersion.error ? errorMessage(removeVersion.error) : null} />
       {update.isSuccess && !update.isPending && <p className="text-xs text-green-700">Saved.</p>}
 
@@ -302,11 +302,12 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
           const thumb = s.swapped_url ?? s.keyframe_url
           return (
             <div key={s.index} id={`scene-${s.index}`} className="scroll-mt-20 overflow-hidden rounded-lg border-2 border-neutral-300 bg-white text-sm shadow-sm">
-              {/* The row header is the whole navigation: a filled number badge scans down the page,
-                  and while a scene is open it stays put under the panel's own sticky bar. */}
+              {/* The row header is the whole navigation: a filled number badge scans down the page.
+                  It is deliberately NOT sticky when open — floating it over the section hid the
+                  description and the negative field behind the number and thumbnail. */}
               <button type="button" aria-expanded={isExp} data-testid={`scene-toggle-${s.index}`}
                 onClick={() => toggleScene(s.index)}
-                className={`flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-neutral-50 ${isExp ? 'sticky top-16 z-[5] border-b border-neutral-200 bg-white/95 backdrop-blur' : ''}`}>
+                className={`flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-neutral-50 ${isExp ? 'border-b border-neutral-200 bg-neutral-50' : ''}`}>
                 <span className="text-xs text-neutral-400">{isExp ? '▾' : '▸'}</span>
                 <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-neutral-900 text-xs font-semibold text-white">{s.index + 1}</span>
                 {thumb ? (
