@@ -35,9 +35,16 @@ export function AssetPicker({
   const [limit, setLimit] = useState(PAGE)
   const large = assets.length > SEARCH_THRESHOLD
   const chips = useMemo(() => (large ? topTags(assets) : []), [assets, large])
-  const matches = useMemo(() => (large ? filterAssets(assets, query, tags) : assets), [assets, large, query, tags])
+  // Newest first: a frame just saved from another scene, or a just-uploaded photo, is what the
+  // person is looking for — stored order would bury it on page two of eighty.
+  const ordered = useMemo(
+    () => (large ? [...assets].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')) : assets),
+    [assets, large],
+  )
+  const matches = useMemo(() => (large ? filterAssets(ordered, query, tags) : ordered), [ordered, large, query, tags])
+  const filtered = !!query || tags.length > 0
   const pinned = large ? selected.map((id) => assets.find((a) => a.id === id)).filter((a): a is AssetOut => !!a) : []
-  const results = large ? matches.filter((a) => !selected.includes(a.id)) : assets
+  const results = large ? matches.filter((a) => !selected.includes(a.id)) : ordered
   const shown = large ? results.slice(0, limit) : results
   const sid = (suffix: string) => (testId ? `${testId}-${suffix}` : undefined)
 
@@ -89,7 +96,12 @@ export function AssetPicker({
             <input type="search" value={query} onChange={(e) => { setQuery(e.target.value); setLimit(PAGE) }}
               placeholder="search labels, captions, tags, sign text" aria-label="search assets" data-testid={sid('search')}
               className="w-full rounded border border-neutral-300 px-2 py-1 text-xs" />
-            <span className="shrink-0 text-xs text-neutral-500" data-testid={sid('count')}>{matches.length} of {assets.length}</span>
+            <span className="shrink-0 text-xs text-neutral-500" data-testid={sid('count')}>{matches.length} of {assets.length} shown</span>
+            {filtered && (
+              // Without this, a filter left on from an earlier look reads as "the asset is gone".
+              <button type="button" data-testid={sid('clear')} onClick={() => { setQuery(''); setTags([]); setLimit(PAGE) }}
+                className="shrink-0 rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100">Clear</button>
+            )}
           </div>
           {chips.length > 0 && (
             <div className="flex flex-wrap gap-1">

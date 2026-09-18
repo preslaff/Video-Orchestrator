@@ -144,3 +144,15 @@ def test_export_routes(client, tmp_path):
     job.status = JobStatus.DONE
     client.store.save_job(job)
     assert client.post(f"/api/jobs/{job.id}/export").status_code == 200
+
+
+def test_config_reports_when_the_server_runs_older_code(client, monkeypatch):
+    """A route added after the server started answers a bare 404; the UI needs to say
+    "restart vorch serve" instead of "not found", so the server reports the mismatch."""
+    from vorch.api import setup as setup_api
+
+    cfg = client.get("/api/setup/config").json()
+    assert cfg["started_at"].endswith("+00:00") and cfg["code_changed_since_start"] is False
+
+    monkeypatch.setattr(setup_api, "_STARTED_AT", 0.0)   # every module is newer than the epoch
+    assert client.get("/api/setup/config").json()["code_changed_since_start"] is True

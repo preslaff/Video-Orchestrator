@@ -27,6 +27,13 @@ export function errorMessage(err: unknown, fallback = 'Request failed'): string 
   return fallback
 }
 
+/** A 404 answered by FastAPI itself (`{detail: "Not Found"}`) rather than vorch's error
+ *  envelope: the route is not in the running build — almost always an unrestarted server. */
+export function isMissingRoute(err: unknown): boolean {
+  const e = err as { detail?: unknown; error?: unknown } | null | undefined
+  return !!e && e.detail === 'Not Found' && !e.error
+}
+
 export function errorDetails(err: unknown): unknown {
   return (err as { error?: { details?: unknown } } | undefined)?.error?.details
 }

@@ -343,6 +343,9 @@ stopped.
   regenerating the source scene never changes the scenes using it; saving the same frame twice
   returns the asset already there, and an unnamed one is captioned in the background like any
   upload. This is how a tower or a staircase keeps the same look across several scenes.
+  The picker lists assets **newest first**, so a frame you just saved is its first tile; while a
+  search or a tag chip is active it shows a **Clear** button and an "N of M shown" count, so a
+  narrowed list never reads as a missing asset.
 - **Use my image as keyframe**: pick or upload an image. It is cropped to the job's frame size and
   replaces the keyframe without being generated or evaluated. The generated candidates stay
   selectable, and the gate reopens for review as for a regenerated keyframe.

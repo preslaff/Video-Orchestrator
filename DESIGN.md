@@ -398,6 +398,12 @@ sidecar manifest).
   separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
   the storyboard's own token budget now scales with the scene count (~160 per scene).
 
+- **Stale-server guard**: `GET /api/setup/config` reports `started_at` and
+  `code_changed_since_start` (any `vorch/**/*.py` newer than the process). The UI and the server come
+  from one checkout, so an edited module the running process predates means new routes answer a bare
+  `{"detail": "Not Found"}` — which reads as a missing feature. `Nav` shows an amber bar, and a save
+  that hits such a 404 says "restart vorch serve" instead of "not found" (`client.isMissingRoute`).
+
 - **Generated frames can become assets** (`POST /api/jobs/{id}/scenes/{i}/save-asset`): the scene's
   keyframe (or a named variant) is copied into the job's project with `projects.add_asset`'s path
   branch, and from there it is an ordinary asset — picker, thumbnail, background description, and a

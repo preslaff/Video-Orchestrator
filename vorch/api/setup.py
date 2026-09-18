@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, Query
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
@@ -11,6 +15,24 @@ from .deps import get_store
 from .errors import ApiError
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
+
+# When this process started, against which the code on disk is compared: an edited module is
+# only live after a restart, and a UI calling a route this build does not have gets a bare 404.
+_STARTED_AT = time.time()
+
+
+def _code_changed_since_start() -> bool:
+    """True when a ``vorch`` module on disk is newer than this process — i.e. restart me.
+
+    A development guard (an installed, unedited checkout never reports true): the frontend and
+    the server come from one working tree, so "the file changed after the server started" is
+    exactly the mismatch that makes a new route look like a missing feature.
+    """
+    root = Path(__file__).resolve().parent.parent
+    try:
+        return any(f.stat().st_mtime > _STARTED_AT for f in root.rglob("*.py"))
+    except OSError:
+        return False
 
 
 @router.get("/env")
@@ -66,4 +88,6 @@ async def effective_config(store: Store = Depends(get_store)) -> dict:
         "backends_file": str(config.BACKENDS_FILE),
         "backends": known,  # never carries auth headers
         "backends_error": backends_error,
+        "started_at": datetime.fromtimestamp(_STARTED_AT, timezone.utc).isoformat(),
+        "code_changed_since_start": _code_changed_since_start(),
     }

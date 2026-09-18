@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { errorMessage } from '@/api/client'
+import { errorMessage, isMissingRoute } from '@/api/client'
 import type { AssetOut, DecisionOut, JobPublic, SceneEdit } from '@/api/types'
 import { AssetPicker } from '@/components/AssetPicker'
 import { Zoomable } from '@/components/Lightbox'
@@ -244,7 +244,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
           )}
         </div>
       </div>
-      <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : upload.error ? errorMessage(upload.error) : removeVersion.error ? errorMessage(removeVersion.error) : saveAsset.error ? errorMessage(saveAsset.error) : null} />
+      <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : upload.error ? errorMessage(upload.error) : removeVersion.error ? errorMessage(removeVersion.error) : null} />
       {update.isSuccess && !update.isPending && <p className="text-xs text-green-700">Saved.</p>}
 
       <div className="space-y-3">
@@ -368,6 +368,13 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                       </button>
                     )}
                   </div>
+                  {saveAsset.isError && saveAsset.variables?.index === s.index && (
+                    <p className="text-xs text-red-700" data-testid={`save-asset-error-${s.index}`}>
+                      {isMissingRoute(saveAsset.error)
+                        ? 'The server does not have this route — restart vorch serve (it is running older code).'
+                        : errorMessage(saveAsset.error)}
+                    </p>
+                  )}
                   {saveAsset.isSuccess && saveAsset.data?.index === s.index && (
                     <p className="text-xs text-green-700" data-testid={`save-asset-done-${s.index}`}>
                       {saveAsset.data.existed

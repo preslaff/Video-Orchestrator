@@ -156,3 +156,20 @@ describe('GatePanel save keyframe as project reference', () => {
     expect(screen.queryByTestId('save-asset-0')).toBeNull()
   })
 })
+
+describe('GatePanel save failure', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('names the restart when the running server lacks the route', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ detail: 'Not Found' }), { status: 404, headers: { 'content-type': 'application/json' } })))
+    const user = userEvent.setup()
+    const withKeyframe = {
+      ...job, face_swap: false, scenes: [scene(0, { keyframe_path: '/k0.png', keyframe_url: '/media/k0.png' })],
+    } as unknown as JobPublic
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    render(<QueryClientProvider client={qc}><GatePanel job={withKeyframe} assets={assets} /></QueryClientProvider>)
+    await user.click(screen.getByTestId('save-asset-0'))
+    expect(await screen.findByTestId('save-asset-error-0')).toHaveTextContent('restart vorch serve')
+  })
+})

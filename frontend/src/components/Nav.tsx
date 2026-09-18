@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Clapperboard, FolderKanban, Folders, Plus, Settings } from 'lucide-react'
+import { useConfig } from '@/hooks/useSetup'
 
 const items = [
   { href: '/jobs', label: 'Jobs', icon: FolderKanban },
@@ -13,8 +14,17 @@ const items = [
 
 export function Nav() {
   const path = usePathname()
+  // The UI and the server come from one checkout, so an edited module that the running process
+  // predates means new routes answer 404 — which reads as a missing feature, not a stale server.
+  const stale = useConfig().data?.code_changed_since_start === true
   return (
     <header className="border-b border-neutral-200 bg-white">
+      {stale && (
+        <div className="bg-amber-100 px-4 py-1.5 text-center text-xs text-amber-900" data-testid="stale-server">
+          <code>vorch serve</code> is running code from before your last change — restart it, or new
+          actions will fail with “not found”.
+        </div>
+      )}
       <div className="mx-auto flex max-w-7xl items-center gap-6 px-4 py-3">
         <Link href="/jobs" className="flex items-center gap-2 font-semibold">
           <Clapperboard className="h-5 w-5" /> vorch

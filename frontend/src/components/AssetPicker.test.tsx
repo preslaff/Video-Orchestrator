@@ -84,3 +84,30 @@ describe('AssetPicker', () => {
   })
 })
 
+
+describe('AssetPicker finding a newly added asset', () => {
+  /** 20 assets (> SEARCH_THRESHOLD) so the search, chips and paging are on. */
+  const many = (n: number) =>
+    Array.from({ length: n }, (_, i) => asset(`a${i}`, `photo ${i}`, {
+      created_at: `2026-09-0${(i % 9) + 1}T00:00:00+00:00`, note_tags: i % 2 ? ['coastal'] : ['tower'],
+    }))
+
+  it('lists the newest asset first, so a just-saved frame is the first tile', () => {
+    const assets = [...many(20), asset('fresh', 'scene-8-keyframe.png', { created_at: '2026-09-30T00:00:00+00:00' })]
+    render(<AssetPicker assets={assets} selected={[]} onChange={() => {}} testId="p" />)
+    const tiles = screen.getByTestId('p').querySelectorAll('[data-testid^="p-a"], [data-testid="p-fresh"]')
+    expect(tiles[0]).toHaveAttribute('data-testid', 'p-fresh')     // newest, though stored last
+  })
+
+  it('says how many are shown and clears an active filter', async () => {
+    const user = userEvent.setup()
+    render(<AssetPicker assets={many(20)} selected={[]} onChange={() => {}} testId="p" />)
+    expect(screen.getByTestId('p-count')).toHaveTextContent('20 of 20 shown')
+    expect(screen.queryByTestId('p-clear')).toBeNull()             // nothing to clear yet
+    await user.type(screen.getByTestId('p-search'), 'photo 17')
+    expect(screen.getByTestId('p-count')).toHaveTextContent('1 of 20 shown')
+    await user.click(screen.getByTestId('p-clear'))
+    expect(screen.getByTestId('p-count')).toHaveTextContent('20 of 20 shown')
+    expect((screen.getByTestId('p-search') as HTMLInputElement).value).toBe('')
+  })
+})

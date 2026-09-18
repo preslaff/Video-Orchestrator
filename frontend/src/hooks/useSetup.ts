@@ -34,14 +34,22 @@ export function useRecheckEnv(profileId?: string, deep = false) {
   })
 }
 
+export type ServerConfig = Record<string, string | number> & {
+  started_at?: string
+  /** A vorch module on disk is newer than the running process: its routes may be missing. */
+  code_changed_since_start?: boolean
+}
+
 export function useConfig() {
   return useQuery({
     queryKey: keys.config,
     queryFn: async () => {
       const { data, error } = await api.GET('/api/setup/config')
       if (error) throw error
-      return data as Record<string, string | number>
+      return data as ServerConfig
     },
+    // Cheap, and it lets the stale-code banner disappear on its own once the server restarts.
+    refetchInterval: 30_000,
   })
 }
 
