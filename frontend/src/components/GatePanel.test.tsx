@@ -342,3 +342,27 @@ describe('GatePanel storyboard structure', () => {
     expect(screen.getByTestId('scene-dirty-0')).toBeInTheDocument()   // which is now number 1
   })
 })
+
+describe('GatePanel render buttons', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('says what Approve renders and what a single scene renders', () => {
+    const j = {
+      ...job, face_swap: false, pending_gate: 'keyframes',
+      profile: { video: { width: 832, height: 480, length: 65, workflow: 'animate' } },
+      scenes: [
+        scene(0, { keyframe_path: '/k0.png', video_path: '/c0.mp4' }),
+        scene(1, { keyframe_path: '/k1.png' }),
+        scene(2, { keyframe_path: '/k2.png' }),
+      ],
+    } as unknown as JobPublic
+    render(<QueryClientProvider client={new QueryClient()}><GatePanel job={j} assets={assets} /></QueryClientProvider>)
+    expect(screen.getByText(/the 2 scenes still missing a clip/)).toBeInTheDocument()
+    // Scene 1 already has a clip: its button re-animates, and it names the cost of one scene.
+    const reanimate = screen.getByText('Re-animate this scene')
+    expect(reanimate).toBeInTheDocument()
+    expect(reanimate.getAttribute('title')).toMatch(/clip only \(~.*\bmin\b.*\), whatever the gate/)
+    // Two scenes without a clip get the button; the third mention is the header's explanation.
+    expect(screen.getAllByRole('button', { name: 'Animate this scene' })).toHaveLength(2)
+  })
+})

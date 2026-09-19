@@ -328,6 +328,10 @@ running* and resumes the same way.
 
 Scenes are editable whenever the job isn't running: at either gate, and after it is done, failed or
 stopped.
+- **Animate this scene** renders one clip immediately, whatever a gate is waiting for — reviewing a
+  scene and asking for its clip is the review for that scene. The keyframes gate keeps its batch
+  meaning (**Approve keyframes** renders every scene still missing a clip, and the panel says how
+  many); a job whose last missing clip was rendered this way finishes and exports on its own.
 - **Change the storyboard itself**: drag a row (or use ▲▼) to reorder, `✕` to delete — asking each
   time whether to delete what it rendered — and **+ add scene here** between any two rows. A new
   scene is described in one sentence; Gemma writes its keyframe and animation prompts in the

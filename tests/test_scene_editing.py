@@ -319,26 +319,81 @@ def test_write_prompts_needs_a_description(mgr):
         mgr.write_prompts(job.id, 0)
 
 
-def test_reanimate_is_refused_while_the_keyframes_gate_waits(mgr):
-    """Re-animating before the gate is approved used to clear the clip and pause at the gate:
-    the UI said "regenerating video" and nothing was ever rendered."""
-    from vorch.orchestrator import GATE_KEYFRAMES as KF
+def test_reanimate_renders_this_scene_while_the_keyframes_gate_waits(mgr, monkeypatch):
+    """Animating one scene must not wait for the batch approval.
+
+    It used to clear the clip, walk into the gate and pause — "regenerating video of scene 0"
+    followed by nothing rendered.
+    """
+    from vorch import orchestrator as orch_mod
+    from vorch.orchestrator import GATE_KEYFRAMES as KF, Orchestrator
     from vorch.state import Decision
 
+    rendered: list[int] = []
+    monkeypatch.setattr(Orchestrator, "_one_video",
+                        lambda self, job, scene, **kw: rendered.append(scene.index))
+    mgr._factory = lambda store, job: Orchestrator.from_job(store, job)
+
     job = _done_video_job(mgr.store)
-    # A second scene whose keyframe was just regenerated: that is what holds the gate open.
     job.scenes.append(Scene(index=1, keyframe_path="/kf2.png", status=SceneStatus.KEYFRAME))
     job.status = JobStatus.NEEDS_APPROVAL
     mgr.store.save_job(job)
     mgr.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="storyboard", attempt=1, action="approved"))
     mgr.store.log_decision(Decision(job_id=job.id, scene_index=None, phase=KF, attempt=1, action="reopened"))
-    from vorch.orchestrator import Orchestrator
-
     assert Orchestrator.pending_gate(mgr.store.load_job(job.id), mgr.store) == KF
 
-    async def go(what):
-        return await mgr.regenerate(job.id, 0, what=what, edits={})
+    async def go():
+        await mgr.regenerate(job.id, 0, what="video", edits={})
+        for _ in range(100):
+            if not mgr.is_active(job.id):
+                return mgr.store.load_job(job.id)
+            await asyncio.sleep(0.02)
+        raise AssertionError("the segment never finished")
 
-    with pytest.raises(RuntimeError, match="approve it to render clips"):
-        asyncio.run(go("video"))
-    assert mgr.store.load_job(job.id).scenes[0].video_path == "/final.mp4"   # nothing was cleared
+    fresh = asyncio.run(go())
+    assert rendered == [0]                                   # that scene, and only that scene
+    assert fresh.status is JobStatus.NEEDS_APPROVAL          # scene 2 still needs the gate
+    assert Orchestrator.pending_gate(fresh, mgr.store) == KF
+    assert orch_mod is not None
+
+
+def test_animating_the_last_missing_clip_finishes_the_job(mgr, monkeypatch):
+    """Otherwise the job would sit at a gate with nothing left for it to render."""
+    from vorch.orchestrator import Orchestrator
+
+    def fake_video(self, job, scene, **kw):
+        scene.video_path = "/clip/new.mp4"
+        scene.status = SceneStatus.COMPLETE
+
+    monkeypatch.setattr(Orchestrator, "_one_video", fake_video)
+    mgr._factory = lambda store, job: Orchestrator.from_job(store, job)
+
+    job = _done_video_job(mgr.store)
+    job.status = JobStatus.NEEDS_APPROVAL
+    mgr.store.save_job(job)
+
+    async def go():
+        await mgr.regenerate(job.id, 0, what="video", edits={})
+        for _ in range(100):
+            if not mgr.is_active(job.id):
+                return mgr.store.load_job(job.id)
+            await asyncio.sleep(0.02)
+        raise AssertionError("the segment never finished")
+
+    fresh = asyncio.run(go())
+    assert fresh.status is JobStatus.DONE and fresh.scenes[0].video_path == "/clip/new.mp4"
+
+
+def test_animate_scene_refuses_what_it_cannot_render(mgr):
+    from vorch.orchestrator import Orchestrator
+
+    job = _done_video_job(mgr.store)
+    job.scenes.append(Scene(index=1))                     # no keyframe yet
+    o = Orchestrator.from_job(mgr.store, job)
+    with pytest.raises(ValueError, match="no keyframe"):
+        o.animate_scene(job, 1)
+    with pytest.raises(KeyError):
+        o.animate_scene(job, 9)
+    job.kind = "stills"
+    with pytest.raises(ValueError, match="no clip"):
+        o.animate_scene(job, 0)

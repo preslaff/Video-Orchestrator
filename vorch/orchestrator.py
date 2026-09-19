@@ -366,6 +366,52 @@ class Orchestrator:
                 return d.reason
         return ""
 
+    def animate_scene(self, job: Job, index: int, *, unfinished: JobStatus | None = None) -> Job:
+        """Render **one** scene's clip now, whatever the keyframes gate is doing.
+
+        Approving that gate is a batch decision — it renders every scene still missing a clip —
+        which is not what "animate this scene" means. Looking at a scene and asking for its clip
+        is the review for that scene, so this renders it and leaves the gate open for the rest.
+        Deliberately not routed through ``run()``: ``_run`` would pause at the gate before the
+        videos phase, and it marks the whole job DONE when it falls through.
+        """
+        scene = next((s for s in job.scenes if s.index == index), None)
+        if scene is None:
+            raise KeyError(f"job {job.id} has no scene {index}")
+        if job.kind != "video":
+            raise ValueError("stills jobs have no clip to render")
+        if not scene.keyframe_path:
+            raise ValueError(f"scene {index + 1} has no keyframe yet: generate one first")
+        token = provenance.set_context(job_id=job.id, profile=self.params.profile_name or None)
+        # Where the job goes back to when other scenes still need clips. The caller knows the
+        # status before the segment (the queue marks a job RUNNING first); otherwise fall back
+        # to "an unapproved gate means paused".
+        was = unfinished or (JobStatus.NEEDS_APPROVAL if self.next_gate(job, self.store)
+                             else (job.status if job.status is not JobStatus.RUNNING else JobStatus.NEEDS_APPROVAL))
+        job.status = JobStatus.RUNNING
+        self.store.save_job(job)
+        self._event(job, "status", status=job.status.value)
+        self._event(job, "phase", phase="videos", total=1,
+                    length=self.params.length, fps=self.params.fps)
+        try:
+            self._one_video(job, scene)
+        finally:
+            provenance.reset_context(token)
+        # The gate keeps its meaning for the other scenes; only a job with nothing left to
+        # render is finished (and exported) instead of waiting for an approval with no work.
+        job.status = JobStatus.DONE if not self._needs_videos(job) else was
+        self.store.save_job(job)
+        self._event(job, "status", status=job.status.value)
+        log.info("job %s: animated scene %d (job now %s)", job.id, index, job.status.value)
+        return job
+
+    def reanimate(self, job: Job, index: int, edits: dict | None = None, *,
+                  unfinished: JobStatus | None = None) -> Job:
+        """Discard a scene's clip (applying any prompt edits) and render it again — that scene only."""
+        self.reopen_scene(job, index, what="video", edits=edits)
+        log.info("job %s: re-animating scene %d", job.id, index)
+        return self.animate_scene(job, index, unfinished=unfinished)
+
     def regenerate(self, job: Job, index: int, *, what: str = "keyframe", edits: dict | None = None) -> Job:
         """``reopen_scene`` + ``run``: rerun only what was cleared (other scenes keep their files)."""
         self.reopen_scene(job, index, what=what, edits=edits)
@@ -728,74 +774,83 @@ class Orchestrator:
                 log.warning("job %s: scene %d has no keyframe; skipping", job.id, scene.index)
                 continue
             cancel.check()
-            provenance.set_context(scene=scene.index)
-            seed = config.derive_seed(self.seed, scene=scene.index, attempt=1 + 10 * scene.regenerations)
-            if not scene.raw_video_path:
-                face = scene.identity if self.face_swap else ""
-                if face and scene.swapped_path:
-                    log.info("job %s: video scene %d (swap already done -> animate)", job.id, scene.index)
-                    frame = scene.swapped_path
-                elif face:
-                    master_name = pipeline.stage_identity(face, self.params, cache=face_cache)
-                    log.info("job %s: video scene %d (swap %s -> animate)", job.id, scene.index, Path(face).name)
-                    self._event(job, "step", step="swap", index=scene.index, identity=Path(face).name)
-                    swapped = pipeline.swap_master_onto(
-                        scene.keyframe_path, master_name, params=self.params,
-                        filename_prefix=output_prefix(job, scene.index, "swapped"),
-                    )
-                    scene.swapped_path = str(swapped)
-                    scene.status = SceneStatus.SWAP
-                    self.store.save_job(job)
-                    frame = swapped
-                    cancel.check()  # the swap is saved
-                else:
-                    log.info("job %s: video scene %d (animate keyframe, no swap)", job.id, scene.index)
-                    frame = scene.keyframe_path
+            self._one_video(job, scene, face_cache=face_cache)
 
-                self._event(job, "step", step="animate", index=scene.index,
-                            length=self.params.length, fps=self.params.fps, seconds=self.params.clip_seconds)
-                video = pipeline.animate_frame(
-                    frame, scene.animation_prompt, seed=seed,
-                    params=self.params, negative=scene.animation_negative or None,
-                    filename_prefix=output_prefix(job, scene.index, "clip"),
+    def _one_video(self, job: Job, scene: Scene, *, face_cache: dict | None = None) -> None:
+        """Swap, animate and post-process **one** scene, persisting at every step.
+
+        The body of the videos phase, extracted so that rendering a single scene on request
+        (``animate_scene``) and the batch phase cannot drift apart. Resumable in the same way:
+        a saved swap is not redone, a saved raw clip runs only the post chain.
+        """
+        provenance.set_context(scene=scene.index)
+        seed = config.derive_seed(self.seed, scene=scene.index, attempt=1 + 10 * scene.regenerations)
+        if not scene.raw_video_path:
+            face = scene.identity if self.face_swap else ""
+            if face and scene.swapped_path:
+                log.info("job %s: video scene %d (swap already done -> animate)", job.id, scene.index)
+                frame = scene.swapped_path
+            elif face:
+                master_name = pipeline.stage_identity(face, self.params, cache=face_cache)
+                log.info("job %s: video scene %d (swap %s -> animate)", job.id, scene.index, Path(face).name)
+                self._event(job, "step", step="swap", index=scene.index, identity=Path(face).name)
+                swapped = pipeline.swap_master_onto(
+                    scene.keyframe_path, master_name, params=self.params,
+                    filename_prefix=output_prefix(job, scene.index, "swapped"),
                 )
-                scene.raw_video_path = str(video)
-                if not self.params.post_steps:
-                    scene.video_path = str(video)
-                    self._record_clip(scene, seed)
-                self.store.log_decision(
-                    Decision(job_id=job.id, scene_index=scene.index, phase="video",
-                             attempt=1, action="generated")
-                )
+                scene.swapped_path = str(swapped)
+                scene.status = SceneStatus.SWAP
                 self.store.save_job(job)
-                self._event(job, "video", index=scene.index, path=scene.raw_video_path)
+                frame = swapped
+                cancel.check()  # the swap is saved
             else:
-                log.info("job %s: video scene %d (clip saved -> post-steps only)", job.id, scene.index)
-            if self.params.post_steps:
-                cancel.check()  # the raw clip is saved
-                self._event(job, "step", step="post", index=scene.index,
-                            chain=[st.workflow for st in self.params.post_steps])
-                outs = run_chain(
-                    Path(scene.raw_video_path), self.params.post_steps, fps=self.params.fps, seed=seed,
-                    filename_prefix=output_prefix(job, scene.index, "post"),
-                    master_face=scene.identity or None,
-                    prompts={"positive": scene.keyframe_prompt, "motion": scene.animation_prompt},
-                )
-                if outs:
-                    scene.post_paths = [str(o) for o in outs]
-                    scene.video_path = str(outs[-1])
-                    self._record_clip(scene, seed)
-                    self.store.log_decision(
-                        Decision(job_id=job.id, scene_index=scene.index, phase="post", attempt=1,
-                                 action="generated", reason=", ".join(s.workflow for s in self.params.post_steps))
-                    )
-                    for i, o in enumerate(outs):
-                        self._event(job, "postprocess", index=scene.index, step=i, path=str(o))
-                else:
-                    scene.video_path = scene.raw_video_path  # every step was skipped
-                    self._record_clip(scene, seed)
-            scene.status = SceneStatus.COMPLETE
+                log.info("job %s: video scene %d (animate keyframe, no swap)", job.id, scene.index)
+                frame = scene.keyframe_path
+
+            self._event(job, "step", step="animate", index=scene.index,
+                        length=self.params.length, fps=self.params.fps, seconds=self.params.clip_seconds)
+            video = pipeline.animate_frame(
+                frame, scene.animation_prompt, seed=seed,
+                params=self.params, negative=scene.animation_negative or None,
+                filename_prefix=output_prefix(job, scene.index, "clip"),
+            )
+            scene.raw_video_path = str(video)
+            if not self.params.post_steps:
+                scene.video_path = str(video)
+                self._record_clip(scene, seed)
+            self.store.log_decision(
+                Decision(job_id=job.id, scene_index=scene.index, phase="video",
+                         attempt=1, action="generated")
+            )
             self.store.save_job(job)
+            self._event(job, "video", index=scene.index, path=scene.raw_video_path)
+        else:
+            log.info("job %s: video scene %d (clip saved -> post-steps only)", job.id, scene.index)
+        if self.params.post_steps:
+            cancel.check()  # the raw clip is saved
+            self._event(job, "step", step="post", index=scene.index,
+                        chain=[st.workflow for st in self.params.post_steps])
+            outs = run_chain(
+                Path(scene.raw_video_path), self.params.post_steps, fps=self.params.fps, seed=seed,
+                filename_prefix=output_prefix(job, scene.index, "post"),
+                master_face=scene.identity or None,
+                prompts={"positive": scene.keyframe_prompt, "motion": scene.animation_prompt},
+            )
+            if outs:
+                scene.post_paths = [str(o) for o in outs]
+                scene.video_path = str(outs[-1])
+                self._record_clip(scene, seed)
+                self.store.log_decision(
+                    Decision(job_id=job.id, scene_index=scene.index, phase="post", attempt=1,
+                             action="generated", reason=", ".join(s.workflow for s in self.params.post_steps))
+                )
+                for i, o in enumerate(outs):
+                    self._event(job, "postprocess", index=scene.index, step=i, path=str(o))
+            else:
+                scene.video_path = scene.raw_video_path  # every step was skipped
+                self._record_clip(scene, seed)
+        scene.status = SceneStatus.COMPLETE
+        self.store.save_job(job)
 
     # -- gates & phase predicates --
 

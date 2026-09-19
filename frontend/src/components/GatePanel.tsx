@@ -8,6 +8,7 @@ import { Zoomable } from '@/components/Lightbox'
 import { MediaThumb } from '@/components/MediaThumb'
 import { VersionStrip } from '@/components/VersionStrip'
 import { profileSizes } from '@/components/SceneGrid'
+import { estimateClip, fmtRange } from '@/lib/render'
 import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneStructure, useUpdateScenes } from '@/hooks/useJobs'
 import { useUploadAsset } from '@/hooks/useSetup'
 import { Button, ErrorBox } from '@/components/ui'
@@ -217,6 +218,12 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dropAt, setDropAt] = useState<number | null>(null)
   const { kf, clip } = profileSizes(job)
+  // What each of the two render buttons will do, so the gate is never a silent blocker.
+  const missingClips = job.scenes.filter((s) => !s.video_path).length
+  const video_ = (job.profile as { video?: { length?: number; workflow?: string } } | null)?.video
+  const clipCost = clip && video_?.length
+    ? estimateClip({ width: clip[0], height: clip[1], length: video_.length, workflow: video_.workflow })
+    : null
   const orphaned = job.status === 'running' && !job.active
   const editable = job.status === 'needs_approval' || job.status === 'done' || job.status === 'failed' || job.status === 'cancelled' || orphaned
   if (!editable) return null
@@ -380,7 +387,14 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
       </div>
       <p className="text-sm text-neutral-700">
         {job.pending_gate === 'storyboard' && 'Review the storyboard and prompts, then approve to generate keyframes.'}
-        {job.pending_gate === 'keyframes' && 'Review the keyframes: regenerate any scene (optionally with an edited prompt), pick a variant, tweak animation prompts, then approve to render the clips (the expensive Wan phase).'}
+        {job.pending_gate === 'keyframes' && (
+          <>
+            Review the keyframes: regenerate any scene (optionally with an edited prompt), pick a variant,
+            tweak animation prompts. <strong>Approve keyframes</strong> renders{' '}
+            {missingClips === 0 ? 'nothing — every scene already has a clip' : `the ${missingClips} scene${missingClips === 1 ? '' : 's'} still missing a clip`}
+            {' '}(the expensive Wan phase); a scene&apos;s own <strong>Animate this scene</strong> renders just that one, without approving.
+          </>
+        )}
         {!job.pending_gate && 'Regenerate a keyframe or re-animate a scene (the export folder is rebuilt when the job completes again), or pick a different variant and re-export.'}
       </p>
       <ErrorBox message={update.error ? errorMessage(update.error) : approve.error ? errorMessage(approve.error) : regen.error ? errorMessage(regen.error) : upload.error ? errorMessage(upload.error) : removeVersion.error ? errorMessage(removeVersion.error) : null} />
@@ -611,8 +625,8 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                       poster={s.swapped_url ?? s.keyframe_url} caption={`Scene ${s.index + 1} · clip`} />
                     {locked && (
                       <Button disabled={busy} onClick={() => regenerate(s.index, s.id, 'video')}
-                        title={s.video_path ? 'keep the keyframe, render the clip again with the current animation prompt' : 'keep the keyframe, render the (missing) clip with the current animation prompt'}>
-                        {s.video_path ? 'Re-animate' : 'Animate'}
+                        title={`renders this scene's clip only${clipCost ? ` (${fmtRange(clipCost)} on ${clipCost.where})` : ''}, whatever the gate is waiting for`}>
+                        {s.video_path ? 'Re-animate this scene' : 'Animate this scene'}
                       </Button>
                     )}
                     <VersionStrip scene={s} kind="clip" disabled={busy}

@@ -398,10 +398,13 @@ sidecar manifest).
   separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
   the storyboard's own token budget now scales with the scene count (~160 per scene).
 
-- **A re-animate blocked by a gate is refused, not silently swallowed**: the videos phase runs
-  after the keyframes gate, so `regenerate(what="video")` while that gate waits used to clear the
-  clip, hit the gate and pause — the log said "regenerating video" and nothing rendered. It now
-  raises (409) telling the user to approve the gate or regenerate the keyframe instead.
+- **Per-scene animate** (`orchestrator.animate_scene` / `reanimate`): the videos phase body lives in
+  `_one_video`, which both the batch phase and a single-scene request call, so they cannot drift.
+  `animate_scene` deliberately bypasses `run()` — `_run` pauses at the keyframes gate before the
+  videos phase and marks the whole job DONE when it falls through — renders one scene, and then
+  sets DONE only when `_needs_videos` is False, otherwise restoring the status the job had before
+  the segment (the queue passes it as `unfinished`). `regenerate(what="video")` always routes here,
+  so "Re-animate" means this scene, never "every scene missing a clip".
 
 - **An unreachable evaluator never costs a render** (`evaluator.Verdict.not_evaluated`): a
   transport failure from llama-server is retried (5s, 15s, 30s — llama-server answers 503
