@@ -688,7 +688,16 @@ class Orchestrator:
                     reason=f"gemma said {verdict.verdict!r}; objective gate -> {verdict.decision!r}",
                 )
             )
-        if verdict.needs_review:
+        if getattr(verdict, "unevaluated", ""):
+            # Nothing judged this frame; it was kept so the run could go on. Say so plainly,
+            # instead of leaving a score=5 "accept" that looks like a judgement.
+            self.store.log_decision(
+                Decision(
+                    job_id=job.id, scene_index=scene_index, phase="keyframe", attempt=attempt,
+                    action="review", reason=f"kept without evaluation: {verdict.unevaluated}",
+                )
+            )
+        elif verdict.needs_review:
             self.store.log_decision(
                 Decision(
                     job_id=job.id, scene_index=scene_index, phase="keyframe", attempt=attempt,

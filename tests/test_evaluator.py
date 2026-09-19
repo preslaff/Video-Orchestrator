@@ -238,3 +238,30 @@ def test_evaluate_image_attaches_the_identity_face(monkeypatch, tmp_path):
     assert seen["images"] == [tmp_path / "k.png", tmp_path / "face.png"] and "SECOND image is the reference identity" in seen["prompt"]
     evaluator.evaluate_image(tmp_path / "k.png", "a woman")
     assert seen["images"] == [tmp_path / "k.png"] and "SECOND image" not in seen["prompt"]
+
+
+def test_an_unreachable_evaluator_keeps_the_result_and_flags_it(monkeypatch):
+    """llama-server going away must not throw away a frame the GPU just rendered.
+
+    A 40-scene job died at scene 1 of a regenerate because the *judge* was offline; the
+    generated keyframe went with it. The objective checks pass by default and the result is
+    flagged for review instead.
+    """
+    import requests
+
+    from vorch import evaluator
+
+    def refused(*a, **kw):
+        raise requests.ConnectionError("Connection refused")
+
+    monkeypatch.setattr(evaluator.gemma, "complete_vision", refused)
+    v = evaluator.evaluate_image("/tmp/kf.png", "a lighthouse")
+    assert v.decision == "accept" and v.needs_review is True
+    assert "ConnectionError" in v.unevaluated and v.fix_suggestion == ""   # nothing to apply to a prompt
+
+
+def test_a_judged_verdict_is_not_marked_unevaluated(monkeypatch):
+    from vorch import evaluator
+
+    monkeypatch.setattr(evaluator.gemma, "complete_vision", lambda *a, **k: ACCEPT_JSON)
+    assert evaluator.evaluate_image("/tmp/kf.png", "x").unevaluated == ""

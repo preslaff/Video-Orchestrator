@@ -398,6 +398,13 @@ sidecar manifest).
   separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
   the storyboard's own token budget now scales with the scene count (~160 per scene).
 
+- **An unreachable evaluator never costs a render** (`evaluator.Verdict.not_evaluated`): a
+  connection error from llama-server returns a verdict that passes the objective gate and sets
+  `needs_review`, with `unevaluated` carrying why, and the orchestrator logs a `review` decision
+  saying "kept without evaluation". Before this, llama-server stopping mid-run threw away the
+  keyframe just rendered and failed the whole job. A malformed *answer* still raises
+  `EvaluationError` — that is Gemma disagreeing with the schema, not Gemma being absent.
+
 - **Structural storyboard edits** (`vorch/scenes.py`, `queue.add_scene/delete_scene/reorder_scenes`):
   a scene carries **two identities**. `Scene.index` is its *position* — renumbered after every
   insert, delete and reorder, because export file names, assembly order and every "Scene 12" in the

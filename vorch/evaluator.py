@@ -20,6 +20,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 
+import requests
+
 from .clients import gemma
 
 log = logging.getLogger("vorch.evaluator")
@@ -54,6 +56,21 @@ class Verdict(BaseModel):
 
     # Per-profile review threshold (set by evaluate_image; not part of the schema).
     _review_threshold: int = PrivateAttr(default=REVIEW_SCORE_THRESHOLD)
+    # Nobody looked at this one: the evaluator was unreachable and the result was kept anyway.
+    _unevaluated: str = PrivateAttr(default="")
+
+    @classmethod
+    def not_evaluated(cls, why: str) -> "Verdict":
+        """A stand-in verdict for "the evaluator was down".
+
+        Losing a rendered frame — ten minutes of GPU for a clip — because the *judge* is
+        offline is the wrong trade: the objective checks pass by default, the result is kept,
+        and ``needs_review`` flags it so a person looks at what nothing judged.
+        """
+        v = cls(action_correct=True, identity_match=True, style_match=True, artifacts=False,
+                composition_ok=True, score=5, verdict="accept", fix_suggestion="")
+        v._unevaluated = why[:200]
+        return v
 
     @property
     def review_threshold(self) -> int:
@@ -79,8 +96,15 @@ class Verdict(BaseModel):
         return "accept" if self.objective_accept else "retry"
 
     @property
+    def unevaluated(self) -> str:
+        """Why nothing judged this result, when nothing did ("" = it was evaluated)."""
+        return self._unevaluated
+
+    @property
     def needs_review(self) -> bool:
-        """Accepted on objective grounds but the advisory score is low — flag it."""
+        """Accepted on objective grounds but the advisory score is low — or never judged."""
+        if self._unevaluated:
+            return True
         return self.objective_accept and self.score < self._review_threshold
 
     @property
@@ -223,7 +247,14 @@ def _evaluate(
     last_err: Exception | None = None
     rf = _response_format(require_framing=require_framing)
     for attempt in range(1, attempts + 1):
-        raw = gemma.complete_vision(SYSTEM, prompt, images, response_format=rf)
+        try:
+            raw = gemma.complete_vision(SYSTEM, prompt, images, response_format=rf)
+        except (requests.RequestException, gemma.GemmaError) as e:
+            # The judge is down (llama-server stopped, or restarting). Keep the generated
+            # result, flag it for review, and let the run continue: a 40-scene job must not
+            # fail — and lose the frame it just rendered — because the evaluator went away.
+            log.warning("eval %s: evaluator unavailable (%s); keeping the result for review", label, e)
+            return Verdict.not_evaluated(f"{type(e).__name__}: {e}")
         try:
             verdict = _parse_verdict(raw)
             verdict._review_threshold = review_threshold
