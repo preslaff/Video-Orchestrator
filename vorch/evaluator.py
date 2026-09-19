@@ -20,6 +20,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, PrivateAttr, ValidationError
 
+import time
+
 import requests
 
 from .clients import gemma
@@ -111,6 +113,12 @@ class Verdict(BaseModel):
     def disagreement(self) -> bool:
         """Gemma's own verdict contradicts the objective gate."""
         return self.verdict != self.decision
+
+
+# llama-server answers 503 "Loading model" for the first half-minute after a restart, and a
+# connection is simply refused while it is down. Waiting is almost always right: the frame is
+# already rendered, and a judged verdict is worth a minute.
+WAIT_SECONDS = (5, 15, 30)
 
 
 class EvaluationError(RuntimeError):
@@ -240,6 +248,26 @@ def evaluate_media(path: str | Path, task_description: str, **kw) -> Verdict:
     return evaluate_image(path, task_description, **kw)
 
 
+class _Unavailable(RuntimeError):
+    """The evaluator could not be reached at all (as opposed to answering badly)."""
+
+
+def _vision_with_retries(prompt: str, images: list, rf: dict | None, *, label: str) -> str:
+    """One vision call, waiting out a server that is down or still loading its model."""
+    for i, wait in enumerate((*WAIT_SECONDS, None)):
+        try:
+            return gemma.complete_vision(SYSTEM, prompt, images, response_format=rf)
+        except (requests.RequestException, gemma.GemmaError) as e:
+            fatal = isinstance(e, gemma.GemmaError) and not e.transient
+            if fatal or wait is None:
+                log.warning("eval %s: evaluator unavailable (%s); keeping the result for review", label, e)
+                raise _Unavailable(f"{type(e).__name__}: {e}") from e
+            log.warning("eval %s: evaluator not ready (%s); retrying in %ds (%d/%d)",
+                        label, e, wait, i + 1, len(WAIT_SECONDS))
+            time.sleep(wait)
+    raise AssertionError("unreachable")
+
+
 def _evaluate(
     images: list, prompt: str, *, attempts: int, review_threshold: int, label: str,
     require_framing: bool = False,
@@ -248,13 +276,12 @@ def _evaluate(
     rf = _response_format(require_framing=require_framing)
     for attempt in range(1, attempts + 1):
         try:
-            raw = gemma.complete_vision(SYSTEM, prompt, images, response_format=rf)
-        except (requests.RequestException, gemma.GemmaError) as e:
-            # The judge is down (llama-server stopped, or restarting). Keep the generated
-            # result, flag it for review, and let the run continue: a 40-scene job must not
-            # fail — and lose the frame it just rendered — because the evaluator went away.
-            log.warning("eval %s: evaluator unavailable (%s); keeping the result for review", label, e)
-            return Verdict.not_evaluated(f"{type(e).__name__}: {e}")
+            raw = _vision_with_retries(prompt, images, rf, label=label)
+        except _Unavailable as e:
+            # The judge stayed away. Keep the generated result, flag it for review, and let the
+            # run continue: a 40-scene job must not fail — and lose the frame it just rendered —
+            # because the evaluator went out.
+            return Verdict.not_evaluated(str(e))
         try:
             verdict = _parse_verdict(raw)
             verdict._review_threshold = review_threshold

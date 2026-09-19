@@ -283,6 +283,13 @@ class JobManager:
         scene = next((s for s in job.scenes if s.index == index), None)
         if scene is None:
             raise KeyError(f"scene {index}")
+        if what == "video" and Orchestrator.pending_gate(job, self.store) == GATE_KEYFRAMES:
+            # The videos phase runs *after* the keyframes gate, so a re-animate would clear the
+            # clip, walk into the gate and pause — looking like nothing happened at all.
+            raise RuntimeError(
+                "the keyframes gate is waiting for approval: approve it to render clips, "
+                "or use Regenerate keyframe for this scene"
+            )
         self._rehearse_regenerate(job, scene, what, edits or {})  # ValueError -> 400, nothing started
         prev = self._start(job)
         self._spawn(self._execute(job, lambda o, j: o.regenerate(j, index, what=what, edits=edits), prev))

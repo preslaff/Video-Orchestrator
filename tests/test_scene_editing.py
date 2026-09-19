@@ -317,3 +317,28 @@ def test_write_prompts_needs_a_description(mgr):
     mgr.store.save_job(job)
     with pytest.raises(ValueError, match="no description"):
         mgr.write_prompts(job.id, 0)
+
+
+def test_reanimate_is_refused_while_the_keyframes_gate_waits(mgr):
+    """Re-animating before the gate is approved used to clear the clip and pause at the gate:
+    the UI said "regenerating video" and nothing was ever rendered."""
+    from vorch.orchestrator import GATE_KEYFRAMES as KF
+    from vorch.state import Decision
+
+    job = _done_video_job(mgr.store)
+    # A second scene whose keyframe was just regenerated: that is what holds the gate open.
+    job.scenes.append(Scene(index=1, keyframe_path="/kf2.png", status=SceneStatus.KEYFRAME))
+    job.status = JobStatus.NEEDS_APPROVAL
+    mgr.store.save_job(job)
+    mgr.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="storyboard", attempt=1, action="approved"))
+    mgr.store.log_decision(Decision(job_id=job.id, scene_index=None, phase=KF, attempt=1, action="reopened"))
+    from vorch.orchestrator import Orchestrator
+
+    assert Orchestrator.pending_gate(mgr.store.load_job(job.id), mgr.store) == KF
+
+    async def go(what):
+        return await mgr.regenerate(job.id, 0, what=what, edits={})
+
+    with pytest.raises(RuntimeError, match="approve it to render clips"):
+        asyncio.run(go("video"))
+    assert mgr.store.load_job(job.id).scenes[0].video_path == "/final.mp4"   # nothing was cleared

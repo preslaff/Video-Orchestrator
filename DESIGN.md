@@ -398,8 +398,15 @@ sidecar manifest).
   separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
   the storyboard's own token budget now scales with the scene count (~160 per scene).
 
+- **A re-animate blocked by a gate is refused, not silently swallowed**: the videos phase runs
+  after the keyframes gate, so `regenerate(what="video")` while that gate waits used to clear the
+  clip, hit the gate and pause — the log said "regenerating video" and nothing rendered. It now
+  raises (409) telling the user to approve the gate or regenerate the keyframe instead.
+
 - **An unreachable evaluator never costs a render** (`evaluator.Verdict.not_evaluated`): a
-  connection error from llama-server returns a verdict that passes the objective gate and sets
+  transport failure from llama-server is retried (5s, 15s, 30s — llama-server answers 503
+  "Loading model" for the first half-minute after a restart, and `GemmaError.transient` says which
+  statuses are worth waiting for), and only then returns a verdict that passes the objective gate and sets
   `needs_review`, with `unevaluated` carrying why, and the orchestrator logs a `review` decision
   saying "kept without evaluation". Before this, llama-server stopping mid-run threw away the
   keyframe just rendered and failed the whole job. A malformed *answer* still raises

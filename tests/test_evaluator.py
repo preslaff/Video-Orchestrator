@@ -240,7 +240,17 @@ def test_evaluate_image_attaches_the_identity_face(monkeypatch, tmp_path):
     assert seen["images"] == [tmp_path / "k.png"] and "SECOND image" not in seen["prompt"]
 
 
-def test_an_unreachable_evaluator_keeps_the_result_and_flags_it(monkeypatch):
+@pytest.fixture
+def no_waiting(monkeypatch):
+    """Skip the evaluator's retry backoff (its real waits are 5s/15s/30s)."""
+    from vorch import evaluator
+
+    slept: list[int] = []
+    monkeypatch.setattr(evaluator.time, "sleep", lambda s: slept.append(s))
+    return slept
+
+
+def test_an_unreachable_evaluator_keeps_the_result_and_flags_it(monkeypatch, no_waiting):
     """llama-server going away must not throw away a frame the GPU just rendered.
 
     A 40-scene job died at scene 1 of a regenerate because the *judge* was offline; the
@@ -258,6 +268,40 @@ def test_an_unreachable_evaluator_keeps_the_result_and_flags_it(monkeypatch):
     v = evaluator.evaluate_image("/tmp/kf.png", "a lighthouse")
     assert v.decision == "accept" and v.needs_review is True
     assert "ConnectionError" in v.unevaluated and v.fix_suggestion == ""   # nothing to apply to a prompt
+
+
+def test_a_model_still_loading_is_waited_out(monkeypatch, no_waiting):
+    """llama-server answers 503 "Loading model" for the first half-minute after a restart.
+
+    That is not a reason to skip the judgement of a frame that is already rendered.
+    """
+    from vorch import evaluator
+    from vorch.clients.gemma import GemmaError
+
+    calls = {"n": 0}
+
+    def flaky(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise GemmaError('Gemma vision error (503): {"error":{"message":"Loading model"}}', status=503)
+        return ACCEPT_JSON
+
+    monkeypatch.setattr(evaluator.gemma, "complete_vision", flaky)
+    v = evaluator.evaluate_image("/tmp/kf.png", "x")
+    assert v.decision == "accept" and v.unevaluated == ""     # judged, not skipped
+    assert no_waiting == [5, 15]                              # waited twice, then it answered
+
+
+def test_a_permanent_server_error_is_not_retried(monkeypatch, no_waiting):
+    from vorch import evaluator
+    from vorch.clients.gemma import GemmaError
+
+    def bad_request(*a, **kw):
+        raise GemmaError("Gemma vision error (400): bad payload", status=400)
+
+    monkeypatch.setattr(evaluator.gemma, "complete_vision", bad_request)
+    v = evaluator.evaluate_image("/tmp/kf.png", "x")
+    assert v.needs_review is True and "400" in v.unevaluated and no_waiting == []
 
 
 def test_a_judged_verdict_is_not_marked_unevaluated(monkeypatch):

@@ -21,7 +21,21 @@ log = logging.getLogger("vorch.gemma")
 
 
 class GemmaError(RuntimeError):
-    """Raised when llama-server returns an error or unparseable content."""
+    """Raised when llama-server returns an error or unparseable content.
+
+    ``status`` is the HTTP status when the server answered (503 while it loads the model,
+    for instance), and None when the failure was not an HTTP response — enough for callers
+    to tell "wait and try again" from "this will not get better".
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def transient(self) -> bool:
+        """The server is there but not ready (loading a model, overloaded, restarting)."""
+        return self.status in (429, 502, 503, 504)
 
 
 def complete_text(
@@ -56,7 +70,7 @@ def complete_text(
         f"{config.GEMMA_URL}/v1/chat/completions", json=payload, timeout=timeout
     )
     if resp.status_code != 200:
-        raise GemmaError(f"Gemma error ({resp.status_code}): {resp.text}")
+        raise GemmaError(f"Gemma error ({resp.status_code}): {resp.text}", status=resp.status_code)
     return resp.json()["choices"][0]["message"]["content"]
 
 
@@ -127,7 +141,7 @@ def complete_vision(
         f"{config.GEMMA_URL}/v1/chat/completions", json=payload, timeout=timeout
     )
     if resp.status_code != 200:
-        raise GemmaError(f"Gemma vision error ({resp.status_code}): {resp.text}")
+        raise GemmaError(f"Gemma vision error ({resp.status_code}): {resp.text}", status=resp.status_code)
     return resp.json()["choices"][0]["message"]["content"]
 
 
