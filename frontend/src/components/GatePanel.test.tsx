@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -364,5 +364,47 @@ describe('GatePanel render buttons', () => {
     expect(reanimate.getAttribute('title')).toMatch(/clip only \(~.*\bmin\b.*\), whatever the gate/)
     // Two scenes without a clip get the button; the third mention is the header's explanation.
     expect(screen.getAllByRole('button', { name: 'Animate this scene' })).toHaveLength(2)
+  })
+})
+
+describe('GatePanel version prompts', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const twoTakes = {
+    ...job, face_swap: false,
+    scenes: [scene(0, {
+      keyframe_path: '/k2.png', keyframe_prompt: 'the current prompt',
+      variants: [
+        { id: 'v1', path: '/k1.png', url: '/k1.png', active: false, batch: 0, seed: 42, post_paths: [], source: 'generated', created_at: '' },
+        { id: 'v2', path: '/k2.png', url: '/k2.png', active: true, batch: 1, seed: 53, post_paths: [], source: 'generated', created_at: '' },
+      ],
+    })],
+  } as unknown as JobPublic
+
+  it('shows what made an earlier take and puts its prompt back', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const path = new URL(raw, 'http://localhost').pathname
+      const body = path.endsWith('/versions/v1')
+        ? { version_id: 'v1', kind: 'keyframe', path: '/k1.png', seed: 42, prompt: 'the prompt that made it',
+            negative: 'waxy', prompt_from: 'record', source: 'generated', params: { steps: 24, cfg: 6 },
+            backend: 'local', has_manifest: true, matches_scene_prompt: false, created_at: '', batch: 0 }
+        : { error: { code: 'not_found', message: path } }
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <GatePanel job={twoTakes} assets={assets} /></QueryClientProvider>)
+
+    await user.click(screen.getByTestId('version-info-keyframe-0-v1'))
+    expect(await screen.findByText('the prompt that made it')).toBeInTheDocument()
+    const panel = within(screen.getByTestId('version-detail-keyframe-0'))   // the tile label also says "seed 42"
+    expect(panel.getByText(/seed 42/)).toBeInTheDocument()
+    expect(panel.getByText(/24 steps/)).toBeInTheDocument()
+    expect(panel.getByText(/Differs from the scene/)).toBeInTheDocument()
+
+    await user.click(screen.getByTestId('version-restore-keyframe-0'))
+    expect(screen.getByDisplayValue('the prompt that made it')).toBeInTheDocument()  // in the scene editor
+    expect(screen.getByTestId('scene-dirty-0')).toBeInTheDocument()                  // unsaved, as any edit
   })
 })

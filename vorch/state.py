@@ -80,6 +80,11 @@ class Variant:
     verdict: Verdict | None = None
     swapped_path: str | None = None
     post_paths: list[str] = field(default_factory=list)
+    # What made this take. A sidecar manifest holds the same (plus steps/cfg/model/backend) next
+    # to the file, but a prompt is history: it must survive cleaning the ComfyUI output folder,
+    # and the scene's own prompt has usually moved on by the time anyone looks.
+    prompt: str = ""
+    negative: str = ""
     source: str = "generated"      # "generated" | "user" (an image the user chose as the keyframe)
     asset_id: str | None = None    # the project asset behind a user keyframe
     id: str = field(default_factory=new_version_id)
@@ -116,6 +121,8 @@ class Clip:
     seed: int | None = None
     verdict: Verdict | None = None
     keyframe_path: str | None = None     # the frame it was animated from (a Variant's path)
+    prompt: str = ""                     # the animation prompt this clip was rendered with
+    negative: str = ""
     id: str = field(default_factory=new_version_id)
     created_at: str = ""
     batch: int = 0
@@ -269,6 +276,8 @@ def _variant_to_dict(v: Variant) -> dict:
         "verdict": _verdict_to_dict(v.verdict),
         "swapped_path": v.swapped_path,
         "post_paths": list(v.post_paths),
+        "prompt": v.prompt,
+        "negative": v.negative,
         "source": v.source,
         "asset_id": v.asset_id,
         "id": v.id,
@@ -285,6 +294,8 @@ def _clip_to_dict(c: Clip) -> dict:
         "seed": c.seed,
         "verdict": _verdict_to_dict(c.verdict),
         "keyframe_path": c.keyframe_path,
+        "prompt": c.prompt,
+        "negative": c.negative,
         "id": c.id,
         "created_at": c.created_at,
         "batch": c.batch,
@@ -299,6 +310,8 @@ def _clip_from_dict(d: dict) -> Clip:
         seed=d.get("seed"),
         verdict=_verdict_from_dict(d.get("verdict")),
         keyframe_path=d.get("keyframe_path"),
+        prompt=d.get("prompt", "") or "",
+        negative=d.get("negative", "") or "",
         id=d.get("id") or new_version_id(),
         created_at=d.get("created_at", "") or "",
         batch=int(d.get("batch", 0) or 0),
@@ -312,6 +325,8 @@ def _variant_from_dict(d: dict) -> Variant:
         verdict=_verdict_from_dict(d.get("verdict")),
         swapped_path=d.get("swapped_path"),
         post_paths=list(d.get("post_paths", []) or []),
+        prompt=d.get("prompt", "") or "",
+        negative=d.get("negative", "") or "",
         source=d.get("source", "generated") or "generated",
         asset_id=d.get("asset_id"),
         id=d.get("id") or new_version_id(),   # jobs saved before versions had ids

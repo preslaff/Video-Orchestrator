@@ -160,6 +160,35 @@ class ReferenceSuggestionOut(BaseModel):
     fit: str = "motif_only"     # same_shot (edit mode keeps the scene) | motif_only (t2i stays better)
 
 
+class VersionDetail(BaseModel):
+    """What made one keyframe or clip: the prompts recorded with it, plus the sidecar manifest.
+
+    The prompts come from the version record (history that outlives the output folder); the
+    manifest beside the file adds the rest — steps, cfg, model, backend — when it is still there.
+    """
+
+    version_id: str
+    kind: Literal["keyframe", "clip"]
+    path: str
+    url: str | None = None
+    created_at: str = ""
+    batch: int = 0
+    seed: int | None = None
+    prompt: str = ""
+    negative: str = ""
+    source: str = "generated"          # "user" = an image the person chose, never generated
+    # Where the prompt was found: "record" (saved with the version) or "manifest" (the sidecar,
+    # for versions made before prompts were recorded) or "" when neither had one.
+    prompt_from: str = ""
+    params: dict[str, Any] = {}        # the manifest's params (steps, cfg, model, size, …)
+    workflow: str = ""
+    template: str = ""
+    backend: str = ""
+    has_manifest: bool = False
+    # How it compares with what the scene would generate now.
+    matches_scene_prompt: bool = True
+
+
 class ScenePublic(BaseModel):
     index: int                  # position in the job; renumbered when scenes are added/moved
     id: str = ""                # stable identity, survives a renumber (edits, reorder payloads)

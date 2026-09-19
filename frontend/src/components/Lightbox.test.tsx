@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
 import { LightboxProvider, ZoomButton } from './Lightbox'
 import { MediaThumb } from './MediaThumb'
@@ -7,7 +8,12 @@ import { VersionStrip } from './VersionStrip'
 import { AssetPicker } from './AssetPicker'
 import type { AssetOut, ScenePublic } from '@/api/types'
 
-const withBox = (ui: React.ReactNode) => render(<LightboxProvider>{ui}</LightboxProvider>)
+// VersionStrip fetches what made a version, so everything here gets a query client too.
+const withBox = (ui: React.ReactNode) => render(
+  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+    <LightboxProvider>{ui}</LightboxProvider>
+  </QueryClientProvider>,
+)
 
 describe('Lightbox', () => {
   it('opens an image preview as its original, with caption, and closes on Esc and ✕', async () => {

@@ -398,6 +398,13 @@ sidecar manifest).
   separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
   the storyboard's own token budget now scales with the scene count (~160 per scene).
 
+- **A version remembers its prompt**: `Variant`/`Clip` carry `prompt`/`negative`, written when the
+  take is recorded. The same text is already in the sidecar manifest beside the file (with steps,
+  cfg, model, backend), but a prompt is history — it must survive cleaning `COMFY_OUTPUT`, and the
+  scene's own prompt has usually moved on. `GET /jobs/{id}/scenes/{i}/versions/{version_id}` merges
+  the two (record first, manifest as the fallback for older takes, `prompt_from` saying which) and
+  is fetched only while a version's ⓘ is open — a 40-scene job has hundreds of versions.
+
 - **Per-scene animate** (`orchestrator.animate_scene` / `reanimate`): the videos phase body lives in
   `_one_video`, which both the batch phase and a single-scene request call, so they cannot drift.
   `animate_scene` deliberately bypasses `run()` — `_run` pauses at the keyframes gate before the

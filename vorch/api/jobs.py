@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query, Response
 
 from .. import projects as projects_mod
+from .. import provenance
 from .. import versions as versions_mod
 from ..describer import AssetDescriber
 from ..envcheck import EnvironmentNotReady
@@ -14,11 +15,11 @@ from ..queue import JobManager
 from ..state import JobStatus, Store
 from .deps import get_describer, get_manager, get_store
 from .errors import ApiError
-from .public import job_to_public, provenance_rows
+from .public import job_to_public, media_url, provenance_rows
 from .projects import AssetOut, asset_out
 from .schemas import (
     DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SaveSceneAsset, SceneEdits,
-    SceneInsert, SceneOrder, SceneRegenerate,
+    SceneInsert, SceneOrder, SceneRegenerate, VersionDetail,
 )
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -138,6 +139,48 @@ async def update_scenes(
     except ValueError as e:
         raise ApiError(400, "bad_request", str(e))
     return job_to_public(job, store, manager)
+
+
+@router.get("/{job_id}/scenes/{index}/versions/{version_id}", response_model=VersionDetail)
+async def version_detail(
+    job_id: str, index: int, version_id: str, store: Store = Depends(get_store),
+) -> VersionDetail:
+    """What made this take: the prompts saved with it, plus whatever the sidecar manifest adds.
+
+    Read on demand rather than on every job fetch — a 40-scene job has hundreds of versions, and
+    this opens one file.
+    """
+    job = _load(store, job_id)
+    scene = next((s for s in job.scenes if s.index == index), None)
+    if scene is None:
+        raise ApiError(404, "not_found", f"no scene {index}")
+    versions_mod.adopt_legacy(scene)      # a pre-versions job still has its current media
+    version = next((v for v in scene.variants if v.id == version_id), None)
+    clip = None if version else next((c for c in scene.clips if c.id == version_id), None)
+    if version is None and clip is None:
+        raise ApiError(404, "not_found", f"no version {version_id!r} in scene {index + 1}")
+    kind = "keyframe" if version is not None else "clip"
+    path = version.path if version is not None else clip.video_path
+    record = version if version is not None else clip
+    manifest = provenance.read_manifest(path) or {}
+    params = manifest.get("params", {}) if isinstance(manifest.get("params"), dict) else {}
+    prompt, negative = record.prompt, record.negative
+    source = "record" if prompt else ""
+    if not prompt:                        # versions made before prompts were recorded
+        prompt = str(params.get("positive", "") or "")
+        negative = str(params.get("negative", "") or "")
+        source = "manifest" if prompt else ""
+    current = scene.keyframe_prompt if kind == "keyframe" else scene.animation_prompt
+    return VersionDetail(
+        version_id=version_id, kind=kind, path=path, url=media_url(path),
+        created_at=record.created_at, batch=record.batch, seed=record.seed,
+        prompt=prompt, negative=negative, prompt_from=source,
+        source=getattr(record, "source", "generated"),
+        params={k: v for k, v in params.items() if k not in ("positive", "negative")},
+        workflow=str(manifest.get("workflow", "") or ""), template=str(manifest.get("template", "") or ""),
+        backend=str(manifest.get("backend", "") or ""), has_manifest=bool(manifest),
+        matches_scene_prompt=(prompt.strip() == (current or "").strip()),
+    )
 
 
 @router.post("/{job_id}/scenes", response_model=JobPublic, status_code=201)

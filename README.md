@@ -328,6 +328,11 @@ running* and resumes the same way.
 
 Scenes are editable whenever the job isn't running: at either gate, and after it is done, failed or
 stopped.
+- **What made a version**: the ⓘ on a keyframe or clip tile shows the prompt it was generated
+  with, its negative, seed, steps/cfg/size, model and backend — and whether that prompt still
+  matches the scene's. **Restore this prompt** puts it back into the scene so you can regenerate
+  from an earlier take. Prompts are saved on the version itself (so they outlive the ComfyUI output
+  folder) and read from the file's manifest for takes made before that.
 - **Animate this scene** renders one clip immediately, whatever a gate is waiting for — reviewing a
   scene and asking for its clip is the review for that scene. The keyframes gate keeps its batch
   meaning (**Approve keyframes** renders every scene still missing a clip, and the panel says how

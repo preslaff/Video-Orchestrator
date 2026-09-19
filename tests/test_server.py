@@ -1066,3 +1066,47 @@ def test_write_prompts_route_flags_the_scene_and_needs_a_description(client, mon
     bad = client.post(f"/api/jobs/{blank.id}/scenes/0/write-prompts")
     assert bad.status_code == 400 and "no description" in bad.json()["error"]["message"]
     assert client.post(f"/api/jobs/{job.id}/scenes/9/write-prompts").status_code == 404
+
+
+def test_version_detail_reads_the_record_then_the_sidecar(client, tmp_path, monkeypatch):
+    """A version's prompt is history: saved with it, and read from the sidecar for old takes."""
+    import json as _json
+
+    from vorch import provenance
+    from vorch.state import Clip, Scene, Variant, new_job
+
+    kf, old, clip = client.media / "k2.png", client.media / "k1.png", client.media / "c1.mp4"
+    for f in (kf, old, clip):
+        f.write_bytes(b"x")
+    provenance.manifest_path(old).write_text(_json.dumps({
+        "workflow": "keyframe", "template": "image_flux2_klein_text_to_image.json", "backend": "local",
+        "params": {"positive": "the old prompt", "negative": "smooth", "steps": 24, "cfg": 6.0, "seed": 42},
+    }))
+    job = new_job(idea="towers", kind="video")
+    job.scenes = [Scene(
+        index=0, keyframe_prompt="the current prompt", animation_prompt="slow pan",
+        keyframe_path=str(kf), video_path=str(clip),
+        variants=[Variant(path=str(old), id="v1", seed=42),                       # before prompts were saved
+                  Variant(path=str(kf), id="v2", seed=53, prompt="the prompt that made it",
+                          negative="waxy", created_at="2026-09-19T08:46:57+00:00", batch=1)],
+        clips=[Clip(video_path=str(clip), id="c1", seed=7, prompt="slow pan")],
+    )]
+    client.store.save_job(job)
+
+    saved = client.get(f"/api/jobs/{job.id}/scenes/0/versions/v2").json()
+    assert saved["kind"] == "keyframe" and saved["prompt"] == "the prompt that made it"
+    assert saved["negative"] == "waxy" and saved["prompt_from"] == "record" and saved["seed"] == 53
+    assert saved["matches_scene_prompt"] is False          # the scene's prompt has moved on
+    assert saved["has_manifest"] is False and saved["url"] == "/media/k2.png"
+
+    legacy = client.get(f"/api/jobs/{job.id}/scenes/0/versions/v1").json()
+    assert legacy["prompt"] == "the old prompt" and legacy["prompt_from"] == "manifest"
+    assert legacy["params"]["steps"] == 24 and legacy["params"]["cfg"] == 6.0
+    assert "positive" not in legacy["params"]              # the prompt is its own field
+    assert legacy["workflow"] == "keyframe" and legacy["backend"] == "local" and legacy["has_manifest"] is True
+
+    c = client.get(f"/api/jobs/{job.id}/scenes/0/versions/c1").json()
+    assert c["kind"] == "clip" and c["prompt"] == "slow pan" and c["matches_scene_prompt"] is True
+
+    assert client.get(f"/api/jobs/{job.id}/scenes/0/versions/nope").status_code == 404
+    assert client.get(f"/api/jobs/{job.id}/scenes/9/versions/v1").status_code == 404

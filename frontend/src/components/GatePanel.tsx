@@ -615,9 +615,10 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                         : 'Saved to the project — pick it under any scene’s references.'}
                     </p>
                   )}
-                  <VersionStrip scene={s} kind="keyframe" disabled={busy}
+                  <VersionStrip scene={s} kind="keyframe" jobId={job.id} disabled={busy}
                     onSelect={(id) => selectVersion(s.index, 'keyframe', id)}
-                    onDelete={(id, label) => deleteVersion(s.index, 'keyframe', id, label)} />
+                    onDelete={(id, label) => deleteVersion(s.index, 'keyframe', id, label)}
+                    onRestorePrompt={(prompt, negative) => set(s.id, { keyframe_prompt: prompt, keyframe_negative: negative })} />
                 </div>
                 {video && (
                   <div className="space-y-2" data-testid={`clip-cell-${s.index}`}>
@@ -629,9 +630,10 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                         {s.video_path ? 'Re-animate this scene' : 'Animate this scene'}
                       </Button>
                     )}
-                    <VersionStrip scene={s} kind="clip" disabled={busy}
+                    <VersionStrip scene={s} kind="clip" jobId={job.id} disabled={busy}
                       onSelect={(id) => selectVersion(s.index, 'clip', id)}
-                      onDelete={(id, label) => deleteVersion(s.index, 'clip', id, label)} />
+                      onDelete={(id, label) => deleteVersion(s.index, 'clip', id, label)}
+                      onRestorePrompt={(prompt, negative) => set(s.id, { animation_prompt: prompt, animation_negative: negative })} />
                   </div>
                 )}
               </div>

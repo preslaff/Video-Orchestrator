@@ -581,6 +581,7 @@ class Orchestrator:
                                           attempt=1 + 10 * scene.regenerations)
                 path, verdict = self._one_keyframe(job, scene, seed=seed, refs=refs, variant=v)
                 scene.variants.append(Variant(path=str(path), seed=_seed_used(path, seed), verdict=verdict,
+                                              prompt=scene.keyframe_prompt, negative=scene.keyframe_negative,
                                               created_at=_now(), batch=batch))
                 self.store.save_job(job)  # persist per variant — resumable
                 if n > 1:
@@ -720,7 +721,8 @@ class Orchestrator:
             return existing
         clip = Clip(video_path=str(scene.video_path), raw_video_path=scene.raw_video_path,
                     post_paths=list(scene.post_paths), seed=seed, verdict=scene.video_verdict,
-                    keyframe_path=scene.keyframe_path, created_at=_now(), batch=scene.regenerations)
+                    keyframe_path=scene.keyframe_path, prompt=scene.animation_prompt,
+                    negative=scene.animation_negative, created_at=_now(), batch=scene.regenerations)
         scene.clips.append(clip)
         return clip
 

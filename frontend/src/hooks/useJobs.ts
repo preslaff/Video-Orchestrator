@@ -279,6 +279,23 @@ export function useSceneStructure(id: string) {
   return { addScene, deleteScene, reorder, writePrompts }
 }
 
+/** What made one keyframe or clip — prompts saved with the version, plus its sidecar manifest.
+ *  Fetched only while a version's details are open: a 40-scene job has hundreds of versions. */
+export function useVersionDetail(id: string, index: number, versionId: string | null) {
+  return useQuery({
+    queryKey: ['version', id, index, versionId ?? ''],
+    enabled: !!versionId,
+    staleTime: 5 * 60_000,          // a finished take never changes
+    queryFn: async () => {
+      const { data, error } = await api.GET('/api/jobs/{job_id}/scenes/{index}/versions/{version_id}', {
+        params: { path: { job_id: id, index, version_id: versionId! } },
+      })
+      if (error) throw error
+      return data
+    },
+  })
+}
+
 export function useAssembly(id: string | undefined) {
   return useQuery({
     queryKey: keys.assembly(id ?? ''),

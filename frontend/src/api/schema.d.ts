@@ -97,6 +97,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/scenes/{index}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Version Detail
+         * @description What made this take: the prompts saved with it, plus whatever the sidecar manifest adds.
+         *
+         *     Read on demand rather than on every job fetch — a 40-scene job has hundreds of versions, and
+         *     this opens one file.
+         */
+        get: operations["version_detail_api_jobs__job_id__scenes__index__versions__version_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Scene Version
+         * @description Drop one keyframe or clip version from a scene's history.
+         *
+         *     The generated file is kept on disk; only the reference is removed. Deleting the active
+         *     version falls back to the newest remaining one (for a keyframe, its clip follows).
+         */
+        delete: operations["delete_scene_version_api_jobs__job_id__scenes__index__versions__version_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/scenes/{index}": {
         parameters: {
             query?: never;
@@ -219,29 +249,6 @@ export interface paths {
          */
         post: operations["stop_api_jobs__job_id__stop_post"];
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs/{job_id}/scenes/{index}/versions/{version_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Delete Scene Version
-         * @description Drop one keyframe or clip version from a scene's history.
-         *
-         *     The generated file is kept on disk; only the reference is removed. Deleting the active
-         *     version falls back to the newest remaining one (for a keyframe, its clip follows).
-         */
-        delete: operations["delete_scene_version_api_jobs__job_id__scenes__index__versions__version_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2006,6 +2013,90 @@ export interface components {
              */
             fix_suggestion: string;
         };
+        /**
+         * VersionDetail
+         * @description What made one keyframe or clip: the prompts recorded with it, plus the sidecar manifest.
+         *
+         *     The prompts come from the version record (history that outlives the output folder); the
+         *     manifest beside the file adds the rest — steps, cfg, model, backend — when it is still there.
+         */
+        VersionDetail: {
+            /** Version Id */
+            version_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "keyframe" | "clip";
+            /** Path */
+            path: string;
+            /** Url */
+            url?: string | null;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /**
+             * Batch
+             * @default 0
+             */
+            batch: number;
+            /** Seed */
+            seed?: number | null;
+            /**
+             * Prompt
+             * @default
+             */
+            prompt: string;
+            /**
+             * Negative
+             * @default
+             */
+            negative: string;
+            /**
+             * Source
+             * @default generated
+             */
+            source: string;
+            /**
+             * Prompt From
+             * @default
+             */
+            prompt_from: string;
+            /**
+             * Params
+             * @default {}
+             */
+            params: {
+                [key: string]: unknown;
+            };
+            /**
+             * Workflow
+             * @default
+             */
+            workflow: string;
+            /**
+             * Template
+             * @default
+             */
+            template: string;
+            /**
+             * Backend
+             * @default
+             */
+            backend: string;
+            /**
+             * Has Manifest
+             * @default false
+             */
+            has_manifest: boolean;
+            /**
+             * Matches Scene Prompt
+             * @default true
+             */
+            matches_scene_prompt: boolean;
+        };
         /** VideoSettings */
         VideoSettings: {
             /**
@@ -2309,6 +2400,72 @@ export interface operations {
             };
         };
     };
+    version_detail_api_jobs__job_id__scenes__index__versions__version_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_scene_version_api_jobs__job_id__scenes__index__versions__version_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_scene_api_jobs__job_id__scenes__index__delete: {
         parameters: {
             query?: {
@@ -2496,39 +2653,6 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JobPublic"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_scene_version_api_jobs__job_id__scenes__index__versions__version_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                job_id: string;
-                index: number;
-                version_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
                 headers: {
                     [name: string]: unknown;
                 };

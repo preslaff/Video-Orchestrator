@@ -1,7 +1,10 @@
 'use client'
 
+import { useState } from 'react'
 import type { ScenePublic } from '@/api/types'
+import { errorMessage } from '@/api/client'
 import { ZoomButton } from '@/components/Lightbox'
+import { useVersionDetail } from '@/hooks/useJobs'
 
 type Variant = ScenePublic['variants'][number]
 type Clip = ScenePublic['clips'][number]
@@ -47,14 +50,20 @@ function clipEntry(c: Clip, frameOf: (path: string | null | undefined) => string
  * animated from, since a video has no still of its own to show at this size.
  */
 export function VersionStrip({
-  scene, kind, disabled = false, onSelect, onDelete,
+  scene, kind, jobId, disabled = false, onSelect, onDelete, onRestorePrompt,
 }: {
   scene: ScenePublic
   kind: 'keyframe' | 'clip'
+  /** Needed to fetch what made a version; without it the ⓘ is not offered. */
+  jobId?: string
   disabled?: boolean
   onSelect: (id: string) => void
   onDelete: (id: string, label: string) => void
+  /** Put an earlier take's prompt back into the scene's draft (prompt, negative). */
+  onRestorePrompt?: (prompt: string, negative: string) => void
 }) {
+  const [detailOf, setDetailOf] = useState<string | null>(null)
+  const detail = useVersionDetail(jobId ?? '', scene.index, jobId ? detailOf : null)
   const variants = scene.variants ?? []
   const frameOf = (path: string | null | undefined) => variants.find((v) => v.path === path)?.url ?? null
   const entries = (kind === 'keyframe'
@@ -64,7 +73,8 @@ export function VersionStrip({
   if (entries.length <= 1) return null   // nothing to choose between
 
   return (
-    <div className="flex gap-1 overflow-x-auto pb-1" data-testid={`versions-${kind}-${scene.index}`}>
+    <div data-testid={`versions-${kind}-${scene.index}`}>
+    <div className="flex gap-1 overflow-x-auto pb-1">
       {entries.map((e, i) => (
         <div key={e.id} className="group relative shrink-0">
           {i > 0 && entries[i - 1].batch !== e.batch && (
@@ -90,6 +100,15 @@ export function VersionStrip({
           {/* ⤢ opens the version itself: the image, or for a clip the video (the tile shows its keyframe) */}
           <ZoomButton items={e.url ? [{ url: e.url, video: kind === 'clip', caption: `Scene ${scene.index + 1} · ${kind} · ${e.label}` }] : []}
             className="left-0.5 top-0.5" testId={`version-zoom-${kind}-${scene.index}-${e.id}`} />
+          {jobId && (
+            // What made this take: the prompt is the thing you cannot reconstruct by looking.
+            <button type="button" onClick={() => setDetailOf(detailOf === e.id ? null : e.id)}
+              data-testid={`version-info-${kind}-${scene.index}-${e.id}`}
+              aria-pressed={detailOf === e.id} title="what made this version (prompt, seed, settings)"
+              className={`absolute bottom-5 right-0.5 rounded px-1 text-[10px] ${detailOf === e.id ? 'bg-neutral-900 text-white' : 'bg-white/80 text-neutral-600 hover:bg-white'}`}>
+              ⓘ
+            </button>
+          )}
           <button type="button" disabled={disabled} onClick={() => onDelete(e.id, e.label)}
             data-testid={`version-delete-${kind}-${scene.index}-${e.id}`}
             title="remove this version from the job (the file stays on disk)"
@@ -98,6 +117,56 @@ export function VersionStrip({
           </button>
         </div>
       ))}
+    </div>
+    {detailOf && (
+      <div className="mt-1 space-y-1 rounded border border-neutral-200 bg-neutral-50 p-2 text-xs"
+        data-testid={`version-detail-${kind}-${scene.index}`}>
+        {detail.isLoading && <p className="text-neutral-500">Reading what made this take…</p>}
+        {detail.error && <p className="text-red-700">{errorMessage(detail.error)}</p>}
+        {detail.data && (
+          <>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-neutral-600">
+              <span className="font-medium text-neutral-800">
+                {detail.data.kind === 'clip' ? 'animation prompt' : 'keyframe prompt'}
+              </span>
+              {detail.data.seed != null && <span>seed {detail.data.seed}</span>}
+              {!!detail.data.params?.steps && <span>{String(detail.data.params.steps)} steps</span>}
+              {detail.data.params?.cfg != null && <span>cfg {String(detail.data.params.cfg)}</span>}
+              {!!detail.data.params?.width && <span>{String(detail.data.params.width)}×{String(detail.data.params.height)}</span>}
+              {!!detail.data.backend && <span>{detail.data.backend}</span>}
+              {detail.data.source === 'user' && <span className="rounded bg-emerald-100 px-1 text-emerald-800">your image</span>}
+              {detail.data.prompt_from === 'manifest' && (
+                <span className="rounded bg-neutral-200 px-1" title="from the manifest beside the file: this take predates prompts being saved with the version">from the file&apos;s manifest</span>
+              )}
+            </div>
+            {detail.data.prompt ? (
+              <p className="whitespace-pre-wrap rounded bg-white p-2 font-mono text-[11px] text-neutral-800">{detail.data.prompt}</p>
+            ) : (
+              <p className="text-neutral-500">No prompt was recorded for this take (and its manifest is gone).</p>
+            )}
+            {detail.data.negative && <p className="text-neutral-500">negative: {detail.data.negative}</p>}
+            <div className="flex flex-wrap items-center gap-2">
+              {detail.data.matches_scene_prompt ? (
+                <span className="text-neutral-500">Same as the scene&apos;s current prompt.</span>
+              ) : (
+                <span className="text-amber-700">Differs from the scene&apos;s current prompt.</span>
+              )}
+              {!!detail.data.prompt && (
+                <button type="button" className="rounded border border-neutral-300 bg-white px-2 py-0.5"
+                  data-testid={`version-copy-${kind}-${scene.index}`}
+                  onClick={() => void navigator.clipboard?.writeText(detail.data!.prompt)}>Copy prompt</button>
+              )}
+              {!!detail.data.prompt && !!onRestorePrompt && !detail.data.matches_scene_prompt && (
+                <button type="button" className="rounded border border-neutral-300 bg-white px-2 py-0.5 font-medium"
+                  data-testid={`version-restore-${kind}-${scene.index}`}
+                  title="put this prompt back into the scene (then regenerate to use it)"
+                  onClick={() => onRestorePrompt(detail.data!.prompt, detail.data!.negative)}>Restore this prompt</button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    )}
     </div>
   )
 }

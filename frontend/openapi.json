@@ -414,6 +414,126 @@
         }
       }
     },
+    "/api/jobs/{job_id}/scenes/{index}/versions/{version_id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Version Detail",
+        "description": "What made this take: the prompts saved with it, plus whatever the sidecar manifest adds.\n\nRead on demand rather than on every job fetch — a 40-scene job has hundreds of versions, and\nthis opens one file.",
+        "operationId": "version_detail_api_jobs__job_id__scenes__index__versions__version_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Delete Scene Version",
+        "description": "Drop one keyframe or clip version from a scene's history.\n\nThe generated file is kept on disk; only the reference is removed. Deleting the active\nversion falls back to the newest remaining one (for a keyframe, its clip follows).",
+        "operationId": "delete_scene_version_api_jobs__job_id__scenes__index__versions__version_id__delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/scenes/{index}": {
       "delete": {
         "tags": [
@@ -727,67 +847,6 @@
         ],
         "responses": {
           "202": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JobPublic"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/jobs/{job_id}/scenes/{index}/versions/{version_id}": {
-      "delete": {
-        "tags": [
-          "jobs"
-        ],
-        "summary": "Delete Scene Version",
-        "description": "Drop one keyframe or clip version from a scene's history.\n\nThe generated file is kept on disk; only the reference is removed. Deleting the active\nversion falls back to the newest remaining one (for a keyframe, its clip follows).",
-        "operationId": "delete_scene_version_api_jobs__job_id__scenes__index__versions__version_id__delete",
-        "parameters": [
-          {
-            "name": "job_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Job Id"
-            }
-          },
-          {
-            "name": "index",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Index"
-            }
-          },
-          {
-            "name": "version_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Version Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -5281,6 +5340,117 @@
           "composition_ok"
         ],
         "title": "VerdictOut"
+      },
+      "VersionDetail": {
+        "properties": {
+          "version_id": {
+            "type": "string",
+            "title": "Version Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "keyframe",
+              "clip"
+            ],
+            "title": "Kind"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          },
+          "batch": {
+            "type": "integer",
+            "title": "Batch",
+            "default": 0
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt",
+            "default": ""
+          },
+          "negative": {
+            "type": "string",
+            "title": "Negative",
+            "default": ""
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "generated"
+          },
+          "prompt_from": {
+            "type": "string",
+            "title": "Prompt From",
+            "default": ""
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params",
+            "default": {}
+          },
+          "workflow": {
+            "type": "string",
+            "title": "Workflow",
+            "default": ""
+          },
+          "template": {
+            "type": "string",
+            "title": "Template",
+            "default": ""
+          },
+          "backend": {
+            "type": "string",
+            "title": "Backend",
+            "default": ""
+          },
+          "has_manifest": {
+            "type": "boolean",
+            "title": "Has Manifest",
+            "default": false
+          },
+          "matches_scene_prompt": {
+            "type": "boolean",
+            "title": "Matches Scene Prompt",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "version_id",
+          "kind",
+          "path"
+        ],
+        "title": "VersionDetail",
+        "description": "What made one keyframe or clip: the prompts recorded with it, plus the sidecar manifest.\n\nThe prompts come from the version record (history that outlives the output folder); the\nmanifest beside the file adds the rest — steps, cfg, model, backend — when it is still there."
       },
       "VideoSettings": {
         "properties": {
