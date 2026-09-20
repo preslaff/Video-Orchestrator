@@ -4509,6 +4509,32 @@
             ],
             "title": "Mode"
           },
+          "edit_workflow": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Workflow"
+          },
+          "edit_base": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "",
+                  "keyframe"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Base"
+          },
           "references": {
             "anyOf": [
               {
@@ -4732,6 +4758,21 @@
             "type": "string",
             "title": "Mode",
             "default": "t2i"
+          },
+          "edit_workflow": {
+            "type": "string",
+            "title": "Edit Workflow",
+            "default": ""
+          },
+          "edit_base": {
+            "type": "string",
+            "title": "Edit Base",
+            "default": ""
+          },
+          "edit_base_path": {
+            "type": "string",
+            "title": "Edit Base Path",
+            "default": ""
           },
           "references": {
             "items": {
@@ -5021,6 +5062,32 @@
               }
             ],
             "title": "Mode"
+          },
+          "edit_workflow": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Workflow"
+          },
+          "edit_base": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "",
+                  "keyframe"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Base"
           },
           "references": {
             "anyOf": [

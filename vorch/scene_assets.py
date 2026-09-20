@@ -65,7 +65,22 @@ def identity_label(project: Any | None, scene: Any) -> str:
 
 # --- validation & invalidation (edits at any stage) -----------------------------------
 
-MODE_FIELDS = ("mode", "references", "reference_asset_ids")
+MODE_FIELDS = ("mode", "references", "reference_asset_ids", "edit_workflow", "edit_base")
+
+
+def resolve_edit_base(scene: Any) -> None:
+    """Turn ``edit_base="keyframe"`` into the file the scene edits from.
+
+    Resolved when the edit is applied, not when it runs: regenerating a keyframe clears
+    ``keyframe_path`` first (``Orchestrator.reopen_scene``), which is exactly when the base
+    would otherwise disappear.
+    """
+    if getattr(scene, "edit_base", "") == "keyframe":
+        current = scene.swapped_path or scene.keyframe_path
+        if current:
+            scene.edit_base_path = current
+    else:
+        scene.edit_base_path = ""
 
 
 def validate_scene(scene: Any) -> None:
@@ -79,11 +94,25 @@ def validate_scene(scene: Any) -> None:
     if scene.mode not in ("t2i", "edit"):
         raise ValueError(f"scene {scene.index}: unknown mode {scene.mode!r} (t2i | edit)")
     if scene.mode == "edit":
-        if not scene.references:
+        base = getattr(scene, "edit_base_path", "")
+        if not scene.references and not base:
             raise ValueError(f"scene {scene.index}: edit mode needs at least one reference image")
-        missing = [r for r in scene.references if not Path(r).expanduser().is_file()]
+        missing = [r for r in ([base] if base else []) + list(scene.references)
+                   if not Path(r).expanduser().is_file()]
         if missing:
             raise ValueError(f"scene {scene.index}: reference image not found: {missing[0]}")
+    # A scene may use its own edit workflow; an unknown one must be a 400 here, not a KeyError
+    # inside the run segment (which fails the whole job).
+    if getattr(scene, "edit_workflow", ""):
+        from . import registry  # local: registry pulls in the workflow templates
+
+        try:
+            spec = registry.load_registry().get(scene.edit_workflow)
+        except (KeyError, registry.RegistryError):
+            raise ValueError(f"scene {scene.index}: unknown edit workflow {scene.edit_workflow!r}") from None
+        if spec.kind != "edit":
+            raise ValueError(f"scene {scene.index}: workflow {scene.edit_workflow!r} is kind "
+                             f"{spec.kind!r}, not 'edit'")
 
 
 def invalidate_after_identity_change(scene: Any, kind: str) -> None:

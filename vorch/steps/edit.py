@@ -42,8 +42,13 @@ def edit(
     params: dict = {"positive": prompt, "seed": seed}
     for i, pname in enumerate(inputs):
         params[pname] = reference_names[min(i, len(reference_names) - 1)]
+    # A workflow that derives its size from the reference (kv_edit) declares no width/height but
+    # does declare `reference_megapixels`: ask for the caller's size in megapixels, or it renders
+    # the template's 1 MP and a job ends up with keyframes of two different sizes.
+    megapixels = (width * height / 1_000_000) if width and height else None
     for name, value in (("width", width), ("height", height), ("negative", negative),
                         ("steps", steps), ("cfg", cfg), ("unet", unet),
+                        ("reference_megapixels", megapixels),
                         ("filename_prefix", filename_prefix)):
         if value is not None and spec.accepts(name):
             params[name] = value

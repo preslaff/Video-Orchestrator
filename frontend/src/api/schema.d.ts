@@ -1672,6 +1672,10 @@ export interface components {
             animation_negative?: string | null;
             /** Mode */
             mode?: ("t2i" | "edit") | null;
+            /** Edit Workflow */
+            edit_workflow?: string | null;
+            /** Edit Base */
+            edit_base?: ("" | "keyframe") | null;
             /** References */
             references?: string[] | null;
             /** Reference Asset Ids */
@@ -1798,6 +1802,21 @@ export interface components {
              */
             mode: string;
             /**
+             * Edit Workflow
+             * @default
+             */
+            edit_workflow: string;
+            /**
+             * Edit Base
+             * @default
+             */
+            edit_base: string;
+            /**
+             * Edit Base Path
+             * @default
+             */
+            edit_base_path: string;
+            /**
              * References
              * @default []
              */
@@ -1881,6 +1900,10 @@ export interface components {
             animation_negative?: string | null;
             /** Mode */
             mode?: ("t2i" | "edit") | null;
+            /** Edit Workflow */
+            edit_workflow?: string | null;
+            /** Edit Base */
+            edit_base?: ("" | "keyframe") | null;
             /** References */
             references?: string[] | null;
             /** Reference Asset Ids */

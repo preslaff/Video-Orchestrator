@@ -49,6 +49,11 @@ def test_kv_edit_drops_size_params_and_rejects_non_edit(capture):
     wf = capture[-1]
     assert wf["76"]["inputs"]["image"] == "a.png" and wf["81"]["inputs"]["image"] == "b.png"
     assert wf["137"]["inputs"]["steps"] == 6
+    # kv_edit has no width/height: it sizes itself from the reference, so the wanted size is
+    # asked for in megapixels — otherwise the template's 1 MP makes this scene's keyframes
+    # bigger than every other scene's.
+    assert wf["130"]["inputs"]["megapixels"] == pytest.approx(1024 * 576 / 1_000_000)
+    assert wf["131"]["inputs"]["megapixels"] == pytest.approx(1024 * 576 / 1_000_000)
     with pytest.raises(ValueError):
         edit("x", ["a.png"], workflow="keyframe")
     with pytest.raises(ValueError):

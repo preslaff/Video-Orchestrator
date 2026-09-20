@@ -6,7 +6,7 @@ import { describeStep } from '@/api/events'
 
 const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) => ({
   index, id: `s${index}`, writing_prompts: false, description: '', character: '', setting: '', mood: '', continuous: false, status: 'pending',
-  keyframe_prompt: '', animation_prompt: '', keyframe_negative: '', animation_negative: '', mode: 't2i', references: [],
+  keyframe_prompt: '', animation_prompt: '', keyframe_negative: '', animation_negative: '', mode: 't2i', edit_workflow: '', edit_base: '', edit_base_path: '', references: [],
   keyframe_path: null, keyframe_url: null, keyframe_verdict: null, video_path: null, video_url: null, video_verdict: null,
   swapped_path: null, swapped_url: null, swap_verdict: null, variants: [], raw_video_path: null, post_paths: [], identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], keyframe_source: 'generated', keyframe_asset_id: null, clips: [], ...extra,
 })

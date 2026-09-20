@@ -46,6 +46,10 @@ class SceneEdit(BaseModel):
     keyframe_negative: str | None = None
     animation_negative: str | None = None
     mode: Literal["t2i", "edit"] | None = None
+    # Which edit workflow this scene uses ("" = the profile's); `edit_base="keyframe"` starts the
+    # edit from the scene's own frame, "" from the references alone.
+    edit_workflow: str | None = None
+    edit_base: Literal["", "keyframe"] | None = None
     references: list[str] | None = None            # explicit paths (CLI / no project)
     reference_asset_ids: list[str] | None = None   # project asset ids -> resolved into `references`
     identity_asset_id: str | None = None           # face for this scene's swap; "" clears it (no swap)
@@ -94,6 +98,8 @@ class SceneRegenerate(BaseModel):
     animation_prompt: str | None = None
     animation_negative: str | None = None
     mode: Literal["t2i", "edit"] | None = None
+    edit_workflow: str | None = None
+    edit_base: Literal["", "keyframe"] | None = None
     references: list[str] | None = None
     reference_asset_ids: list[str] | None = None
     identity_asset_id: str | None = None           # "" = no swap for this scene
@@ -204,6 +210,9 @@ class ScenePublic(BaseModel):
     keyframe_negative: str = ""
     animation_negative: str = ""
     mode: str = "t2i"
+    edit_workflow: str = ""        # "" = the profile's edit workflow
+    edit_base: str = ""            # "keyframe" = the edit starts from this scene's own frame
+    edit_base_path: str = ""       # that frame, as resolved when the edit was applied
     references: list[str] = []
     reference_asset_ids: list[str] = []
     identity: str = ""                    # face path used by this scene's swap ("" = none)

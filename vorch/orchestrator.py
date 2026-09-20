@@ -254,7 +254,7 @@ class Orchestrator:
         return job
 
     SCENE_EDIT_FIELDS = ("description", "keyframe_prompt", "keyframe_negative", "animation_prompt",
-                         "animation_negative", "mode", "references")
+                         "animation_negative", "mode", "references", "edit_workflow", "edit_base")
 
     def reopen_scene(self, job: Job, index: int, *, what: str = "keyframe", edits: dict | None = None) -> Scene:
         """Discard a scene's keyframe (and everything built on it) or just its clip,
@@ -282,6 +282,9 @@ class Orchestrator:
         for field_name in self.SCENE_EDIT_FIELDS:
             if edits and edits.get(field_name) is not None:
                 setattr(scene, field_name, edits[field_name])
+        if edits and edits.get("edit_base") is not None:
+            # Resolve before the keyframe is cleared below: that frame is what the edit starts from.
+            scene_assets.resolve_edit_base(scene)
         asset_changes: list[str] = []
         if scene_assets.has_asset_edits(edits):
             project = projects_mod.load(self.store, job.project_id) if job.project_id else None
@@ -562,24 +565,26 @@ class Orchestrator:
                 continue  # resume: already done
             cancel.check()
             log.info("job %s: keyframes scene %d (%d variant(s))", job.id, scene.index, n)
+            params = self.scene_params(scene)
+            sources = self.edit_sources(scene)
             refs = (
-                pipeline.stage_references(scene.references, self.params, cache=ref_cache)
+                pipeline.stage_references(sources, params, cache=ref_cache)
                 if scene.mode == "edit" else ()
             )
             batch = batch_of(scene)
             done = len(current_batch(scene))   # resume: how many of this run's variants exist
-            slots = reference_slots(self.params.edit_workflow) if scene.mode == "edit" else 0
-            if slots and len(scene.references) > slots and not done:
+            slots = reference_slots(params.edit_workflow) if scene.mode == "edit" else 0
+            if slots and len(sources) > slots and not done:
                 self.store.log_decision(Decision(
                     job_id=job.id, scene_index=scene.index, phase="keyframe", attempt=1, action="warning",
-                    reason=f"{len(scene.references)} references but {self.params.edit_workflow} uses the first {slots}",
+                    reason=f"{len(sources)} references but {params.edit_workflow} uses the first {slots}",
                 ))
             for v in range(done, n):
                 cancel.check()  # every earlier variant is already saved
                 provenance.set_context(scene=scene.index, variant=v if n > 1 else None)
                 seed = config.derive_seed(self.seed, scene=scene.index, variant=v,
                                           attempt=1 + 10 * scene.regenerations)
-                path, verdict = self._one_keyframe(job, scene, seed=seed, refs=refs, variant=v)
+                path, verdict = self._one_keyframe(job, scene, seed=seed, refs=refs, variant=v, params=params)
                 scene.variants.append(Variant(path=str(path), seed=_seed_used(path, seed), verdict=verdict,
                                               prompt=scene.keyframe_prompt, negative=scene.keyframe_negative,
                                               created_at=_now(), batch=batch))
@@ -593,8 +598,25 @@ class Orchestrator:
             self.store.save_job(job)  # persist per scene — resumable
             self._event(job, "keyframe", index=scene.index, path=scene.keyframe_path)
 
-    def _one_keyframe(self, job: Job, scene: Scene, *, seed: int, refs, variant: int):
+    def scene_params(self, scene: Scene) -> GenParams:
+        """The job's params, with this scene's own edit workflow when it has one.
+
+        Used for staging as well as generating: the upload backend is derived from the edit
+        workflow (``pipeline.stage_references``), so a scene on another workflow must stage to
+        that workflow's backend.
+        """
+        return self.params.with_(edit_workflow=scene.edit_workflow) if scene.edit_workflow else self.params
+
+    @staticmethod
+    def edit_sources(scene: Scene) -> list[str]:
+        """What this scene edits from: its own frame first (when asked), then its references."""
+        base = [scene.edit_base_path] if scene.edit_base_path else []
+        return base + [r for r in scene.references if r not in base]
+
+    def _one_keyframe(self, job: Job, scene: Scene, *, seed: int, refs, variant: int,
+                      params: GenParams | None = None):
         prefix = output_prefix(job, scene.index, "keyframe", variant if self.variants_per_scene > 1 else None)
+        params = params or self.scene_params(scene)
         n_var = self.variants_per_scene
         # Announce the step before generation (progress UI); retries re-announce via on_start.
         self._event(job, "step", step="keyframe", index=scene.index, variant=variant, variants=n_var,
@@ -618,13 +640,13 @@ class Orchestrator:
             return pipeline.generate_keyframe_evaluated(
                 scene.keyframe_prompt, scene.keyframe_prompt,
                 seed=seed, max_attempts=self.max_attempts, on_attempt=log_attempt,
-                params=self.params, negative=scene.keyframe_negative or None,
+                params=params, negative=scene.keyframe_negative or None,
                 mode=scene.mode, references=refs, filename_prefix=prefix, on_start=on_start,
                 identity_image=(scene.identity or None) if self.face_swap else None,
             )
         path, _ = pipeline._fresh_keyframe(
             scene.keyframe_prompt, seed=seed, evaluate=False, max_attempts=1,
-            params=self.params, negative=scene.keyframe_negative or None,
+            params=params, negative=scene.keyframe_negative or None,
             mode=scene.mode, references=refs, filename_prefix=prefix,
         )
         self.store.log_decision(

@@ -397,3 +397,66 @@ def test_animate_scene_refuses_what_it_cannot_render(mgr):
     job.kind = "stills"
     with pytest.raises(ValueError, match="no clip"):
         o.animate_scene(job, 0)
+
+
+# --- per-scene edit workflow ------------------------------------------------------------
+
+
+def test_a_scene_can_use_its_own_edit_workflow(mgr, tmp_path):
+    """One scene edits its own frame with kv_edit while its neighbour keeps the profile's."""
+    from vorch.orchestrator import Orchestrator
+
+    kf = tmp_path / "k.png"
+    kf.write_bytes(b"x")
+    job = _done_video_job(mgr.store)
+    job.scenes[0].mode = "edit"
+    job.scenes[0].edit_workflow = "kv_edit"
+    job.scenes[0].references = [str(kf)]
+    job.scenes.append(Scene(index=1, mode="edit", references=[str(kf)]))     # profile default
+    o = Orchestrator.from_job(mgr.store, job)
+
+    assert o.scene_params(job.scenes[0]).edit_workflow == "kv_edit"
+    assert o.scene_params(job.scenes[1]).edit_workflow == o.params.edit_workflow == "identity_edit"
+
+
+def test_an_unknown_edit_workflow_is_rejected_before_anything_runs(mgr, tmp_path):
+    kf = tmp_path / "k.png"
+    kf.write_bytes(b"x")
+    job = _done_video_job(mgr.store)
+    with pytest.raises(ValueError, match="unknown edit workflow"):
+        mgr.update_scenes(job.id, [{"index": 0, "mode": "edit", "references": [str(kf)],
+                                    "edit_workflow": "ghost"}])
+    with pytest.raises(ValueError, match="not 'edit'"):
+        mgr.update_scenes(job.id, [{"index": 0, "mode": "edit", "references": [str(kf)],
+                                    "edit_workflow": "keyframe"}])
+    assert mgr.store.load_job(job.id).scenes[0].mode == "t2i"        # all-or-nothing
+
+
+def test_edit_base_keeps_the_frame_the_edit_started_from(mgr, tmp_path, monkeypatch):
+    """`edit_base="keyframe"` resolves when the edit is applied, because regenerating a
+    keyframe clears `keyframe_path` — the base would otherwise vanish just before it is used."""
+    from vorch.orchestrator import Orchestrator
+
+    kf, ref = tmp_path / "k.png", tmp_path / "ref.png"
+    for f in (kf, ref):
+        f.write_bytes(b"x")
+    job = _done_video_job(mgr.store)
+    job.scenes[0].keyframe_path = str(kf)
+    job.scenes[0].swapped_path = None
+    mgr.store.save_job(job)
+
+    fresh = mgr.update_scenes(job.id, [{"index": 0, "mode": "edit", "edit_workflow": "kv_edit",
+                                        "edit_base": "keyframe", "references": [str(ref)]}])
+    scene = fresh.scenes[0]
+    assert scene.edit_base_path == str(kf)
+    assert Orchestrator.edit_sources(scene) == [str(kf), str(ref)]   # own frame first
+
+    o = Orchestrator.from_job(mgr.store, fresh)
+    o.reopen_scene(fresh, 0, what="keyframe")
+    assert fresh.scenes[0].keyframe_path is None                      # cleared for the rerun…
+    assert fresh.scenes[0].edit_base_path == str(kf)                  # …but the base survives
+
+    # Clearing the base goes back to the references alone.
+    cleared = mgr.update_scenes(job.id, [{"index": 0, "edit_base": ""}])
+    assert cleared.scenes[0].edit_base_path == ""
+    assert Orchestrator.edit_sources(cleared.scenes[0]) == [str(ref)]

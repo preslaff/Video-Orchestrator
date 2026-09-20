@@ -10,10 +10,10 @@ import { VersionStrip } from '@/components/VersionStrip'
 import { profileSizes } from '@/components/SceneGrid'
 import { estimateClip, fmtRange } from '@/lib/render'
 import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneStructure, useUpdateScenes } from '@/hooks/useJobs'
-import { useUploadAsset } from '@/hooks/useSetup'
+import { useUploadAsset, useWorkflows } from '@/hooks/useSetup'
 import { Button, ErrorBox } from '@/components/ui'
 
-type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null }
+type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; edit_workflow: string; edit_base: '' | 'keyframe'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null }
 
 type PickerKind = 'refs' | 'identity' | 'image'
 
@@ -137,7 +137,8 @@ function draftsFrom(job: JobPublic): Record<string, Draft> {
     out[s.id] = {
       description: s.description, keyframe_prompt: s.keyframe_prompt, keyframe_negative: s.keyframe_negative,
       animation_prompt: s.animation_prompt, animation_negative: s.animation_negative,
-      mode: s.mode as 't2i' | 'edit', references: s.references.join('\n'), reference_asset_ids: [...(s.reference_asset_ids ?? [])],
+      mode: s.mode as 't2i' | 'edit', edit_workflow: s.edit_workflow ?? '', edit_base: (s.edit_base ?? '') as '' | 'keyframe',
+      references: s.references.join('\n'), reference_asset_ids: [...(s.reference_asset_ids ?? [])],
       identity_asset_id: s.identity_asset_id ?? null,
     }
   }
@@ -212,6 +213,9 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   const removeVersion = useDeleteVersion(job.id)
   const saveAsset = useSaveSceneAsset(job.id, job.project_id)
   const structure = useSceneStructure(job.id)
+  // The registered edit workflows, so the scene selector needs no hard-coded names.
+  const editWorkflows = useWorkflows('edit').data?.workflows ?? []
+  const profileEdit = String((job.profile as { edit_workflow?: string } | null)?.edit_workflow ?? 'identity_edit')
   // Which row is asking "delete — and the files too?", and where a new scene is being written.
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [addAt, setAddAt] = useState<number | null>(null)
@@ -254,6 +258,8 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
         animation_prompt: video ? d.animation_prompt : null,
         animation_negative: video ? d.animation_negative : null,
         mode: what === 'keyframe' ? d.mode : null,
+        edit_workflow: what === 'keyframe' ? d.edit_workflow : null,
+        edit_base: what === 'keyframe' ? d.edit_base : null,
         references: what === 'keyframe' && !assetRefs ? d.references.split('\n').map((x) => x.trim()).filter(Boolean) : null,
         reference_asset_ids: what === 'keyframe' ? refsEdit(d) : null,
         identity_asset_id: job.face_swap ? identityEdit(d) : null,   // a changed face applies to the redone swap
@@ -354,6 +360,8 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
         animation_prompt: video ? d.animation_prompt : null,
         animation_negative: video ? d.animation_negative : null,
         mode: s.keyframe_path ? null : d.mode,
+        edit_workflow: d.edit_workflow,
+        edit_base: d.edit_base,
         references: s.keyframe_path || assetRefs ? null : d.references.split('\n').map((x) => x.trim()).filter(Boolean),
         reference_asset_ids: s.keyframe_path ? null : refsEdit(d),
         identity_asset_id: job.face_swap && !s.video_path ? identityEdit(d) : null,
@@ -531,6 +539,47 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                   {locked && <span className="col-span-2 text-xs text-neutral-500">mode &amp; references apply on Regenerate keyframe</span>}
                   <label className="block"><span className="text-xs text-neutral-500">mode</span>
                     <select value={d.mode} onChange={(e) => set(s.id, { mode: e.target.value as 't2i' | 'edit' })} className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1"><option value="t2i">t2i</option><option value="edit">edit</option></select></label>
+                  {d.mode === 'edit' && (() => {
+                    // Which edit workflow this scene uses. identity_edit conditions a fresh render
+                    // on the references; kv_edit keeps the base image and changes what you describe.
+                    const chosen = editWorkflows.find((w) => w.name === (d.edit_workflow || profileEdit))
+                    const keepsImage = !!chosen && !chosen.params?.width      // sizes itself from the reference
+                    const takesNegative = !chosen || !!chosen.params?.negative
+                    return (
+                      <div className="col-span-2 space-y-1">
+                        <label className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs text-neutral-500">edit with</span>
+                          <select value={d.edit_workflow} data-testid={`edit-workflow-${s.index}`}
+                            onChange={(e) => {
+                              const name = e.target.value
+                              // Editing this scene's own frame is the point of an image-edit
+                              // workflow, so tick it by default when one is chosen.
+                              const wf = editWorkflows.find((w) => w.name === (name || profileEdit))
+                              const image = !!wf && !wf.params?.width
+                              set(s.id, { edit_workflow: name, edit_base: image && !!s.keyframe_path ? 'keyframe' : '' })
+                            }}
+                            className="rounded border border-neutral-300 bg-white px-2 py-1 text-sm">
+                            <option value="">profile default ({profileEdit})</option>
+                            {editWorkflows.map((w) => (
+                              <option key={w.name} value={w.name}>{w.name}{w.description ? ` — ${w.description}` : ''}</option>
+                            ))}
+                          </select>
+                        </label>
+                        {keepsImage && s.keyframe_path && (
+                          <label className="flex items-center gap-2 text-xs text-neutral-700">
+                            <input type="checkbox" checked={d.edit_base === 'keyframe'} data-testid={`edit-base-${s.index}`}
+                              onChange={(e) => set(s.id, { edit_base: e.target.checked ? 'keyframe' : '' })} />
+                            start from this scene&apos;s current keyframe (describe only the change)
+                          </label>
+                        )}
+                        {!takesNegative && (
+                          <p className="text-xs text-amber-700" data-testid={`edit-note-${s.index}`}>
+                            {chosen?.name} takes its size from the reference and ignores the keyframe negative.
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })()}
                   {d.mode === 'edit' && !assetRefs && (
                     <label className="block"><span className="text-xs text-neutral-500">reference paths (one per line)</span>
                       <textarea value={d.references} onChange={(e) => set(s.id, { references: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs" /></label>

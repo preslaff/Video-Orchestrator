@@ -328,6 +328,12 @@ running* and resumes the same way.
 
 Scenes are editable whenever the job isn't running: at either gate, and after it is done, failed or
 stopped.
+- **Edit with**: a scene in `edit` mode can pick its own edit workflow instead of the profile's.
+  `identity_edit` conditions a *fresh* render on the references — same subject, new composition;
+  `kv_edit` keeps the base image and changes only what the prompt describes, which is what a small
+  fix needs. Choosing an image-edit workflow also ticks **start from this scene's current
+  keyframe**, so "remove the lightning, keep the rest" needs no reference hunting. Such a workflow
+  takes its size from the reference and ignores the keyframe negative, and the panel says so.
 - **What made a version**: the ⓘ on a keyframe or clip tile shows the prompt it was generated
   with, its negative, seed, steps/cfg/size, model and backend — and whether that prompt still
   matches the scene's. **Restore this prompt** puts it back into the scene so you can regenerate

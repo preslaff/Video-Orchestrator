@@ -398,6 +398,17 @@ sidecar manifest).
   separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
   the storyboard's own token budget now scales with the scene count (~160 per scene).
 
+- **Per-scene edit workflow** (`Scene.edit_workflow`, `edit_base`, `edit_base_path`): the profile's
+  `edit_workflow` is the default, and a scene may override it — `Orchestrator.scene_params` returns
+  `params.with_(edit_workflow=…)`, used for **staging as well as generating**, because the upload
+  backend is derived from the edit workflow (`pipeline.stage_references`). `edit_base="keyframe"`
+  is resolved to a path (`scene_assets.resolve_edit_base`) when the edit is *applied*, since
+  `reopen_scene` clears `keyframe_path` before the rerun; `Orchestrator.edit_sources` then stages
+  `[base, …references]`. The name is validated in `scene_assets.validate_scene` (registered, kind
+  `edit`) so a typo is a 400 rather than a failed job. `steps.edit` asks a size-from-reference
+  workflow for the caller's size in `reference_megapixels`, or a kv_edit scene would emit ~1 MP
+  frames in a 1024×576 job.
+
 - **A version remembers its prompt**: `Variant`/`Clip` carry `prompt`/`negative`, written when the
   take is recorded. The same text is already in the sidecar manifest beside the file (with steps,
   cfg, model, backend), but a prompt is history — it must survive cleaning `COMFY_OUTPUT`, and the

@@ -7,7 +7,7 @@ import type { AssetOut, JobPublic } from '@/api/types'
 
 const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) => ({
   index, id: `s${index}`, writing_prompts: false, description: 'd', character: '', setting: '', mood: '', continuous: false, status: 'pending',
-  keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', references: [],
+  keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', edit_workflow: '', edit_base: '', edit_base_path: '', references: [],
   keyframe_path: null, keyframe_url: null, keyframe_verdict: null, video_path: null, video_url: null, video_verdict: null,
   swapped_path: null, swapped_url: null, swap_verdict: null, variants: [], raw_video_path: null, post_paths: [],
   identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], clips: [], ...extra,
@@ -249,7 +249,8 @@ describe('GatePanel storyboard structure', () => {
       const url = new URL(raw, 'http://localhost')
       const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
       const body = init?.body ? JSON.parse(String(init.body)) : input instanceof Request ? await input.json().catch(() => null) : null
-      calls.push({ method, path: url.pathname, body, query: url.search })
+      // Only the mutations: the panel also GETs the registered edit workflows for its selector.
+      if (method !== 'GET') calls.push({ method, path: url.pathname, body, query: url.search })
       return new Response(JSON.stringify(reply()), { status: 200, headers: { 'content-type': 'application/json' } })
     }))
   }
@@ -406,5 +407,71 @@ describe('GatePanel version prompts', () => {
     await user.click(screen.getByTestId('version-restore-keyframe-0'))
     expect(screen.getByDisplayValue('the prompt that made it')).toBeInTheDocument()  // in the scene editor
     expect(screen.getByTestId('scene-dirty-0')).toBeInTheDocument()                  // unsaved, as any edit
+  })
+})
+
+describe('GatePanel per-scene edit workflow', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const WORKFLOWS = {
+    workflows: [
+      { name: 'identity_edit', kind: 'edit', description: 'composition-locked', params: { width: {}, height: {}, negative: {} } },
+      { name: 'kv_edit', kind: 'edit', description: 'keeps the image', params: { reference_megapixels: {} } },
+    ],
+    errors: {}, kinds: ['edit'], user_dir: '',
+  }
+
+  function stub(puts: unknown[]) {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const url = new URL(raw, 'http://localhost')
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+      if (url.pathname === '/api/workflows') {
+        return new Response(JSON.stringify(WORKFLOWS), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      // openapi-fetch may pass a Request rather than an init body.
+      if (method !== 'GET') {
+        puts.push(init?.body ? JSON.parse(String(init.body))
+          : input instanceof Request ? await input.json().catch(() => null) : null)
+      }
+      return new Response(JSON.stringify(job), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+  }
+
+  const editable = {
+    ...job, face_swap: false, profile: { edit_workflow: 'identity_edit' },
+    scenes: [scene(0, { mode: 'edit', keyframe_path: '/k0.png', keyframe_url: '/media/k0.png', reference_asset_ids: ['room'] })],
+  } as unknown as JobPublic
+
+  it('lists the registered edit workflows and sends the chosen one', async () => {
+    const puts: unknown[] = []
+    stub(puts)
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <GatePanel job={editable} assets={assets} /></QueryClientProvider>)
+
+    const select = await screen.findByTestId('edit-workflow-0')
+    expect(select).toHaveValue('')                                    // profile default first
+    expect(screen.getByRole('option', { name: /profile default \(identity_edit\)/ })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: /kv_edit/ })).toBeInTheDocument()  // fetched
+    expect(screen.queryByTestId('edit-base-0')).toBeNull()             // identity_edit sizes itself
+    expect(screen.queryByTestId('edit-note-0')).toBeNull()
+
+    await user.selectOptions(select, 'kv_edit')
+    // An image-edit workflow starts from this scene's own frame, and says what it ignores.
+    expect(screen.getByTestId('edit-base-0')).toBeChecked()
+    expect(screen.getByTestId('edit-note-0')).toHaveTextContent('ignores the keyframe negative')
+
+    await user.click(screen.getByText('Save changes'))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect((puts[0] as { scenes: { edit_workflow: string; edit_base: string }[] }).scenes[0])
+      .toMatchObject({ edit_workflow: 'kv_edit', edit_base: 'keyframe' })
+  })
+
+  it('hides the workflow selector on a t2i scene', async () => {
+    stub([])
+    const t2i = { ...editable, scenes: [scene(0, { keyframe_path: '/k0.png' })] } as unknown as JobPublic
+    render(<QueryClientProvider client={new QueryClient()}><GatePanel job={t2i} assets={assets} /></QueryClientProvider>)
+    expect(screen.queryByTestId('edit-workflow-0')).toBeNull()
   })
 })

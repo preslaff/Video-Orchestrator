@@ -146,6 +146,11 @@ class Scene:
     keyframe_prompt: str = ""
     keyframe_negative: str = ""       # per-scene negative (profile negative when empty)
     mode: str = "t2i"                 # t2i | edit (reference-locked keyframe)
+    # Which edit workflow this scene uses ("" = the profile's). `identity_edit` conditions a fresh
+    # render on the references; `kv_edit` keeps the base image and changes what the prompt asks for.
+    edit_workflow: str = ""
+    edit_base: str = ""               # "keyframe" = start the edit from this scene's own frame
+    edit_base_path: str = ""          # that frame, resolved when the edit was applied
     references: list[str] = field(default_factory=list)  # local paths for mode="edit"
     reference_asset_ids: list[str] = field(default_factory=list)  # project asset ids behind `references`
     identity: str = ""                # face used by the swap for THIS scene ("" = no swap)
@@ -347,6 +352,9 @@ def _scene_to_dict(s: Scene) -> dict:
         "keyframe_prompt": s.keyframe_prompt,
         "keyframe_negative": s.keyframe_negative,
         "mode": s.mode,
+        "edit_workflow": s.edit_workflow,
+        "edit_base": s.edit_base,
+        "edit_base_path": s.edit_base_path,
         "references": list(s.references),
         "reference_asset_ids": list(s.reference_asset_ids),
         "identity": s.identity,
@@ -385,6 +393,9 @@ def _scene_from_dict(d: dict) -> Scene:
         keyframe_prompt=d.get("keyframe_prompt", ""),
         keyframe_negative=d.get("keyframe_negative", ""),
         mode=d.get("mode", "t2i"),
+        edit_workflow=d.get("edit_workflow", "") or "",
+        edit_base=d.get("edit_base", "") or "",
+        edit_base_path=d.get("edit_base_path", "") or "",
         references=list(d.get("references", []) or []),
         reference_asset_ids=list(d.get("reference_asset_ids", []) or []),
         identity=d.get("identity", "") or "",

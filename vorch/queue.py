@@ -387,9 +387,12 @@ class JobManager:
                 continue
             old_identity = (scene.identity, scene.identity_asset_id)
             for field in ("description", "keyframe_prompt", "animation_prompt",
-                          "keyframe_negative", "animation_negative", "mode", "references"):
+                          "keyframe_negative", "animation_negative", "mode", "references",
+                          "edit_workflow", "edit_base"):
                 if edit.get(field) is not None:
                     setattr(scene, field, edit[field])
+            if edit.get("edit_base") is not None:
+                scene_assets.resolve_edit_base(scene)
             if scene_assets.has_asset_edits(edit):
                 scene_assets.apply_asset_edits(scene, edit, project)  # ValueError -> 400
             if any(edit.get(k) is not None for k in scene_assets.MODE_FIELDS):
