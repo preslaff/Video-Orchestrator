@@ -535,9 +535,10 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                       }} />
                   )
                 })()}
-                <div className="grid grid-cols-[8rem_1fr] gap-2">
-                  {locked && <span className="col-span-2 text-xs text-neutral-500">mode &amp; references apply on Regenerate keyframe</span>}
-                  <label className="block"><span className="text-xs text-neutral-500">mode</span>
+                <div className="space-y-2">
+                  {locked && <span className="block text-xs text-neutral-500">mode &amp; references apply on Regenerate keyframe</span>}
+                  <div className="flex flex-wrap items-end gap-3">
+                  <label className="block w-32 shrink-0"><span className="text-xs text-neutral-500">mode</span>
                     <select value={d.mode} onChange={(e) => set(s.id, { mode: e.target.value as 't2i' | 'edit' })} className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1"><option value="t2i">t2i</option><option value="edit">edit</option></select></label>
                   {d.mode === 'edit' && (() => {
                     // Which edit workflow this scene uses. identity_edit conditions a fresh render
@@ -546,7 +547,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                     const keepsImage = !!chosen && !chosen.params?.width      // sizes itself from the reference
                     const takesNegative = !chosen || !!chosen.params?.negative
                     return (
-                      <div className="col-span-2 space-y-1">
+                      <div className="min-w-0 flex-1 space-y-1">
                         <label className="flex flex-wrap items-center gap-2">
                           <span className="text-xs text-neutral-500">edit with</span>
                           <select value={d.edit_workflow} data-testid={`edit-workflow-${s.index}`}
@@ -580,6 +581,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                       </div>
                     )
                   })()}
+                  </div>
                   {d.mode === 'edit' && !assetRefs && (
                     <label className="block"><span className="text-xs text-neutral-500">reference paths (one per line)</span>
                       <textarea value={d.references} onChange={(e) => set(s.id, { references: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1 font-mono text-xs" /></label>

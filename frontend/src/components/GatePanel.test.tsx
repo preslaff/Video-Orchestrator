@@ -468,6 +468,21 @@ describe('GatePanel per-scene edit workflow', () => {
       .toMatchObject({ edit_workflow: 'kv_edit', edit_base: 'keyframe' })
   })
 
+  it('keeps mode, the workflow selector and the references laid out as one row plus a block', async () => {
+    // The row used to be a two-column grid [mode | references]; the full-width workflow block
+    // pushed the references into the 8rem column, squashing them to 128px.
+    stub([])
+    render(<QueryClientProvider client={new QueryClient()}><GatePanel job={editable} assets={assets} /></QueryClientProvider>)
+    const select = await screen.findByTestId('edit-workflow-0')
+    const row = select.closest('div.flex')!                       // mode + "edit with" share a flex row
+    const mode = screen.getAllByRole('combobox').find((el) => el !== select)!
+    expect(row).toContainElement(mode)                            // they sit side by side
+    // …and the references live outside that row, at full width.
+    const refs = screen.getByTestId('refs-0-choose')
+    expect(row.contains(refs)).toBe(false)
+    expect(refs.closest('.grid')).toBeNull()
+  })
+
   it('hides the workflow selector on a t2i scene', async () => {
     stub([])
     const t2i = { ...editable, scenes: [scene(0, { keyframe_path: '/k0.png' })] } as unknown as JobPublic
