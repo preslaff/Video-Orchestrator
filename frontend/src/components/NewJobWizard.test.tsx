@@ -121,3 +121,83 @@ describe('NewJobWizard', () => {
     await waitFor(() => expect((screen.getByTestId('project') as HTMLSelectElement).value).toBe('p1'))
   })
 })
+
+const ASSET = (id: string, label: string) => ({
+  id, kind: 'product', name: `${id}.png`, label, label_source: 'human', note_caption: 'a flacon',
+  note_tags: [], note_text: '', describe_state: '', describe_error: '', sha256: '', created_at: '',
+  path: `/a/${id}.png`, url: `/file/${id}.png`, thumb_url: `/thumb/${id}.png`,
+})
+
+describe('NewJobWizard animating existing images', () => {
+  beforeEach(() => push.mockReset())
+  afterEach(() => vi.unstubAllGlobals())
+
+  /** Like mockFetch, but with a project that actually holds assets to animate. */
+  function mockWithAssets() {
+    const posts: { url: string; body: unknown }[] = []
+    const project = { id: 'p1', slug: 'perfume', name: 'Perfume', brand_notes: '', style_notes: '',
+      default_profile_id: 'cinematic_16x9', export_root: '', export_root_effective: '/x',
+      describe_hint: '', assets: [ASSET('a', 'stone'), ASSET('b', 'silk')], created_at: '',
+      updated_at: '', n_jobs: 0 }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const url = new URL(raw, 'http://localhost').pathname
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+      const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } })
+      if (url === '/api/projects') return json([{ ...project, n_assets: 2, last_job_at: null }])
+      if (url === '/api/projects/p1') return json(project)
+      if (url.startsWith('/api/profiles')) return json([PROFILE])
+      if (url.startsWith('/api/setup/env')) return json({ ok: true, status: 'ok', checks: [], checked_at: '', duration_ms: 1, profile_id: null, deep: false })
+      if (url === '/api/jobs' && method === 'POST') {
+        posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : await (input as Request).json() })
+        return json({ id: 'job-2', status: 'pending', scenes: [] })
+      }
+      return json({ error: { code: 'not_found', message: url } })
+    }))
+    return posts
+  }
+
+  it('asks for images instead of an idea and posts them in click order', async () => {
+    const posts = mockWithAssets()
+    const user = userEvent.setup()
+    renderWizard()
+    await screen.findByRole('option', { name: /Perfume/ })      // the project list has arrived
+    await user.selectOptions(screen.getByTestId('project'), 'p1')
+    await user.click(screen.getByText('Next'))          // project -> profile
+    await screen.findByText('Cinematic 16:9')
+    await user.click(screen.getByText('Next'))          // profile -> brief
+
+    await user.click(screen.getByTestId('source-animate'))
+    expect(screen.queryByTestId('mode')).toBeNull()      // storyboard-only fields step aside
+    expect(screen.getByText(/Direction \(tone and pace/)).toBeInTheDocument()
+
+    await user.click(await screen.findByTestId('animate-b'))   // click order = play order
+    await user.click(screen.getByTestId('animate-a'))
+    await user.click(screen.getByText('Next'))
+    await user.click(screen.getByTestId('submit'))
+
+    await waitFor(() => expect(posts).toHaveLength(1))
+    const body = posts[0].body as { keyframe_asset_ids: string[]; reference_asset_ids: string[]; idea: string }
+    expect(body.keyframe_asset_ids).toEqual(['b', 'a'])
+    expect(body.reference_asset_ids).toEqual([])
+  })
+
+  it('will not animate without images, or with a face swap on', async () => {
+    mockWithAssets()
+    const user = userEvent.setup()
+    renderWizard()
+    await screen.findByRole('option', { name: /Perfume/ })      // the project list has arrived
+    await user.selectOptions(screen.getByTestId('project'), 'p1')
+    await user.click(screen.getByText('Next'))
+    await screen.findByText('Cinematic 16:9')
+    await user.click(screen.getByText('Next'))
+    await user.click(screen.getByTestId('source-animate'))
+    await user.click(screen.getByText('Next'))
+    expect(await screen.findByText('Pick at least one image to animate.')).toBeInTheDocument()
+
+    await user.click(screen.getByText('3. Brief'))
+    await user.selectOptions(screen.getByTestId('face_swap'), 'on')
+    await user.click(screen.getByText('Next'))
+    expect(await screen.findByText(/would paste a face onto your images/)).toBeInTheDocument()
+  })
+})

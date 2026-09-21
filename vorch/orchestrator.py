@@ -158,6 +158,7 @@ class Orchestrator:
         autonomy: str = "semi",
         mode: str = "t2i",
         reference_images: list[str] | None = None,
+        keyframe_asset_ids: list[str] | None = None,
         project_id: str | None = None,
     ) -> Job:
         """Create and persist a fresh Job.
@@ -203,6 +204,7 @@ class Orchestrator:
             face_swap=self.face_swap,
             mode=mode,
             reference_images=refs,
+            keyframe_asset_ids=list(keyframe_asset_ids or []),
             project_id=project_id,
             profile_id=self.profile.id if self.profile is not None else None,
             profile=self.profile.snapshot() if self.profile is not None else None,
@@ -227,7 +229,10 @@ class Orchestrator:
         # phase returns, all the work is done and a late stop must not discard it.
         if not job.scenes:
             cancel.check()
-            self._phase_storyboard(job)
+            if job.keyframe_asset_ids:
+                self._phase_assets(job)      # the keyframes exist already: only the motion is new
+            else:
+                self._phase_storyboard(job)
         if self._gate(job, GATE_STORYBOARD):
             return job
 
@@ -504,6 +509,71 @@ class Orchestrator:
             self.store.log_decision(Decision(
                 job_id=job.id, scene_index=scenes[pos].index, phase="storyboard", attempt=1, action="suggested",
                 reason=f"reference {pick.asset_id} ({pick.fit}): {pick.why}"[:500],
+            ))
+
+    def _phase_assets(self, job: Job) -> None:
+        """Build the job from images made elsewhere: one scene per asset, in the given order.
+
+        Each asset becomes a scene whose keyframe is that image (a ``source="user"`` variant, so
+        the keyframes phase skips it entirely) and whose motion prompt Gemma writes **from the
+        picture** — a caption cannot say where the light falls or what has room to move. Resumable:
+        a scene that already exists is left alone.
+        """
+        project = projects_mod.load(self.store, job.project_id) if job.project_id else None
+        if project is None:
+            raise ValueError("animating project assets needs a project")
+        self._event(job, "phase", phase="storyboard", total=len(job.keyframe_asset_ids))
+        context = storyboard.PromptContext.from_params(self.params)
+        for position, asset_id in enumerate(job.keyframe_asset_ids):
+            cancel.check()
+            asset = project.asset(asset_id)
+            if asset is None:
+                raise ValueError(f"unknown project asset {asset_id!r}")
+            note = asset.note or {}
+            scene = Scene(
+                index=position,
+                description=str(note.get("caption", "") or asset.label or asset.name),
+                character=", ".join(str(s) for s in (note.get("subjects") or [])[:3]),
+                setting=str(note.get("setting", "") or ""),
+                mood=" ".join(str(x) for x in (note.get("time_of_day"), note.get("weather")) if x and x != "unknown"),
+            )
+            job.scenes.append(scene)
+            self._event(job, "step", step="keyframe", index=position,
+                        detail=f"installing {asset.label or asset.name}")
+            self._warn_on_crop(job, scene, asset)
+            path, _ = self._install_user_keyframe(job, scene, asset_id)
+            scene.variants.append(Variant(path=str(path), source="user", asset_id=asset_id,
+                                          created_at=_now(), batch=scene.regenerations))
+            scene.keyframe_path = str(path)
+            scene.status = SceneStatus.KEYFRAME
+            self.store.save_job(job)          # persist per scene: the vision pass is slow
+            self._event(job, "keyframe", index=position, path=scene.keyframe_path)
+
+            self._event(job, "step", step="prompts", index=position,
+                        detail="Gemma watches the frame and writes its motion")
+            pair = storyboard.motion_from_image(scene.keyframe_path, direction=job.idea, context=context)
+            scene.animation_prompt, scene.animation_negative = pair.positive, pair.negative
+            self.store.save_job(job)
+        job.n_scenes = len(job.scenes)
+        self.store.log_decision(Decision(
+            job_id=job.id, scene_index=None, phase="storyboard", attempt=1, action="generated",
+            reason=f"{len(job.scenes)} scenes from project assets",
+        ))
+        self._event(job, "storyboard", scenes=len(job.scenes))
+
+    def _warn_on_crop(self, job: Job, scene: Scene, asset) -> None:
+        """Say so when an asset does not share the profile's aspect: ``fit_image`` centre-crops,
+        and losing the sides of a product shot silently is the wrong kind of surprise."""
+        try:
+            info = media.probe(asset.path)
+        except (media.MediaError, FileNotFoundError, OSError) as e:
+            raise ValueError(f"asset {asset.label or asset.name!r} cannot be read: {e}") from None
+        want_w, want_h = self.params.keyframe_size
+        if info.width and info.height and abs(info.width / info.height - want_w / want_h) > 0.02:
+            self.store.log_decision(Decision(
+                job_id=job.id, scene_index=scene.index, phase="keyframe", attempt=1, action="warning",
+                reason=(f"{asset.label or asset.name} is {info.width}x{info.height}; it will be "
+                        f"centre-cropped to {want_w}x{want_h}"),
             ))
 
     def _assign_scene_assets(self, job: Job, scene: Scene, brief, project) -> None:

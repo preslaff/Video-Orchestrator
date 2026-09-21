@@ -6,6 +6,7 @@ import { errorDetails, errorMessage } from '@/api/client'
 import type { JobSpec, OutputProfile } from '@/api/types'
 import { useCreateJob } from '@/hooks/useJobs'
 import { useEnv, useProfiles, useProject, useProjects, type EnvReport } from '@/hooks/useSetup'
+import { AssetPicker } from '@/components/AssetPicker'
 import { EnvSummary } from '@/components/EnvSummary'
 import { ZoomButton, Zoomable } from '@/components/Lightbox'
 import { Button, Card, ErrorBox } from '@/components/ui'
@@ -35,6 +36,10 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
   const [seed, setSeed] = useState<number>(0)
   const [autonomy, setAutonomy] = useState<'semi' | 'full'>('semi')
   const [mode, setMode] = useState<'t2i' | 'edit'>('t2i')
+  // "generate": vorch writes a storyboard and makes the keyframes. "animate": the keyframes
+  // already exist as project assets — one scene each, and only the motion is written.
+  const [source, setSource] = useState<'generate' | 'animate'>('generate')
+  const [animateIds, setAnimateIds] = useState<string[]>([])
   const [refIds, setRefIds] = useState<string[]>([])
   const [masterFace, setMasterFace] = useState('')
   const [faceSwap, setFaceSwap] = useState<'profile' | 'on' | 'off'>('profile')
@@ -54,7 +59,7 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
     if (!v?.width || !v.height || !v.length) return null
     const est = estimateClip({ width: v.width, height: v.height, length: v.length, workflow: v.workflow })
     if (!est) return null
-    const scenes = nScenes === '' ? null : Number(nScenes)
+    const scenes = source === 'animate' ? (animateIds.length || null) : (nScenes === '' ? null : Number(nScenes))
     const warning = vramWarning(v.width, v.height, v.length)
     return (
       <span className={warning ? 'text-amber-800' : undefined}>
@@ -72,11 +77,18 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
 
   const problems = useMemo(() => {
     const out: string[] = []
-    if (!idea.trim()) out.push('An idea is required.')
-    if (swapOn && !masterFace && !masterAsset) out.push('Face swap is on but there is no master face (add one to the project or paste a path).')
-    if (mode === 'edit' && refIds.length === 0) out.push('Edit mode needs at least one reference asset.')
+    if (source === 'animate') {
+      if (!projectId) out.push('Animating your own images needs a project.')
+      if (animateIds.length === 0) out.push('Pick at least one image to animate.')
+      // Their image *is* the keyframe; a swap would paste a face onto it.
+      if (swapOn) out.push('Turn face swap off: it would paste a face onto your images.')
+    } else {
+      if (!idea.trim()) out.push('An idea is required.')
+      if (swapOn && !masterFace && !masterAsset) out.push('Face swap is on but there is no master face (add one to the project or paste a path).')
+      if (mode === 'edit' && refIds.length === 0) out.push('Edit mode needs at least one reference asset.')
+    }
     return out
-  }, [idea, swapOn, masterFace, masterAsset, mode, refIds])
+  }, [idea, swapOn, masterFace, masterAsset, mode, refIds, source, projectId, animateIds])
 
   const envFailures = env.data?.checks.filter((c) => c.status === 'fail') ?? []
   const blocked = problems.length > 0 || (envFailures.length > 0 && !force)
@@ -92,8 +104,9 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
     project_id: projectId || null,
     profile_id: profileId || null,
     mode,
-    reference_asset_ids: mode === 'edit' ? refIds : [],
+    reference_asset_ids: source === 'generate' && mode === 'edit' ? refIds : [],
     reference_images: [],
+    keyframe_asset_ids: source === 'animate' ? animateIds : [],
     master_face: masterFace,
     face_swap: faceSwap === 'profile' ? null : faceSwap === 'on',
     evaluate: evaluate === 'profile' ? null : evaluate === 'on',
@@ -167,27 +180,55 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
       {step === 2 && (
         <Card title="Brief">
           <div className="grid gap-3 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <span className="text-sm font-medium">Where do the keyframes come from?</span>
+              <div className="mt-1 flex flex-wrap gap-2">
+                {([['generate', 'Generate images', 'vorch writes a storyboard and makes every keyframe'],
+                   ['animate', 'Animate my images', 'one scene per asset you pick; only the motion is written']] as const).map(([value, label, hint]) => (
+                  <button key={value} type="button" data-testid={`source-${value}`} onClick={() => setSource(value)}
+                    className={`flex-1 rounded border px-3 py-2 text-left text-sm ${source === value ? 'border-neutral-900 bg-neutral-900 text-white' : 'border-neutral-300 bg-white hover:border-neutral-500'}`}>
+                    <span className="font-medium">{label}</span>
+                    <span className={`block text-xs ${source === value ? 'text-neutral-300' : 'text-neutral-500'}`}>{hint}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
             <label className="block text-sm md:col-span-2">
-              <span className="font-medium">Idea</span>
-              <textarea data-testid="idea" value={idea} onChange={(e) => setIdea(e.target.value)} rows={3} className="mt-1 block w-full rounded border border-neutral-300 px-2 py-1" placeholder="A woman kneads bread at dawn in a stone kitchen…" />
+              <span className="font-medium">{source === 'animate' ? 'Direction (tone and pace — Gemma writes each motion from the picture)' : 'Idea'}</span>
+              <textarea data-testid="idea" value={idea} onChange={(e) => setIdea(e.target.value)} rows={source === 'animate' ? 2 : 3} className="mt-1 block w-full rounded border border-neutral-300 px-2 py-1"
+                placeholder={source === 'animate' ? 'intimate, slow, warm — a 15 second teaser' : 'A woman kneads bread at dawn in a stone kitchen…'} />
             </label>
-            <label className="block text-sm">
+            {source === 'animate' && (
+              <div className="md:col-span-2">
+                <span className="text-sm font-medium">Images to animate — click in the order they should play</span>
+                {!projectId && <p className="text-xs text-amber-700">Pick a project in step 1 to choose its assets.</p>}
+                {projectId && (
+                  <AssetPicker assets={refAssets} selected={animateIds} multi onChange={setAnimateIds}
+                    testId="animate" />
+                )}
+                <p className="mt-1 text-xs text-neutral-500">
+                  {animateIds.length} selected · each becomes one scene, cropped to the profile&apos;s
+                  {' '}{profile?.keyframe?.width}×{profile?.keyframe?.height} still
+                </p>
+              </div>
+            )}
+            {source === 'generate' && <label className="block text-sm">
               <span className="font-medium">Style (free text, goes first in every keyframe prompt)</span>
               <input value={style} onChange={(e) => setStyle(e.target.value)} className="mt-1 block w-full rounded border border-neutral-300 px-2 py-1" placeholder="impasto oil painting / 35mm film still / phone photo" />
-            </label>
+            </label>}
             <div className="grid grid-cols-3 gap-2">
-              <label className="block text-sm"><span className="font-medium">Scenes</span><input type="number" min={1} max={12} value={nScenes} onChange={(e) => setNScenes(e.target.value === '' ? '' : Number(e.target.value))} className="mt-1 block w-full rounded border border-neutral-300 px-2 py-1" placeholder="auto" /></label>
+              {source === 'generate' && <label className="block text-sm"><span className="font-medium">Scenes</span><input type="number" min={1} max={12} value={nScenes} onChange={(e) => setNScenes(e.target.value === '' ? '' : Number(e.target.value))} className="mt-1 block w-full rounded border border-neutral-300 px-2 py-1" placeholder="auto" /></label>}
               <label className="block text-sm"><span className="font-medium">Seed</span><input type="number" min={0} value={seed} onChange={(e) => setSeed(Number(e.target.value) || 0)} className="mt-1 block w-full rounded border border-neutral-300 px-2 py-1" /><span className="text-xs text-neutral-500">0 = random</span></label>
               <label className="block text-sm"><span className="font-medium">Autonomy</span><select value={autonomy} onChange={(e) => setAutonomy(e.target.value as 'semi' | 'full')} className="mt-1 block w-full rounded border border-neutral-300 bg-white px-2 py-1"><option value="semi">semi (gates)</option><option value="full">full</option></select></label>
             </div>
-            <label className="block text-sm">
+            {source === 'generate' && <label className="block text-sm">
               <span className="font-medium">Keyframe mode</span>
               <select data-testid="mode" value={mode} onChange={(e) => setMode(e.target.value as 't2i' | 'edit')} className="mt-1 block w-full rounded border border-neutral-300 bg-white px-2 py-1">
                 <option value="t2i">text-to-image (new scenes)</option>
                 <option value="edit">reference-locked edit (same composition, light edit)</option>
               </select>
-            </label>
-            {mode === 'edit' && (
+            </label>}
+            {source === 'generate' && mode === 'edit' && (
               <div className="text-sm md:col-span-2">
                 <span className="font-medium">References (project assets)</span>
                 <span className="ml-2 text-xs text-neutral-500">{refIds.length} selected · order = click order; the first is the primary reference</span>
@@ -239,11 +280,15 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
       {step === 3 && (
         <Card title="Review & submit">
           <dl className="grid gap-x-6 gap-y-1 text-sm md:grid-cols-[10rem_1fr]">
-            <dt className="text-neutral-500">idea</dt><dd>{idea || <em className="text-red-700">missing</em>}</dd>
+            <dt className="text-neutral-500">{source === 'animate' ? 'direction' : 'idea'}</dt>
+            <dd>{idea || (source === 'animate' ? <em className="text-neutral-500">none</em> : <em className="text-red-700">missing</em>)}</dd>
             <dt className="text-neutral-500">project</dt><dd>{project.data?.name ?? '—'}</dd>
             <dt className="text-neutral-500">profile</dt><dd>{profile ? `${profile.name} — ${profileSummary(profile)}` : effectiveProfileId}</dd>
-            <dt className="text-neutral-500">scenes / seed</dt><dd>{nScenes || 'auto'} / {seed || 'random'} · {autonomy}</dd>
-            <dt className="text-neutral-500">mode</dt><dd>{mode}{mode === 'edit' ? ` (${refIds.length} ref)` : ''}</dd>
+            <dt className="text-neutral-500">scenes / seed</dt>
+            <dd>{source === 'animate' ? `${animateIds.length} (your images)` : (nScenes || 'auto')} / {seed || 'random'} · {autonomy}</dd>
+            <dt className="text-neutral-500">mode</dt>
+            <dd>{source === 'animate' ? 'animate my images — no keyframes generated'
+                 : `${mode}${mode === 'edit' ? ` (${refIds.length} ref)` : ''}`}</dd>
             <dt className="text-neutral-500">face swap</dt><dd>{swapOn ? `on (${masterFace || masterAsset?.name || 'no face!'})` : 'off'}</dd>
             {renderCost && <><dt className="text-neutral-500">render time</dt><dd data-testid="job-cost">{renderCost}</dd></>}
           </dl>

@@ -29,6 +29,9 @@ class JobSpec(BaseModel):
     mode: Literal["t2i", "edit"] = "t2i"
     reference_asset_ids: list[str] = []
     reference_images: list[str] = []
+    # Animate images made elsewhere: one scene per asset, in this order, each installed as that
+    # scene's keyframe. No storyboard is written; `idea` becomes the overall direction.
+    keyframe_asset_ids: list[str] = []
     master_face: str = ""          # explicit path; else the project's master_face asset
     max_attempts: int | None = None
     evaluate: bool | None = None

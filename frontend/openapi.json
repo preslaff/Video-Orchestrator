@@ -3665,6 +3665,14 @@
             "title": "Reference Images",
             "default": []
           },
+          "keyframe_asset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keyframe Asset Ids",
+            "default": []
+          },
           "master_face": {
             "type": "string",
             "title": "Master Face",

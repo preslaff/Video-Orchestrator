@@ -240,3 +240,27 @@ def test_long_calls_get_a_timeout_that_covers_the_generation(monkeypatch):
     generate_storyboard("idea", n_scenes=2)
     assert 300 <= seen["timeout"] < 400                 # short calls stay near the old ceiling
     assert storyboard.call_timeout(100, "x" * 30_000) > storyboard.call_timeout(100)  # a long prompt counts
+
+
+def test_motion_from_image_looks_at_the_frame_and_carries_the_direction(monkeypatch):
+    """Keyframes made elsewhere have no storyboard behind them: the motion comes from the picture."""
+    seen = {}
+
+    def fake_vision(system, user, images, **kw):
+        seen.update(system=system, user=user, images=images, **kw)
+        return '{"positive": "light drifts across the glass, slow push in, cinematic", "negative": "jitter"}'
+
+    monkeypatch.setattr(storyboard.gemma, "complete_vision", fake_vision)
+    ctx = storyboard.PromptContext(aspect="9:16", clip_seconds=3.06, wan_negative="morphing")
+    pair = storyboard.motion_from_image("/media/bottle.png", direction="intimate, slow, warm", context=ctx)
+
+    assert pair.positive.startswith("light drifts") and "morphing" in pair.negative
+    assert seen["images"] == ["/media/bottle.png"]           # the frame itself, not a description
+    assert "intimate, slow, warm" in seen["user"] and "3.06s" in seen["user"]
+    assert seen["temperature"] == storyboard.GEN_TEMPERATURE
+
+
+def test_motion_from_image_rejects_an_unparseable_answer(monkeypatch):
+    monkeypatch.setattr(storyboard.gemma, "complete_vision", lambda *a, **k: "not json")
+    with pytest.raises(StoryboardError):
+        storyboard.motion_from_image("/media/x.png")

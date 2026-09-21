@@ -134,7 +134,7 @@ the UI).
 | Route | Purpose |
 |---|---|
 | `/jobs` | All jobs with id, status, project, kind and profile name; filters by project, unassigned and status, kept in the URL (`/jobs?project_id=…`, `?unassigned=1`); live status badges; delete. |
-| `/jobs/new` | The **new-job wizard**: project → profile → brief (idea, style, scenes, seed, autonomy, keyframe mode + references, face swap, evaluation) → review. Submission is blocked, with reasons, while the environment check fails (a *force* switch overrides). |
+| `/jobs/new` | The **new-job wizard**, in two shapes. *Generate images*: project → profile → brief (idea, style, scenes, seed, autonomy, keyframe mode + references, face swap, evaluation) → review. *Animate my images*: the keyframes already exist as project assets — pick them in playing order, give a one-line **direction**, and vorch makes one scene per asset with that image installed as its keyframe and the motion written by Gemma **looking at the frame**. No storyboard, no keyframe generation; face swap must be off, and an asset of another aspect is flagged before it is centre-cropped. Submission is blocked, with reasons, while the environment check fails (a *force* switch overrides). |
 | `/jobs/[id]` | The **job page**: progress panel, gate/review panel, scene grid (keyframes, variants, clips), assemble panel, export panel, collapsible decision log and provenance. Everything updates live over SSE; the stream resumes across approval gates and reloads. |
 | `/setup/env` | Environment check with a re-run button and the effective configuration. |
 | `/setup/workflows` | Registered ComfyUI workflows, their parameters and requirements; how to add one. |

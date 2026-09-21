@@ -398,6 +398,16 @@ sidecar manifest).
   separate call rather than a storyboard field so the storyboard prompt stays small at 40 scenes;
   the storyboard's own token budget now scales with the scene count (~160 per scene).
 
+- **Animate-only jobs** (`Job.keyframe_asset_ids`, `Orchestrator._phase_assets`): when the keyframes
+  were made elsewhere, `_run` builds the scenes from project assets instead of writing a storyboard
+  — one scene per asset, its image installed by `_install_user_keyframe` as a `source="user"`
+  variant, which is exactly what makes `_scene_needs_keyframes` skip it. The motion comes from
+  `storyboard.motion_from_image`, a **vision** call on the frame itself (a caption cannot say where
+  the light falls or what has room to move); the job's `idea` becomes the one-line direction. The
+  phase persists per scene, so a slow vision pass is resumable, and it logs a warning when an
+  asset's aspect differs from the profile's, because `media.fit_image` centre-crops in silence.
+  Submitting with face swap on is refused: the user's own image would be ReActored.
+
 - **Per-scene edit workflow** (`Scene.edit_workflow`, `edit_base`, `edit_base_path`): the profile's
   `edit_workflow` is the default, and a scene may override it — `Orchestrator.scene_params` returns
   `params.with_(edit_workflow=…)`, used for **staging as well as generating**, because the upload

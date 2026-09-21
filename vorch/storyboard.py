@@ -337,6 +337,43 @@ def animation_prompt(
     return PromptPair(positive=pair.positive, negative=merge_negatives(pair.negative, ctx.wan_negative))
 
 
+def motion_from_image(
+    image_path: str | Path,
+    *,
+    direction: str = "",
+    context: PromptContext | None = None,
+    timeout: int | None = None,
+) -> PromptPair:
+    """Write a Wan motion prompt by **looking at the frame**, not at a description of it.
+
+    For keyframes made elsewhere there is no storyboard to write the motion from, and a one-line
+    caption loses what a clip needs: where the light falls, what could plausibly move, where the
+    camera has room. ``direction`` is the job's one-line intent ("intimate, slow, warm"), which
+    sets the tone without inventing content that is not in the picture.
+    """
+    ctx = context or DEFAULT_CONTEXT
+    negative = ctx.wan_negative or DEFAULT_WAN_NEGATIVE
+    user = (
+        "Виж кадъра и опиши как да се анимира.\n"
+        + (f"Обща посока от режисьора: {direction}\n" if direction.strip() else "")
+        + f"Клип: ~{ctx.clip_seconds:g}s, {ctx.aspect} ({ctx.orientation}). Движение: {ctx.motion_hint}.\n"
+        "Опиши САМО движение и камера — това, което вече е в кадъра, нищо ново. "
+        "Леко, локализирано движение работи най-добре на 16GB VRAM.\n"
+        f'Завърши с camera move + "{ctx.wan_positive}".\n'
+        f'Върни JSON: {{"positive": "...", "negative": "{negative}"}}'
+    )
+    raw = gemma.complete_vision(
+        _SYSTEM_ANIMATION, user, [image_path], max_tokens=500, temperature=GEN_TEMPERATURE,
+        timeout=timeout or call_timeout(500, _SYSTEM_ANIMATION + user),
+    )
+    data = _parse(raw, "animation (vision)")
+    try:
+        pair = PromptPair.model_validate(data)
+    except ValidationError as e:
+        raise StoryboardError(f"animation (vision): prompt failed validation: {e}") from e
+    return PromptPair(positive=pair.positive, negative=merge_negatives(pair.negative, ctx.wan_negative))
+
+
 # --- internals ---------------------------------------------------------------
 
 

@@ -55,6 +55,7 @@ async def create_job(
             mode=spec.mode,
             reference_asset_ids=spec.reference_asset_ids,
             reference_images=spec.reference_images,
+            keyframe_asset_ids=spec.keyframe_asset_ids,
             force=spec.force,
         )
     except EnvironmentNotReady as e:

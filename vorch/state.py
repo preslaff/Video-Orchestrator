@@ -189,6 +189,9 @@ class Job:
     face_swap: bool = True
     mode: str = "t2i"                        # default keyframe mode for new scenes
     reference_images: list[str] = field(default_factory=list)
+    # Project assets to animate: one scene per asset, its image installed as that scene's
+    # keyframe. Set when the keyframes were made elsewhere, so no storyboard is written.
+    keyframe_asset_ids: list[str] = field(default_factory=list)
     project_id: str | None = None
     profile_id: str | None = None
     profile: dict | None = None            # frozen OutputProfile snapshot at submit
@@ -232,6 +235,7 @@ def new_job(
     face_swap: bool = True,
     mode: str = "t2i",
     reference_images: list[str] | None = None,
+    keyframe_asset_ids: list[str] | None = None,
     project_id: str | None = None,
     profile_id: str | None = None,
     profile: dict | None = None,
@@ -253,6 +257,7 @@ def new_job(
         face_swap=face_swap,
         mode=mode,
         reference_images=list(reference_images or []),
+        keyframe_asset_ids=list(keyframe_asset_ids or []),
         project_id=project_id,
         profile_id=profile_id,
         profile=profile,
@@ -439,6 +444,7 @@ def job_to_dict(job: Job) -> dict:
         "face_swap": job.face_swap,
         "mode": job.mode,
         "reference_images": list(job.reference_images),
+        "keyframe_asset_ids": list(job.keyframe_asset_ids),
         "project_id": job.project_id,
         "profile_id": job.profile_id,
         "profile": job.profile,
@@ -466,6 +472,7 @@ def job_from_dict(d: dict) -> Job:
         face_swap=d.get("face_swap", True),
         mode=d.get("mode", "t2i"),
         reference_images=list(d.get("reference_images", []) or []),
+        keyframe_asset_ids=list(d.get("keyframe_asset_ids", []) or []),
         project_id=d.get("project_id"),
         profile_id=d.get("profile_id"),
         profile=d.get("profile"),

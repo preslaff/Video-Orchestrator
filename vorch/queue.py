@@ -136,6 +136,7 @@ class JobManager:
         mode: str = "t2i",
         reference_asset_ids: list[str] | None = None,
         reference_images: list[str] | None = None,
+        keyframe_asset_ids: list[str] | None = None,
         force: bool = False,
     ) -> Job:
         """Resolve profile/project/assets, gate on the environment, create + run the job.
@@ -152,10 +153,23 @@ class JobManager:
         )
         if self._env_check is not None and not force:
             self._env_check(sub.profile, sub.project)
+        animate = list(keyframe_asset_ids or [])
+        if animate:
+            # These images are the keyframes. A face swap would ReActor a face onto them, and
+            # an unknown id must fail here rather than half-way through the run.
+            if sub.project is None:
+                raise ValueError("animating assets needs a project")
+            if orch_face_swap(sub):
+                raise ValueError("turn face swap off to animate your own images "
+                                 "(it would paste a face onto them)")
+            unknown = [a for a in animate if sub.project.asset(a) is None]
+            if unknown:
+                raise KeyError(unknown[0])
         orch = Orchestrator(self.store, profile=sub.profile, n_scenes=n_scenes, seed=seed)
         job = orch.create_job(
             idea, style=style, master_face=sub.master_face, autonomy=autonomy, mode=mode,
-            reference_images=sub.reference_images, project_id=sub.project_id,
+            reference_images=sub.reference_images, keyframe_asset_ids=animate,
+            project_id=sub.project_id,
         )
         prev = self._start(job)
         self._spawn(self._execute(job, lambda o, j: o.run(j), prev))
@@ -724,3 +738,9 @@ def _scene_prompts(orch: Orchestrator, job: Job, scene):
                                   character=scene.character, setting=scene.setting, mood=scene.mood)
     return (storyboard.keyframe_prompt(brief, style=job.style, context=context),
             storyboard.animation_prompt(brief, context=context))
+
+
+def orch_face_swap(sub) -> bool:
+    """Whether this submission would run the face swap (profile default, or the explicit flag)."""
+    swap = getattr(sub.profile, "face_swap", None)
+    return bool(getattr(swap, "enabled", False))

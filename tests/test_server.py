@@ -1110,3 +1110,26 @@ def test_version_detail_reads_the_record_then_the_sidecar(client, tmp_path, monk
 
     assert client.get(f"/api/jobs/{job.id}/scenes/0/versions/nope").status_code == 404
     assert client.get(f"/api/jobs/{job.id}/scenes/9/versions/v1").status_code == 404
+
+
+def test_animate_assets_job_refuses_a_face_swap_and_an_unknown_asset(client, tmp_path, monkeypatch):
+    """Their own images are the keyframes: a swap would paste a face onto them."""
+    from vorch import config, projects as projects_mod
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects_mod.save(client.store, projects_mod.new_project(name="Perfume Co"))
+    asset = projects_mod.add_asset(p, b"x", kind="product", name="bottle.png")
+    projects_mod.save(client.store, p)
+
+    body = {"idea": "intimate, slow", "project_id": p.id, "keyframe_asset_ids": [asset.id],
+            "face_swap": True, "master_face": client.master}
+    r = client.post("/api/jobs", json=body)
+    assert r.status_code == 400 and "face swap off" in r.json()["error"]["message"]
+
+    body["face_swap"] = False
+    body["keyframe_asset_ids"] = ["ghost"]
+    assert client.post("/api/jobs", json=body).status_code == 400
+
+    body["keyframe_asset_ids"] = [asset.id]
+    ok = client.post("/api/jobs", json=body)
+    assert ok.status_code == 200 and ok.json()["project_id"] == p.id

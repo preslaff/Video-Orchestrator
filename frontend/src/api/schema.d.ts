@@ -1310,6 +1310,11 @@ export interface components {
              */
             reference_images: string[];
             /**
+             * Keyframe Asset Ids
+             * @default []
+             */
+            keyframe_asset_ids: string[];
+            /**
              * Master Face
              * @default
              */

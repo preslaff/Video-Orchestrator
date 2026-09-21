@@ -8,6 +8,8 @@ job, that approvals resume it, and that a reloaded job continues correctly.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from vorch import orchestrator as orch_mod
@@ -604,3 +606,98 @@ def test_failed_reference_hints_do_not_fail_the_storyboard(wired, tmp_path, monk
     o.run(job)
     assert job.status is JobStatus.NEEDS_APPROVAL and all(s.reference_suggestion is None for s in job.scenes)
     assert any("reference suggestions failed" in d.reason for d in store.decisions(job.id))
+
+
+# --- animating images made elsewhere ----------------------------------------------------
+
+
+def _assets_project(store, tmp_path, monkeypatch, n=2):
+    from vorch import config, media, projects
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    monkeypatch.setattr(media, "fit_image", lambda src, w, h, dest=None: Path(dest or f"{src}.fit"))
+    monkeypatch.setattr(media, "probe", lambda p: media.MediaInfo(576, 1024, 0.0, 0.0, 0, "png", False))
+    p = projects.new_project("Perfume")
+    made = []
+    for i in range(n):
+        a = projects.add_asset(p, b"x", kind="product", name=f"shot{i}.png")
+        projects.set_asset_note(p, a.id, {"caption": f"the flacon, take {i}", "setting": "cream stone",
+                                          "subjects": ["glass flacon", "amber liquid"],
+                                          "time_of_day": "day", "weather": "indoor"})
+        made.append(a)
+    projects.save(store, p)
+    return p, made
+
+
+def test_assets_become_scenes_with_their_own_keyframes_and_motion(wired, tmp_path, monkeypatch):
+    """The images are the keyframes: no keyframe is generated, and the motion is written
+    by looking at each frame."""
+    from vorch.storyboard import PromptPair
+
+    store, master, calls = wired
+    project, assets = _assets_project(store, tmp_path, monkeypatch)
+    seen: list[str] = []
+    monkeypatch.setattr(storyboard, "motion_from_image",
+                        lambda path, *, direction="", context=None, **kw:
+                        seen.append(f"{Path(path).name}|{direction}") or
+                        PromptPair(positive=f"motion for {Path(path).name}", negative="jitter"))
+
+    o = Orchestrator(store, n_scenes=None, face_swap=False, evaluate=False)
+    job = o.create_job("intimate, slow, warm", master_face="", autonomy="semi",
+                       project_id=project.id, keyframe_asset_ids=[a.id for a in assets])
+    o.run(job)
+
+    assert [s.index for s in job.scenes] == [0, 1] and job.n_scenes == 2
+    assert [s.description for s in job.scenes] == ["the flacon, take 0", "the flacon, take 1"]
+    assert [s.setting for s in job.scenes] == ["cream stone"] * 2
+    assert all(s.keyframe_path and s.variants[0].source == "user" for s in job.scenes)
+    assert [v.asset_id for s in job.scenes for v in s.variants] == [a.id for a in assets]
+    assert calls.get("keyframe", 0) == 0                     # nothing was generated
+    assert all(d.endswith("|intimate, slow, warm") for d in seen)   # the direction reached Gemma
+    assert [s.animation_prompt for s in job.scenes] == [f"motion for {Path(s.keyframe_path).name}"
+                                                        for s in job.scenes]
+    assert job.status is JobStatus.NEEDS_APPROVAL              # the gate reviews the clips to be
+    assert Orchestrator.pending_gate(job, store) == "storyboard"
+
+
+def test_a_resumed_asset_job_does_not_rebuild_its_scenes(wired, tmp_path, monkeypatch):
+    from vorch.storyboard import PromptPair
+
+    store, master, _ = wired
+    project, assets = _assets_project(store, tmp_path, monkeypatch, n=1)
+    monkeypatch.setattr(storyboard, "motion_from_image",
+                        lambda path, **kw: PromptPair(positive="drift", negative=""))
+    o = Orchestrator(store, face_swap=False, evaluate=False)
+    job = o.create_job("d", master_face="", autonomy="semi", project_id=project.id,
+                       keyframe_asset_ids=[assets[0].id])
+    o.run(job)
+    o.run(job)                                                # resume: same scenes, no duplicates
+    assert len(job.scenes) == 1
+
+
+def test_an_asset_of_another_aspect_warns_before_it_is_cropped(wired, tmp_path, monkeypatch):
+    from vorch import media
+    from vorch.storyboard import PromptPair
+
+    store, master, _ = wired
+    project, assets = _assets_project(store, tmp_path, monkeypatch, n=1)
+    # A portrait asset in a 16:9 profile: the sides of a product shot would vanish silently.
+    monkeypatch.setattr(media, "probe", lambda p: media.MediaInfo(1080, 1920, 0.0, 0.0, 0, "png", False))
+    monkeypatch.setattr(storyboard, "motion_from_image",
+                        lambda path, **kw: PromptPair(positive="drift", negative=""))
+    o = Orchestrator(store, face_swap=False, evaluate=False)
+    job = o.create_job("d", master_face="", autonomy="semi", project_id=project.id,
+                       keyframe_asset_ids=[assets[0].id])
+    o.run(job)
+    warning = [d for d in store.decisions(job.id) if d.action == "warning"]
+    assert warning and "1080x1920" in warning[0].reason and "centre-cropped" in warning[0].reason
+
+
+def test_an_unknown_asset_stops_the_job_before_it_renders(wired, tmp_path, monkeypatch):
+    store, master, _ = wired
+    project, _assets = _assets_project(store, tmp_path, monkeypatch, n=1)
+    o = Orchestrator(store, face_swap=False, evaluate=False)
+    job = o.create_job("d", master_face="", autonomy="full", project_id=project.id,
+                       keyframe_asset_ids=["ghost"])
+    with pytest.raises(ValueError, match="unknown project asset"):
+        o.run(job)
