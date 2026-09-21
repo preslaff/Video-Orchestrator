@@ -30,11 +30,13 @@ function PickSummary({ assets, ids, empty }: { assets: AssetOut[]; ids: string[]
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-1">
       {chosen.map((a, i) => (
-        <span key={a.id} className="flex max-w-48 items-center gap-1 rounded bg-neutral-100 px-1 py-0.5 text-xs" title={a.note_caption || a.label || a.name}>
+        <span key={a.id} className="flex max-w-56 items-center gap-1.5 rounded bg-neutral-100 px-1 py-0.5 text-xs" title={a.note_caption || a.label || a.name}>
           {chosen.length > 1 && <span className="text-neutral-500">{i + 1}.</span>}
+          {/* Big enough to recognise the photo at a glance — this is what the scene is being
+              generated from, and the label alone rarely tells two grey seas apart. */}
           <Zoomable items={[{ url: a.url, caption: a.label || a.name }]} className="shrink-0">
             {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
-            <img src={a.thumb_url || a.url} alt="" loading="lazy" className="h-6 w-6 rounded object-cover" />
+            <img src={a.thumb_url || a.url} alt="" loading="lazy" className="h-12 w-12 rounded object-cover" />
           </Zoomable>
           <span className="truncate">{a.label || a.name}</span>
         </span>
