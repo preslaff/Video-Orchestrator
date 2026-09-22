@@ -6,16 +6,17 @@ import type { AssetOut, DecisionOut, JobPublic, SceneEdit } from '@/api/types'
 import { AssetPicker } from '@/components/AssetPicker'
 import { Zoomable } from '@/components/Lightbox'
 import { MediaThumb } from '@/components/MediaThumb'
+import { LockRegions } from '@/components/LockRegions'
 import { VersionStrip } from '@/components/VersionStrip'
 import { profileSizes } from '@/components/SceneGrid'
 import { estimateClip, fmtRange } from '@/lib/render'
-import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneStructure, useUpdateScenes } from '@/hooks/useJobs'
+import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneLocks, useSceneStructure, useUpdateScenes } from '@/hooks/useJobs'
 import { useUploadAsset, useWorkflows } from '@/hooks/useSetup'
 import { Button, ErrorBox } from '@/components/ui'
 
 type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; edit_workflow: string; edit_base: '' | 'keyframe'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null }
 
-type PickerKind = 'refs' | 'identity' | 'image'
+type PickerKind = 'refs' | 'identity' | 'image' | 'locks'
 
 /** Above this many scenes the rows start collapsed (a 3-scene job stays as it was). */
 const AUTO_COLLAPSE_ABOVE = 6
@@ -214,6 +215,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   const upload = useUploadAsset(job.project_id ?? '')
   const removeVersion = useDeleteVersion(job.id)
   const saveAsset = useSaveSceneAsset(job.id, job.project_id)
+  const locks = useSceneLocks(job.id)
   const structure = useSceneStructure(job.id)
   // The registered edit workflows, so the scene selector needs no hard-coded names.
   const editWorkflows = useWorkflows('edit').data?.workflows ?? []
@@ -677,11 +679,34 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                   <div className="space-y-2" data-testid={`clip-cell-${s.index}`}>
                     <MediaThumb url={s.video_url} video width={clip?.[0]} height={clip?.[1]}
                       poster={s.swapped_url ?? s.keyframe_url} caption={`Scene ${s.index + 1} · clip`} />
-                    {locked && (
-                      <Button disabled={busy} onClick={() => regenerate(s.index, s.id, 'video')}
-                        title={`renders this scene's clip only${clipCost ? ` (${fmtRange(clipCost)} on ${clipCost.where})` : ''}, whatever the gate is waiting for`}>
-                        {s.video_path ? 'Re-animate this scene' : 'Animate this scene'}
-                      </Button>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {locked && (
+                        <Button disabled={busy} onClick={() => regenerate(s.index, s.id, 'video')}
+                          title={`renders this scene's clip only${clipCost ? ` (${fmtRange(clipCost)} on ${clipCost.where})` : ''}, whatever the gate is waiting for`}>
+                          {s.video_path ? 'Re-animate this scene' : 'Animate this scene'}
+                        </Button>
+                      )}
+                      {s.keyframe_url && (
+                        // A label the animator redraws comes back as a smear: mark it once and
+                        // those pixels are taken from the keyframe instead. No re-render needed.
+                        <button type="button" disabled={busy} data-testid={`lock-regions-${s.index}`}
+                          className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-50"
+                          title="mark the label, monogram or emblem the animator must not redraw"
+                          onClick={() => togglePicker(s.index, 'locks')}>
+                          {isOpen(s.index, 'locks')
+                            ? 'Cancel'
+                            : (s.locked_regions?.length
+                              ? `Locked: ${s.locked_regions.length} region${s.locked_regions.length > 1 ? 's' : ''}`
+                              : 'Lock the label…')}
+                        </button>
+                      )}
+                    </div>
+                    {locks.isError && locks.variables?.index === s.index && (
+                      <p className="text-xs text-red-700" data-testid={`lock-error-${s.index}`}>
+                        {isMissingRoute(locks.error)
+                          ? 'The server does not have this route — restart vorch serve (it is running older code).'
+                          : errorMessage(locks.error)}
+                      </p>
                     )}
                     <VersionStrip scene={s} kind="clip" jobId={job.id} disabled={busy}
                       onSelect={(id) => selectVersion(s.index, 'clip', id)}
@@ -690,6 +715,14 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                   </div>
                 )}
               </div>
+              {/* Full width: marking a label wants the frame as large as the row allows. */}
+              {isOpen(s.index, 'locks') && s.keyframe_url && (
+                <LockRegions url={s.swapped_url ?? s.keyframe_url} regions={s.locked_regions ?? []}
+                  busy={busy || locks.isPending} testId={`locks-${s.index}`}
+                  onCancel={() => togglePicker(s.index, 'locks')}
+                  onSave={(regions) => locks.mutate({ index: s.index, regions },
+                    { onSuccess: () => setOpenPicker(null) })} />
+              )}
               {/* Full width: the picker is a grid of its own and would be cramped in a half column. */}
               {isOpen(s.index, 'image') && (
                 <div>

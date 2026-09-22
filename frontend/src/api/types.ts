@@ -16,6 +16,7 @@ export type ProjectSummary = S['ProjectSummaryOut']
 export type AssetOut = S['AssetOut']
 export type SceneEdit = S['SceneEdit']
 export type SceneRegenerate = S['SceneRegenerate']
+export type LockedRegion = S['LockedRegion']
 export type Gate = 'storyboard' | 'keyframes'
 export type JobStatus = 'pending' | 'running' | 'needs_approval' | 'done' | 'failed' | 'cancelled'
 export type AssemblySpecIn = S['AssemblySpecIn']

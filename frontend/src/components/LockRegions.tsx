@@ -1,0 +1,125 @@
+'use client'
+
+import { useRef, useState } from 'react'
+import type { LockedRegion } from '@/api/types'
+import { Button } from './ui'
+
+/** Where a drag started and where it is now, in fractions of the frame. */
+interface Drag { x0: number; y0: number; x1: number; y1: number }
+
+const MIN_SIZE = 0.01   // a stray click is not a rectangle
+
+// A rectangle over a label does not need seventeen digits, and a tidy fraction survives a
+// round trip through JSON unchanged. `|| 0` also turns a -0 from the clamp back into 0.
+const round = (v: number) => Math.round(v * 1e4) / 1e4 || 0
+
+function toRegion(d: Drag): LockedRegion {
+  return {
+    x: round(Math.min(d.x0, d.x1)),
+    y: round(Math.min(d.y0, d.y1)),
+    w: round(Math.abs(d.x1 - d.x0)),
+    h: round(Math.abs(d.y1 - d.y0)),
+  }
+}
+
+function style(r: LockedRegion) {
+  return { left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%` }
+}
+
+/**
+ * Draw the parts of a keyframe the animator must not redraw.
+ *
+ * A video model rebuilds every frame from a latent compressed 8x in each direction, so printed
+ * type below roughly 32 px of cap height cannot survive it — a brand label comes back as a
+ * smear, wrong from the very first frame. Marking it here takes it out of the model's hands:
+ * those pixels are pasted back from this frame onto every frame of the clip.
+ */
+export function LockRegions({
+  url, regions, busy = false, onSave, onCancel, testId = 'locks',
+}: {
+  url: string
+  regions: LockedRegion[]
+  busy?: boolean
+  onSave: (regions: LockedRegion[]) => void
+  onCancel: () => void
+  testId?: string
+}) {
+  const [draft, setDraft] = useState<LockedRegion[]>(regions)
+  const [drag, setDrag] = useState<Drag | null>(null)
+  const frame = useRef<HTMLDivElement>(null)
+
+  /** Pointer position as a fraction of the frame, clamped to it. */
+  const at = (e: { clientX: number; clientY: number }) => {
+    const box = frame.current?.getBoundingClientRect()
+    if (!box || !box.width || !box.height) return null
+    const clamp = (v: number) => Math.min(1, Math.max(0, v))
+    return { x: clamp((e.clientX - box.left) / box.width), y: clamp((e.clientY - box.top) / box.height) }
+  }
+
+  const start = (e: React.PointerEvent) => {
+    if (busy) return
+    const p = at(e)
+    if (!p) return
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    setDrag({ x0: p.x, y0: p.y, x1: p.x, y1: p.y })
+  }
+  const move = (e: React.PointerEvent) => {
+    if (!drag) return
+    const p = at(e)
+    if (p) setDrag({ ...drag, x1: p.x, y1: p.y })
+  }
+  const end = () => {
+    if (!drag) return
+    const r = toRegion(drag)
+    setDrag(null)
+    if (r.w >= MIN_SIZE && r.h >= MIN_SIZE) setDraft([...draft, r])
+  }
+
+  const live = drag ? toRegion(drag) : null
+  return (
+    <div className="space-y-2" data-testid={testId}>
+      <p className="text-xs text-neutral-600">
+        Drag over the label, the monogram — anything printed. Those pixels are taken from this
+        frame and put back on every frame of the clip, so the model never redraws them.
+      </p>
+      <div
+        ref={frame}
+        className="relative touch-none select-none overflow-hidden rounded border border-neutral-300"
+        data-testid={`${testId}-frame`}
+        onPointerDown={start}
+        onPointerMove={move}
+        onPointerUp={end}
+        onPointerCancel={end}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={url} alt="the frame to mark" className="block w-full" draggable={false} />
+        {draft.map((r, i) => (
+          <div key={i} className="absolute border-2 border-amber-400 bg-amber-300/25" style={style(r)}>
+            <button
+              type="button"
+              className="absolute -right-2 -top-2 rounded-full bg-neutral-900 px-1.5 text-xs leading-tight text-white"
+              data-testid={`${testId}-remove-${i}`}
+              title="unmark this rectangle"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); setDraft(draft.filter((_, j) => j !== i)) }}
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+        {live && <div className="absolute border-2 border-amber-400 bg-amber-300/25" style={style(live)} />}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button disabled={busy} onClick={() => onSave(draft)} data-testid={`${testId}-save`}>
+          {draft.length === 0 ? 'Remove the marks' : `Lock ${draft.length} region${draft.length > 1 ? 's' : ''}`}
+        </Button>
+        <button type="button" disabled={busy} data-testid={`${testId}-cancel`}
+          className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-50"
+          onClick={onCancel}>
+          Cancel
+        </button>
+        {busy && <span className="text-xs text-neutral-500">putting the pixels back…</span>}
+      </div>
+    </div>
+  )
+}

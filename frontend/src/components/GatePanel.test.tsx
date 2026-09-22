@@ -10,7 +10,7 @@ const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) 
   keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', edit_workflow: '', edit_base: '', edit_base_path: '', references: [],
   keyframe_path: null, keyframe_url: null, keyframe_verdict: null, video_path: null, video_url: null, video_verdict: null,
   swapped_path: null, swapped_url: null, swap_verdict: null, variants: [], raw_video_path: null, post_paths: [],
-  identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], clips: [], ...extra,
+  identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], clips: [], locked_regions: [], ...extra,
 })
 const job = {
   id: 'j1', idea: 'ages', style: '', master_face: '/m.png', autonomy: 'semi', n_scenes: 2, seed: 0, max_attempts: 2,
@@ -154,6 +154,56 @@ describe('GatePanel save keyframe as project reference', () => {
     const free = { ...withKeyframe, project_id: null } as unknown as JobPublic
     render(<QueryClientProvider client={new QueryClient()}><GatePanel job={free} assets={[]} /></QueryClientProvider>)
     expect(screen.queryByTestId('save-asset-0')).toBeNull()
+  })
+})
+
+describe('GatePanel locked regions', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const withClip = {
+    ...job, face_swap: false,
+    scenes: [
+      scene(0, { keyframe_path: '/k0.png', keyframe_url: '/media/k0.png', video_path: '/v0.mp4',
+                 video_url: '/media/v0.mp4' }),
+      scene(1),
+    ],
+  } as unknown as JobPublic
+
+  it('marks a label on the keyframe and sends it as fractions of the frame', async () => {
+    const puts: { url: string; body: unknown }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const body = init?.body ? JSON.parse(String(init.body)) : input instanceof Request ? await input.json() : null
+      puts.push({ url: new URL(raw, 'http://localhost').pathname, body })
+      return new Response(JSON.stringify(withClip), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const user = userEvent.setup()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={qc}><GatePanel job={withClip} assets={assets} /></QueryClientProvider>)
+    expect(screen.queryByTestId('lock-regions-1')).toBeNull()      // scene 2 has no frame to mark
+
+    await user.click(screen.getByTestId('lock-regions-0'))
+    const frame = screen.getByTestId('locks-0-frame')
+    frame.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100, x: 0, y: 0, toJSON: () => ({}) })
+    fireEvent.pointerDown(frame, { clientX: 40, clientY: 30, pointerId: 1 })
+    fireEvent.pointerMove(frame, { clientX: 60, clientY: 40, pointerId: 1 })
+    fireEvent.pointerUp(frame, { clientX: 60, clientY: 40, pointerId: 1 })
+    await user.click(screen.getByTestId('locks-0-save'))
+
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0].url).toBe('/api/jobs/j1/scenes/0/locks')
+    expect(puts[0].body).toEqual({ regions: [{ x: 0.4, y: 0.3, w: 0.2, h: 0.1 }] })
+  })
+
+  it('says how many regions a scene already has', () => {
+    const marked = {
+      ...withClip,
+      scenes: [scene(0, { keyframe_url: '/media/k0.png', video_url: '/media/v0.mp4',
+                          locked_regions: [{ x: 0.4, y: 0.3, w: 0.2, h: 0.1 }] })],
+    } as unknown as JobPublic
+    render(<QueryClientProvider client={new QueryClient()}><GatePanel job={marked} assets={assets} /></QueryClientProvider>)
+    expect(screen.getByTestId('lock-regions-0')).toHaveTextContent('Locked: 1 region')
   })
 })
 

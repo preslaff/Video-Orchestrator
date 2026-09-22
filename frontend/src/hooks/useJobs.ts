@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import { keys } from '@/api/keys'
-import type { AssemblySpecIn, AssemblyStatus, JobSpec, JobStatus, SceneEdit, SceneRegenerate } from '@/api/types'
+import type { AssemblySpecIn, AssemblyStatus, JobSpec, JobStatus, LockedRegion, SceneEdit, SceneRegenerate } from '@/api/types'
 
 export interface JobsFilter {
   status?: JobStatus
@@ -221,6 +221,27 @@ export function useSaveSceneAsset(id: string, projectId?: string | null) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.projects })
       if (projectId) void qc.invalidateQueries({ queryKey: keys.project(projectId) })
+    },
+  })
+}
+
+/** Mark the parts of a scene's frame the animator must not redraw — a brand label, a
+ *  monogram — which are then restored from the keyframe on every rendered frame. The clip
+ *  that already exists is re-pasted straight away, so this costs a second, not a render. */
+export function useSceneLocks(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ index, regions }: { index: number; regions: LockedRegion[] }) => {
+      const { data, error } = await api.PUT('/api/jobs/{job_id}/scenes/{index}/locks', {
+        params: { path: { job_id: id, index } },
+        body: { regions },
+      })
+      if (error) throw error
+      return data
+    },
+    onSuccess: (job) => {
+      if (job) qc.setQueryData(keys.job(id), job)
+      void qc.invalidateQueries({ queryKey: keys.job(id) })
     },
   })
 }
