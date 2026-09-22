@@ -27,7 +27,7 @@ from pathlib import Path
 
 import requests
 
-from . import cancel, config, media, pipeline, profiles, provenance, storyboard
+from . import cancel, config, formats, media, pipeline, profiles, provenance, storyboard
 from . import projects as projects_mod
 from . import scene_assets
 from .clients import gemma as gemma_client
@@ -816,6 +816,36 @@ class Orchestrator:
             self.store.save_job(job)
             self._event(job, "stills", index=scene.index, variants=len(batch))
 
+    def lock_source(self, job: Job, scene: Scene) -> str:
+        """The sharpest image of this scene's frame there is, to take locked pixels from.
+
+        The keyframe file is sized for the render; the project asset it was made from usually
+        is not. That difference is the whole margin a push-in has to work with — a label
+        pasted into a 3x dolly is resampled up, so it should start from every pixel available.
+
+        Only when the asset shares the keyframe's aspect, though: regions are fractions of the
+        *rendered* frame, and ``fit_image`` centre-crops, so on a differently-shaped asset the
+        same fractions point somewhere else entirely. Falls back to the keyframe whenever the
+        asset is gone, differently shaped, no bigger, or the frame was generated.
+        """
+        keyframe = str(scene.keyframe_path)
+        variant = active_variant(scene)
+        if not (variant is not None and variant.source == "user" and variant.asset_id and job.project_id):
+            return keyframe
+        project = projects_mod.load(self.store, job.project_id)
+        asset = project.asset(variant.asset_id) if project is not None else None
+        if asset is None or not Path(asset.path).is_file():
+            return keyframe
+        try:
+            a, k = media.probe(asset.path), media.probe(keyframe)
+        except (media.MediaError, FileNotFoundError, OSError):
+            return keyframe
+        if not (a.width and a.height and k.width and k.height):
+            return keyframe
+        if not formats.aspects_match((a.width, a.height), (k.width, k.height)):
+            return keyframe                  # the asset was cropped to fit: the fractions differ
+        return str(asset.path) if a.width > k.width else keyframe
+
     def _lock_regions(self, job: Job, scene: Scene, *, force: bool = False) -> None:
         """Restore the scene's locked regions on the finished clip, from its own keyframe.
 
@@ -839,7 +869,7 @@ class Orchestrator:
             scene.video_path = str(dest)
             return
         try:
-            out = media.lock_regions(src, scene.keyframe_path,
+            out = media.lock_regions(src, self.lock_source(job, scene),
                                      [media.Region(**r) for r in regions], dest)
         except (media.MediaError, FileNotFoundError, ValueError, TypeError) as e:
             log.warning("job %s: scene %d locked regions failed: %s", job.id, scene.index, e)

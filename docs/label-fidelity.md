@@ -43,9 +43,33 @@ much tighter framing.
 ### The durable answer: don't ask the model for it
 
 A scene carries `locked_regions` — rectangles in fractions of the frame, so they survive any
-render size. After each render `media.lock_regions` scales the scene's own keyframe to the clip,
-masks it to those rectangles with a feathered edge, and overlays it on every frame in one ffmpeg
-pass (a second for a 5 s clip, audio copied through).
+render size. After each render `media.lock_regions` puts those pixels back from the frame the
+model was given.
+
+**The paste follows the shot.** A fixed rectangle is only right while the camera holds still,
+which is not the shot anyone wants for a product — so `vorch/tracking.py` finds each region
+again in every frame: a similarity search (uniform scale plus translation) seeded from the
+previous frame, a few hundred normalised correlations per frame, no optical flow and no model.
+Verified on the live clip through a **2.6× push-in**: the label stays on the bottle, at the
+right size, reading correctly, at every scale.
+
+Deliberately not estimated: rotation and perspective. A product hero shot does not roll, and a
+wrong warp is worse than none. The search is local by construction, so it cannot jump to a false
+match; when nothing correlates the placement holds and the frame is counted as *weak* in the log.
+
+Details that matter:
+
+- **The pixels come from the largest matching source** (`Orchestrator.lock_source`): the project
+  asset when it is bigger than the keyframe *and shares its aspect* — `fit_image` centre-crops,
+  so on a differently shaped asset the same fractions point somewhere else. That headroom is
+  what a push-in resamples into.
+- **The feather grows with the patch**, or the seam that is invisible at 1× becomes a bright
+  edge at 3×.
+- **A static shot must not shiver**: a region only moves when moving explains the frame better
+  by a margin (`tracking.STICKINESS`), so noise alone never shifts the paste.
+- Frames are streamed — decoded on one pipe, composited, written straight to the encoder — so a
+  long clip costs one frame of memory. About 8 s for 81 frames at 960², against minutes to render.
+- `track=False` keeps the original exact path: one ffmpeg overlay at a fixed rectangle.
 
 - Mark them in the gate panel: **Lock the label…** under the clip, drag over the label.
 - `PUT /api/jobs/{id}/scenes/{i}/locks` re-applies to the clip that already exists, so a smeared
@@ -55,10 +79,10 @@ pass (a second for a 5 s clip, audio copied through).
 - A failed paste keeps the clip and logs a warning decision — losing a render over an overlay
   would be the worse trade.
 
-This is exact wherever the marked object does not move, which is what rule 2 enforces. **A
-camera move onto a locked label is not supported and should be added in post instead** (zooming
-a sharp composite), because a static paste cannot follow a push-in — visible in the pre-fix clip
-`s00_clip`, where the pasted patch is correct but the render beneath it had zoomed away.
+Rule 2 still matters, for a different reason than it first appeared: tracking keeps the label
+*correct* through a dolly, but a 2.6× push-in resamples the patch up, so the type ends up
+slightly soft. Keeping the camera off the label means it is both correct **and** sharp. Tracking
+is what makes the feature usable when a shot does move — not a licence to zoom into type.
 
 ## What not to try
 

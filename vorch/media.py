@@ -635,6 +635,26 @@ class Region:
         return x0, y0, x1 - x0, y1 - y0
 
 
+def _rgb(path: str | Path, width: int | None = None, height: int | None = None) -> "np.ndarray":
+    """An image (or a single-image file) as an HxWx3 float32 array, optionally rescaled."""
+    import numpy as np
+
+    cmd = ["ffmpeg", "-v", "error", "-i", str(path)]
+    if width and height:
+        cmd += ["-vf", f"scale={width}:{height}:flags=lanczos"]
+    cmd += ["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    out = subprocess.run(cmd, capture_output=True).stdout
+    if not out:
+        raise MediaError(f"could not read {path} as an image")
+    if width and height:
+        return np.frombuffer(out, np.uint8).reshape(height, width, 3).astype(np.float32)
+    info = probe(path)
+    if not (info.width and info.height) or len(out) < info.width * info.height * 3:
+        raise MediaError(f"could not read the size of {path}")
+    return (np.frombuffer(out, np.uint8)[: info.width * info.height * 3]
+            .reshape(info.height, info.width, 3).astype(np.float32))
+
+
 def lock_regions(
     video: str | Path,
     source: str | Path,
@@ -644,15 +664,22 @@ def lock_regions(
     feather: int = 4,
     crf: int = 16,
     preset: str = "medium",
+    track: bool = True,
     timeout: float | None = None,
 ) -> Path:
     """Paste ``regions`` of ``source`` over every frame of ``video``.
 
-    ``source`` is the clip's own keyframe — the image the model was given, where the label
-    is still the real one. It is scaled to the clip's size, masked to the regions with a
-    ``feather``-px falloff so the seam does not show, and overlaid on all frames in a single
-    pass (one decode, a few hundred milliseconds for a 5 s clip). Audio is copied through,
-    which matters for the models that generate their own.
+    ``source`` is the clip's own keyframe — the image the model was given, where the label is
+    still the real one.
+
+    With ``track`` (the default) each region is **found again in every frame**, so the paste
+    follows a dolly or a drift: without that, locking would only work on shots where the camera
+    holds still, which is not the shot anyone wants for a product. The pixels are resampled
+    from ``source`` at its native resolution, so a push-in has detail to draw on.
+
+    ``track=False`` is the exact, cheap case: one ffmpeg overlay at a fixed rectangle, correct
+    only while nothing moves. Audio is copied through either way, which matters for the models
+    that generate their own.
     """
     video, source, dest = Path(video).expanduser(), Path(source).expanduser(), Path(dest)
     for p in (video, source):
@@ -664,6 +691,9 @@ def lock_regions(
     w, h = info.width, info.height
     if not (w and h):
         raise MediaError(f"cannot read the size of {video}")
+    if track:
+        return _lock_tracked(video, source, regions, dest, info=info, feather=feather,
+                             crf=crf, preset=preset, timeout=timeout)
     # The mask is built from the scaled source itself rather than a `color` source, so there is
     # no second stream whose duration has to be matched to the clip's.
     boxes = "".join(
@@ -702,4 +732,87 @@ def lock_regions(
         raise MediaError("ffmpeg produced no output")
     os.replace(part, dest)
     log.info("locked %d region(s) of %s onto %s -> %s", len(regions), source.name, video.name, dest)
+    return dest
+
+
+def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Path, *,
+                  info: MediaInfo, feather: int, crf: int, preset: str,
+                  timeout: float | None) -> Path:
+    """``lock_regions`` for a shot that moves: find each region per frame, then paste it.
+
+    Frames are streamed — decoded on one pipe, composited, written straight to the encoder on
+    another — so a long clip costs one frame of memory, not all of them. Audio comes from the
+    original file as a second input, since a raw video pipe carries none.
+    """
+    import numpy as np
+
+    from . import tracking
+
+    w, h = info.width, info.height
+    fps = info.fps or config.WAN_FPS
+    native = _rgb(source)                       # full resolution: a push-in needs pixels to give
+    sh, sw = native.shape[:2]
+    # One entry per region: the patch at source resolution, a greyscale template at clip
+    # resolution to match against, and where it starts.
+    marks = []
+    for r in regions:
+        sx, sy, sbw, sbh = r.box(sw, sh)
+        x, y, bw, bh = r.box(w, h)
+        if sbw < 4 or sbh < 4 or bw < 4 or bh < 4:
+            raise ValueError(f"region {r} is too small to track at {w}x{h}")
+        patch = native[sy:sy + sbh, sx:sx + sbw]
+        marks.append({"patch": patch, "template": tracking.resample(patch, bh, bw).mean(axis=2),
+                      "at": tracking.Placement(x, y, bw, bh), "w0": bw})
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    decode = ["ffmpeg", "-v", "error", "-i", str(video), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    encode = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+              "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", f"{fps}", "-i", "-",
+              "-i", str(video), "-map", "0:v"]
+    encode += ["-map", "1:a?", "-c:a", "copy"] if info.has_audio else ["-an"]
+    encode += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+               "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", str(part)]
+
+    nbytes, frames, weak = w * h * 3, 0, 0
+    try:
+        with subprocess.Popen(decode, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as src, \
+             subprocess.Popen(encode, stdin=subprocess.PIPE, stderr=subprocess.PIPE) as out:
+            assert src.stdout is not None and out.stdin is not None
+            while True:
+                raw = src.stdout.read(nbytes)
+                if len(raw) < nbytes:
+                    break
+                frame = np.frombuffer(raw, np.uint8).reshape(h, w, 3).astype(np.float32)
+                grey = frame.mean(axis=2)
+                for m in marks:
+                    m["at"] = tracking.follow(m["template"], grey, m["at"])
+                    if m["at"].confidence < tracking.MIN_CONFIDENCE:
+                        weak += 1
+                    placed = tracking.resample(m["patch"], m["at"].h, m["at"].w)
+                    # The blend must cover the same fraction of the label at every scale, or
+                    # the seam that is invisible at 1x becomes a bright edge at 3x.
+                    grown = max(1, round(feather * m["at"].w / m["w0"])) if feather else 0
+                    tracking.paste(frame, placed, m["at"], feather=grown)
+                out.stdin.write(frame.clip(0, 255).astype(np.uint8).tobytes())
+                frames += 1
+            out.stdin.close()
+            src.stdout.close()
+            if out.wait(timeout=timeout if timeout is not None else config.ASSEMBLE_TIMEOUT):
+                tail = (out.stderr.read() if out.stderr else b"").decode(errors="replace")[-2000:]
+                raise MediaError(f"ffmpeg could not encode the locked {video.name}: {tail.strip()}")
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        part.unlink(missing_ok=True)
+        raise MediaError(f"could not lock the regions of {video.name}: {e}") from e
+    except MediaError:
+        part.unlink(missing_ok=True)
+        raise
+    if not frames or not part.is_file() or part.stat().st_size == 0:
+        part.unlink(missing_ok=True)
+        raise MediaError(f"no frames were locked in {video.name}")
+    os.replace(part, dest)
+    # A weak frame is not a failure — the placement holds — but it is worth seeing in the log
+    # when a paste looks like it drifted.
+    log.info("locked %d region(s) of %s onto %d frames of %s%s -> %s", len(regions), source.name,
+             frames, video.name, f" ({weak} weak)" if weak else "", dest)
     return dest

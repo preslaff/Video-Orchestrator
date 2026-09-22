@@ -775,6 +775,35 @@ def test_clearing_the_marks_gives_the_render_back_and_re_marking_starts_from_it(
     assert job.scenes[0].video_path == raw and job.scenes[0].locked_regions == []
 
 
+def test_locked_pixels_come_from_the_biggest_matching_source(wired, tmp_path, monkeypatch):
+    """A 3x push-in resamples the patch up, so it should start from every pixel there is —
+    but only from an asset shaped like the frame, since fit_image centre-crops the rest."""
+    from vorch import media
+    from vorch.state import Variant
+
+    store, _master, _ = wired
+    project, assets = _assets_project(store, tmp_path, monkeypatch, n=1)
+    asset = assets[0]
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full", project_id=project.id)
+    o.run(job)
+    scene = job.scenes[0]
+
+    sizes = {str(asset.path): (2048, 2048), scene.keyframe_path: (1024, 1024)}
+    monkeypatch.setattr(media, "probe",
+                        lambda p: media.MediaInfo(*sizes.get(str(p), (1024, 1024)), 0.0, 0.0, 0, "png", False))
+    assert o.lock_source(job, scene) == scene.keyframe_path      # generated: nothing better exists
+
+    scene.variants = [Variant(path=scene.keyframe_path, source="user", asset_id=asset.id)]
+    assert o.lock_source(job, scene) == str(asset.path)          # bigger and the same shape
+
+    sizes[str(asset.path)] = (2048, 1152)                        # 16:9 asset, 1:1 frame
+    assert o.lock_source(job, scene) == scene.keyframe_path      # cropped: the fractions differ
+
+    sizes[str(asset.path)] = (512, 512)                          # smaller: nothing to gain
+    assert o.lock_source(job, scene) == scene.keyframe_path
+
+
 def test_an_impossible_rectangle_is_refused_and_nothing_is_stored(wired):
     store, _master, _ = wired
     o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)

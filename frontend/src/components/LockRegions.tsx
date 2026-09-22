@@ -80,7 +80,8 @@ export function LockRegions({
     <div className="space-y-2" data-testid={testId}>
       <p className="text-xs text-neutral-600">
         Drag over the label, the monogram — anything printed. Those pixels are taken from this
-        frame and put back on every frame of the clip, so the model never redraws them.
+        frame and put back on every frame of the clip, following the shot as it moves, so the
+        model never redraws them.
       </p>
       <div
         ref={frame}

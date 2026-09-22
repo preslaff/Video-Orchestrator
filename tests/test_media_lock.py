@@ -37,7 +37,7 @@ def test_a_region_comes_from_the_source_and_the_rest_from_the_clip(tmp_path):
     _lavfi(source, "color=c=red:s=128x128", "-frames:v", "1")
 
     out = media.lock_regions(clip, source, [media.Region(x=0.25, y=0.25, w=0.5, h=0.5)],
-                             tmp_path / "locked.mp4", feather=0)
+                             tmp_path / "locked.mp4", feather=0, track=False)
 
     assert media.probe(out).nb_frames == media.probe(clip).nb_frames
     for frame in (0, 4, 7):
@@ -51,9 +51,38 @@ def test_the_source_is_scaled_to_the_clip_so_the_sizes_need_not_match(tmp_path):
     _lavfi(clip, "color=c=black:s=64x64:rate=8:duration=0.5", "-pix_fmt", "yuv420p")
     _lavfi(source, "color=c=white:s=256x256", "-frames:v", "1")
     out = media.lock_regions(clip, source, [media.Region(x=0, y=0, w=1, h=1)],
-                             tmp_path / "locked.mp4", feather=0)
+                             tmp_path / "locked.mp4", feather=0, track=False)
     assert media.probe(out).width == 64
     assert _close(_pixel(out, 32, 32), (255, 255, 255))
+
+
+def test_the_paste_follows_a_shot_that_pushes_in(tmp_path):
+    """A fixed rectangle would slide off the moment the camera dollies — which is most of
+    what a product shot does. The mark has to be found again in every frame."""
+    clip, source = tmp_path / "clip.mp4", tmp_path / "kf.png"
+    # A marked square on a textured ground, zoomed steadily in: a synthetic dolly.
+    _lavfi(clip,
+           "testsrc=size=320x320:rate=10:duration=1",
+           "-vf", "zoompan=z='1+0.035*on':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=320x320",
+           "-pix_fmt", "yuv420p")
+    first = tmp_path / "first.png"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(clip), "-frames:v", "1", str(first)],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(first), str(source)],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    region = media.Region(x=0.3, y=0.3, w=0.4, h=0.4)
+    out = media.lock_regions(clip, source, [region], tmp_path / "locked.mp4", feather=0)
+    assert media.probe(out).nb_frames == media.probe(clip).nb_frames
+
+    # The region grew with the shot, so the patch must cover more of the last frame than a
+    # fixed rectangle would: sample a point just outside the original box on the final frame
+    # and check it now carries the source's content rather than the render's.
+    last = media.probe(clip).nb_frames - 1
+    x, y, w, h = region.box(320, 320)
+    edge = _pixel(out, x - 10, y + h // 2, last)
+    plain = _pixel(clip, x - 10, y + h // 2, last)
+    assert edge != plain, "the paste did not grow with the push-in"
 
 
 def test_a_rectangle_off_the_frame_is_refused_before_anything_runs():

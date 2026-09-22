@@ -691,7 +691,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                         // those pixels are taken from the keyframe instead. No re-render needed.
                         <button type="button" disabled={busy} data-testid={`lock-regions-${s.index}`}
                           className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-50"
-                          title="mark the label, monogram or emblem the animator must not redraw"
+                          title="mark the label, monogram or emblem the animator must not redraw; it is tracked through the shot"
                           onClick={() => togglePicker(s.index, 'locks')}>
                           {isOpen(s.index, 'locks')
                             ? 'Cancel'
