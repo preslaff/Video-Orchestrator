@@ -735,6 +735,47 @@ def lock_regions(
     return dest
 
 
+def _follow_regions(video: Path, marks: list[dict], w: int, h: int) -> list[list]:
+    """Where each marked region sits in every frame of ``video``.
+
+    The template is cut from the clip's **own first frame**, not from the source image. That
+    looks backwards — the first frame is where the label is already wrong — but it is the
+    point: every later frame is the model's continuation of *that*, so matching render against
+    render correlates around 0.85, where matching a pristine label against a smeared one
+    struggles past 0.45 and loses the region for whole seconds at a time.
+
+    Greyscale only, so this pass decodes a third of the bytes the compositing pass does.
+    """
+    import numpy as np
+
+    from . import tracking
+
+    nbytes = w * h
+    tracks: list[list] = [[] for _ in marks]
+    with subprocess.Popen(["ffmpeg", "-v", "error", "-i", str(video),
+                           "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as src:
+        assert src.stdout is not None
+        first = True
+        while True:
+            raw = src.stdout.read(nbytes)
+            if len(raw) < nbytes:
+                break
+            grey = np.frombuffer(raw, np.uint8).reshape(h, w).astype(np.float32)
+            for i, m in enumerate(marks):
+                if first:
+                    at = m["start"]
+                    x, y = int(at.x), int(at.y)
+                    m["template"] = grey[y:y + int(at.h), x:x + int(at.w)].copy()
+                    m["at"] = at
+                else:
+                    m["at"] = tracking.follow(m["template"], grey, m["at"])
+                tracks[i].append(m["at"])
+            first = False
+        src.stdout.close()
+    return [tracking.smooth(t) for t in tracks]
+
+
 def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Path, *,
                   info: MediaInfo, feather: int, crf: int, preset: str,
                   timeout: float | None) -> Path:
@@ -752,17 +793,16 @@ def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Pa
     fps = info.fps or config.WAN_FPS
     native = _rgb(source)                       # full resolution: a push-in needs pixels to give
     sh, sw = native.shape[:2]
-    # One entry per region: the patch at source resolution, a greyscale template at clip
-    # resolution to match against, and where it starts.
     marks = []
     for r in regions:
         sx, sy, sbw, sbh = r.box(sw, sh)
         x, y, bw, bh = r.box(w, h)
         if sbw < 4 or sbh < 4 or bw < 4 or bh < 4:
             raise ValueError(f"region {r} is too small to track at {w}x{h}")
-        patch = native[sy:sy + sbh, sx:sx + sbw]
-        marks.append({"patch": patch, "template": tracking.resample(patch, bh, bw).mean(axis=2),
-                      "at": tracking.Placement(x, y, bw, bh), "w0": bw})
+        marks.append({"patch": native[sy:sy + sbh, sx:sx + sbw],
+                      "start": tracking.Placement(x, y, bw, bh), "w0": bw})
+
+    tracks = _follow_regions(video, marks, w, h)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(dest.name + ".part")
@@ -774,7 +814,8 @@ def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Pa
     encode += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
                "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", str(part)]
 
-    nbytes, frames, weak = w * h * 3, 0, 0
+    nbytes, frames = w * h * 3, 0
+    weak = sum(1 for t in tracks for p in t if p.confidence < tracking.MIN_CONFIDENCE)
     try:
         with subprocess.Popen(decode, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as src, \
              subprocess.Popen(encode, stdin=subprocess.PIPE, stderr=subprocess.PIPE) as out:
@@ -784,16 +825,12 @@ def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Pa
                 if len(raw) < nbytes:
                     break
                 frame = np.frombuffer(raw, np.uint8).reshape(h, w, 3).astype(np.float32)
-                grey = frame.mean(axis=2)
-                for m in marks:
-                    m["at"] = tracking.follow(m["template"], grey, m["at"])
-                    if m["at"].confidence < tracking.MIN_CONFIDENCE:
-                        weak += 1
-                    placed = tracking.resample(m["patch"], m["at"].h, m["at"].w)
+                for m, path in zip(marks, tracks):
+                    at = path[min(frames, len(path) - 1)]
                     # The blend must cover the same fraction of the label at every scale, or
                     # the seam that is invisible at 1x becomes a bright edge at 3x.
-                    grown = max(1, round(feather * m["at"].w / m["w0"])) if feather else 0
-                    tracking.paste(frame, placed, m["at"], feather=grown)
+                    grown = feather * at.w / m["w0"] if feather else 0.0
+                    tracking.paste(frame, m["patch"], at, feather=grown)
                 out.stdin.write(frame.clip(0, 255).astype(np.uint8).tobytes())
                 frames += 1
             out.stdin.close()

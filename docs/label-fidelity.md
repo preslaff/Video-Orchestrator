@@ -50,8 +50,27 @@ model was given.
 which is not the shot anyone wants for a product — so `vorch/tracking.py` finds each region
 again in every frame: a similarity search (uniform scale plus translation) seeded from the
 previous frame, a few hundred normalised correlations per frame, no optical flow and no model.
-Verified on the live clip through a **2.6× push-in**: the label stays on the bottle, at the
-right size, reading correctly, at every scale.
+Verified on the live clip through a **3× push-in**: the label stays on the bottle, at the right
+size, reading correctly, at every scale.
+
+**Three things stop it flickering**, all found by measuring a track that did:
+
+1. **The template is cut from the clip's own first frame**, not from the source image. That
+   reads backwards — the first frame is where the label is already wrong — but it is the point:
+   every later frame is the model's continuation of *that*. Matching render against render
+   correlates around **0.85**; matching a pristine label against a smeared one never passed
+   **0.45**, lost the region for the first 29 frames, then lurched to catch up.
+2. **The trajectory is smoothed** (`tracking.smooth`): frames the search could not trust are
+   interpolated across rather than held, then the whole path is low-passed — in centre-and-scale,
+   so a growing region does not creep sideways. A camera move is smooth; the search's output
+   is not.
+3. **The paste is sub-pixel and bilinear.** A rectangle that can only land on whole pixels has
+   to step, and nearest-neighbour swaps whole rows of the source in and out as it grows, so the
+   lettering crawls. Placements are fractional and the patch is resampled straight onto the
+   destination grid, with edge pixels painted only as far as the rectangle covers them.
+
+Measured on the live clip, before → after: stalls 37 → 11, reversals 3 → 0, jerk 2.96 → 2.30.
+The old track also under-shot badly, ending at 468 px where the label is really 624 px.
 
 Deliberately not estimated: rotation and perspective. A product hero shot does not roll, and a
 wrong warp is worse than none. The search is local by construction, so it cannot jump to a false
@@ -67,8 +86,9 @@ Details that matter:
   edge at 3×.
 - **A static shot must not shiver**: a region only moves when moving explains the frame better
   by a margin (`tracking.STICKINESS`), so noise alone never shifts the paste.
-- Frames are streamed — decoded on one pipe, composited, written straight to the encoder — so a
-  long clip costs one frame of memory. About 8 s for 81 frames at 960², against minutes to render.
+- Two passes: one greyscale decode to track (a third of the bytes), one to composite. Frames are
+  streamed, so a long clip costs one frame of memory. About 12 s for 81 frames at 960², against
+  minutes to render.
 - `track=False` keeps the original exact path: one ffmpeg overlay at a fixed rectangle.
 
 - Mark them in the gate panel: **Lock the label…** under the clip, drag over the label.
