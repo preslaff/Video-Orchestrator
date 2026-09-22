@@ -693,6 +693,38 @@ def test_an_asset_of_another_aspect_warns_before_it_is_cropped(wired, tmp_path, 
     assert warning and "1080x1920" in warning[0].reason and "centre-cropped" in warning[0].reason
 
 
+def test_a_users_own_image_is_never_shrunk_below_the_clip_it_feeds(wired, tmp_path, monkeypatch):
+    """A keyframe size smaller than the clip size is a budget for *generating* a frame.
+    Applied to an image made elsewhere it would delete detail the animator then has to
+    invent — which is how fine print on a product label is lost before rendering starts."""
+    from vorch import media
+    from vorch.genparams import GenParams
+    from vorch.storyboard import PromptPair
+
+    store, master, _ = wired
+    project, assets = _assets_project(store, tmp_path, monkeypatch, n=1)
+    sizes: list[tuple[int, int]] = []
+    monkeypatch.setattr(media, "fit_image",
+                        lambda src, w, h, dest=None: sizes.append((w, h)) or Path(dest or f"{src}.fit"))
+    monkeypatch.setattr(storyboard, "motion_from_image",
+                        lambda path, **kw: PromptPair(positive="drift", negative=""))
+    params = GenParams(aspect="1:1", keyframe_size=(768, 768), wan_size=(960, 960),
+                       face_swap=False, evaluate=False)
+    o = Orchestrator(store, params=params, face_swap=False, evaluate=False)
+    job = o.create_job("d", master_face="", autonomy="semi", project_id=project.id,
+                       keyframe_asset_ids=[assets[0].id])
+    o.run(job)
+    assert sizes == [(960, 960)]                       # the clip size, not the keyframe size
+
+    # The other way round the keyframe size already wins: never upscale for nothing.
+    bigger = GenParams(aspect="1:1", keyframe_size=(1024, 1024), wan_size=(640, 640),
+                       face_swap=False, evaluate=False)
+    assert Orchestrator(store, params=bigger).install_size() == (1024, 1024)
+    # A stills job has no clip to feed: the keyframe size is the whole story.
+    stills = GenParams(kind="stills", aspect="1:1", keyframe_size=(768, 768), wan_size=(960, 960))
+    assert Orchestrator(store, params=stills).install_size() == (768, 768)
+
+
 def test_an_unknown_asset_stops_the_job_before_it_renders(wired, tmp_path, monkeypatch):
     store, master, _ = wired
     project, _assets = _assets_project(store, tmp_path, monkeypatch, n=1)

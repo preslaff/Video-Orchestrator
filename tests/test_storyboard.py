@@ -258,6 +258,9 @@ def test_motion_from_image_looks_at_the_frame_and_carries_the_direction(monkeypa
     assert seen["images"] == ["/media/bottle.png"]           # the frame itself, not a description
     assert "intimate, slow, warm" in seen["user"] and "3.06s" in seen["user"]
     assert seen["temperature"] == storyboard.GEN_TEMPERATURE
+    # Left alone Gemma writes "slow zoom-in towards the product label" for every product shot,
+    # which is precisely how a brand name is destroyed: the type is redrawn every frame.
+    assert storyboard.TEXT_SAFE_RULE in seen["user"]
 
 
 def test_motion_from_image_rejects_an_unparseable_answer(monkeypatch):

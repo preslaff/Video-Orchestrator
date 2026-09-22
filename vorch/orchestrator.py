@@ -344,11 +344,24 @@ class Orchestrator:
         self.store.save_job(job)
         return scene
 
+    def install_size(self) -> tuple[int, int]:
+        """The size a user's own image is fitted to when it becomes a keyframe.
+
+        The keyframe size is what a *generated* frame costs, not what the clip needs. For an
+        image made elsewhere there is nothing to generate, so fitting to a keyframe size below
+        the clip size only throws detail away and asks the animator to invent it back — which
+        is exactly how fine print on a product label is lost before the model ever sees it
+        (1024 source -> 768 keyframe -> 960 clip). Take the larger of the two; the aspects are
+        already validated as equal, so this only ever changes the scale.
+        """
+        kf, clip = self.params.keyframe_size, self.params.wan_size
+        return clip if (self.params.kind == "video" and clip[0] * clip[1] > kf[0] * kf[1]) else kf
+
     def _install_user_keyframe(self, job: Job, scene: Scene, asset_id: str):
         """Fit a project image to the job's keyframe size as this scene's next keyframe file.
 
-        Written under COMFY_OUTPUT (the only tree ``/media`` serves) and at the keyframe
-        size, so the UI can show it and Wan never has to crop it. ffmpeg reads WebP/AVIF
+        Written under COMFY_OUTPUT (the only tree ``/media`` serves) and at ``install_size``,
+        so the UI can show it and Wan never has to crop it. ffmpeg reads WebP/AVIF
         directly — no ``ensure_png`` round trip, which would shrink it first.
         """
         project = projects_mod.load(self.store, job.project_id) if job.project_id else None
@@ -357,7 +370,7 @@ class Orchestrator:
             raise ValueError(f"unknown project asset {asset_id!r}")
         dest = config.COMFY_OUTPUT / f"{output_prefix(job, scene.index, 'keyframe')}_user_{scene.regenerations + 1}.png"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        path = media.fit_image(asset.path, *self.params.keyframe_size, dest)
+        path = media.fit_image(asset.path, *self.install_size(), dest)
         # The provenance context is not bound outside run(): name the job explicitly.
         provenance.write_manifest(path, "user_keyframe", {"asset_id": asset_id, "source": asset.path},
                                   {"job_id": job.id, "scene": scene.index, "kind": "user_keyframe"})
@@ -568,7 +581,7 @@ class Orchestrator:
             info = media.probe(asset.path)
         except (media.MediaError, FileNotFoundError, OSError) as e:
             raise ValueError(f"asset {asset.label or asset.name!r} cannot be read: {e}") from None
-        want_w, want_h = self.params.keyframe_size
+        want_w, want_h = self.install_size()
         if info.width and info.height and abs(info.width / info.height - want_w / want_h) > 0.02:
             self.store.log_decision(Decision(
                 job_id=job.id, scene_index=scene.index, phase="keyframe", attempt=1, action="warning",

@@ -337,6 +337,19 @@ def animation_prompt(
     return PromptPair(positive=pair.positive, negative=merge_negatives(pair.negative, ctx.wan_negative))
 
 
+# A video model redraws every frame from an 8x-compressed latent: printed type below roughly
+# 32 px of cap height has no representation there and comes back as a plausible smear. Asking
+# the camera to *approach* a label therefore guarantees it will be destroyed — and left to
+# itself Gemma writes "slow zoom-in towards the product label" for every product shot, which is
+# the single most reliable way to ruin a brand name. Movement goes to the surroundings instead.
+TEXT_SAFE_RULE = (
+    "ВАЖНО: ако в кадъра има печатен текст (етикет, опаковка, надпис), той трябва да остане "
+    "абсолютно неподвижен: без приближаване/отдалечаване на камерата към него, без въртене или "
+    "мащабиране на този обект. Движението е в средата около него — листа, венчелистчета, прах, "
+    "течност, светлина, сенки. Камерата е статична или се движи много леко странично.\n"
+)
+
+
 def motion_from_image(
     image_path: str | Path,
     *,
@@ -359,7 +372,8 @@ def motion_from_image(
         + f"Клип: ~{ctx.clip_seconds:g}s, {ctx.aspect} ({ctx.orientation}). Движение: {ctx.motion_hint}.\n"
         "Опиши САМО движение и камера — това, което вече е в кадъра, нищо ново. "
         "Леко, локализирано движение работи най-добре на 16GB VRAM.\n"
-        f'Завърши с camera move + "{ctx.wan_positive}".\n'
+        + TEXT_SAFE_RULE
+        + f'Завърши с camera move + "{ctx.wan_positive}".\n'
         f'Върни JSON: {{"positive": "...", "negative": "{negative}"}}'
     )
     raw = gemma.complete_vision(
