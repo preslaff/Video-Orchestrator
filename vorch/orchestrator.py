@@ -302,6 +302,9 @@ class Orchestrator:
                 scene.keyframe_prompt = f"{scene.keyframe_prompt.rstrip('. ')}. Correction: {fix}"
                 applied = fix
         if what == "keyframe":
+            # Asked before anything is installed: afterwards the active variant *is* the new
+            # frame, and the question "is this still the same picture?" answers itself.
+            marks_fit = self._marks_still_fit(scene, user_asset)
             scene.keyframe_verdict = None
             scene.swapped_path = None
             scene.swap_verdict = None
@@ -314,6 +317,15 @@ class Orchestrator:
                 # History is kept: only the pointer is cleared, which is what makes the next
                 # run generate a new batch. Every file stays on disk with its provenance.
                 scene.keyframe_path = None
+            if scene.locked_regions and not marks_fit:
+                # The rectangles were drawn on a frame that is about to be replaced. Keeping
+                # them would paste whatever the new frame happens to hold at those coordinates
+                # — the wrong pixels, confidently, which is worse than asking again.
+                dropped, scene.locked_regions = len(scene.locked_regions), []
+                self.store.log_decision(Decision(
+                    job_id=job.id, scene_index=index, phase="keyframe", attempt=1, action="unlocked",
+                    reason=f"{dropped} locked region(s) dropped: they were marked on the previous frame",
+                ))
         if what == "video":
             scene.swapped_path = None   # the swap is part of the video phase: redo it with the current identity
             scene.swap_verdict = None
@@ -815,6 +827,19 @@ class Orchestrator:
             )
             self.store.save_job(job)
             self._event(job, "stills", index=scene.index, variants=len(batch))
+
+    @staticmethod
+    def _marks_still_fit(scene: Scene, user_asset: str | None) -> bool:
+        """Whether a scene's locked rectangles still describe the frame it is about to get.
+
+        Re-installing the *same* project image keeps the composition identical, so the marks
+        are as valid as they were. Anything else — a generated frame, a different image — puts
+        the label somewhere else, and a rectangle is not a description of what it contains.
+        """
+        if not user_asset:
+            return False
+        current = active_variant(scene)
+        return current is not None and current.source == "user" and current.asset_id == user_asset
 
     def lock_source(self, job: Job, scene: Scene) -> str:
         """The sharpest image of this scene's frame there is, to take locked pixels from.

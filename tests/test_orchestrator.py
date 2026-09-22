@@ -804,6 +804,49 @@ def test_locked_pixels_come_from_the_biggest_matching_source(wired, tmp_path, mo
     assert o.lock_source(job, scene) == scene.keyframe_path
 
 
+def test_marks_survive_a_new_clip_but_not_a_new_frame(wired, tmp_path, monkeypatch):
+    """Re-animating keeps the marks — the frame they describe has not changed. Regenerating
+    the frame drops them, because a rectangle does not know what it contains."""
+    from vorch import media
+
+    store, _master, _ = wired
+    monkeypatch.setattr(media, "lock_regions", lambda vid, src, regions, dest, **kw: Path(dest))
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)
+    marks = [{"x": 0.4, "y": 0.3, "w": 0.2, "h": 0.1}]
+    o.set_locked_regions(job, 0, marks)
+
+    o.reopen_scene(job, 0, what="video")            # a new clip from the same frame
+    assert job.scenes[0].locked_regions == marks
+
+    o.reopen_scene(job, 0, what="keyframe")         # a new frame: the marks no longer describe it
+    assert job.scenes[0].locked_regions == []
+    dropped = [d for d in store.decisions(job.id) if d.action == "unlocked"]
+    assert dropped and "previous frame" in dropped[-1].reason
+
+
+def test_reinstalling_the_same_image_keeps_its_marks(wired, tmp_path, monkeypatch):
+    """The composition is identical, so asking the user to draw the same rectangle again
+    would be busywork."""
+    from vorch import media
+
+    store, _master, _ = wired
+    project, assets = _assets_project(store, tmp_path, monkeypatch, n=2)
+    monkeypatch.setattr(media, "lock_regions", lambda vid, src, regions, dest, **kw: Path(dest))
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full", project_id=project.id)
+    o.run(job)
+    o.reopen_scene(job, 0, what="keyframe", edits={"keyframe_asset_id": assets[0].id})
+    marks = [{"x": 0.4, "y": 0.3, "w": 0.2, "h": 0.1}]
+    o.set_locked_regions(job, 0, marks)
+
+    o.reopen_scene(job, 0, what="keyframe", edits={"keyframe_asset_id": assets[0].id})
+    assert job.scenes[0].locked_regions == marks        # the same picture: still valid
+    o.reopen_scene(job, 0, what="keyframe", edits={"keyframe_asset_id": assets[1].id})
+    assert job.scenes[0].locked_regions == []           # a different picture: gone
+
+
 def test_an_impossible_rectangle_is_refused_and_nothing_is_stored(wired):
     store, _master, _ = wired
     o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
