@@ -16,6 +16,13 @@ const PROFILE = {
   edit_workflow: 'identity_edit', post_steps: [], builtin: true, created_at: '', updated_at: '',
 }
 
+const WORKFLOWS = [
+  { name: 'animate', kind: 'animate', backend: 'local', description: 'Wan 2.2 local',
+    params: { width: { constraint: 'multiple_of_16', max: 1280 }, length: { constraint: '4n+1' } } },
+  { name: 'animate_ltx25', kind: 'animate', backend: 'modal-h100', description: 'LTX-2.5',
+    params: { width: { constraint: 'multiple_of_32', max: 1920 }, length: { constraint: '8n+1' } } },
+]
+
 function mockFetch(env: { ok: boolean; checks: { name: string; status: string; detail: string; data: object }[] }) {
   const posts: { url: string; body: unknown }[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -26,6 +33,7 @@ function mockFetch(env: { ok: boolean; checks: { name: string; status: string; d
     const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
     if (url.startsWith('/api/projects')) return json([])
     if (url.startsWith('/api/profiles')) return json([PROFILE])
+    if (url.startsWith('/api/workflows')) return json({ workflows: WORKFLOWS, errors: {}, kinds: ['animate'], user_dir: '' })
     if (url.startsWith('/api/setup/env')) return json({ ...env, status: env.ok ? 'ok' : 'fail', checked_at: '', duration_ms: 1, profile_id: null, deep: false })
     if (url === '/api/jobs' && method === 'POST') {
       posts.push({ url, body: await readBody() })
@@ -249,5 +257,58 @@ describe('NewJobWizard output overrides', () => {
     await user.click(screen.getByTestId('submit'))
     await waitFor(() => expect(posts).toHaveLength(1))
     expect((posts[0].body as { profile_overrides: unknown }).profile_overrides).toBeNull()
+  })
+})
+
+describe('NewJobWizard output rules per model', () => {
+  beforeEach(() => push.mockReset())
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("snaps size and frames to the chosen model's rules", async () => {
+    // 9:16 at 720 is 720x1280 — which LTX rejects: "width must be a multiple of 32, got 720".
+    const posts = mockFetch({ ok: true, checks: [] })
+    const user = userEvent.setup()
+    renderWizard()
+    await user.click(screen.getByText('Next'))
+    await screen.findByText('Cinematic 16:9')
+    await user.click(screen.getByText('Next'))
+    await user.type(screen.getByTestId('idea'), 'a teaser')
+
+    await user.selectOptions(await screen.findByTestId('clip-workflow'), 'animate_ltx25')
+    await user.selectOptions(screen.getByTestId('clip-aspect'), '9:16')
+    await user.selectOptions(screen.getByTestId('clip-class'), '720')
+    await user.clear(screen.getByTestId('clip-length'))
+    await user.type(screen.getByTestId('clip-length'), '81')
+
+    const summary = screen.getByTestId('output-summary')
+    expect(summary).toHaveTextContent('clip 704×1280')          // 720 -> 704, a multiple of 32
+    expect(summary).toHaveTextContent('81 frames')              // 81 is already 8n+1
+    expect(summary).toHaveTextContent('snapped to 32px and frames to 8n+1')
+
+    await user.click(screen.getByText('Next'))
+    await user.click(screen.getByTestId('submit'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    const video = (posts[0].body as { profile_overrides: { video: Record<string, number | string> } }).profile_overrides.video
+    expect(video).toMatchObject({ workflow: 'animate_ltx25', width: 704, height: 1280, length: 81 })
+    expect(Number(video.width) % 32).toBe(0)
+  })
+
+  it('keeps Wan on its own 4n+1 rule', async () => {
+    const posts = mockFetch({ ok: true, checks: [] })
+    const user = userEvent.setup()
+    renderWizard()
+    await user.click(screen.getByText('Next'))
+    await screen.findByText('Cinematic 16:9')
+    await user.click(screen.getByText('Next'))
+    await user.type(screen.getByTestId('idea'), 'x')
+    await user.selectOptions(await screen.findByTestId('clip-workflow'), 'animate')
+    await user.clear(screen.getByTestId('clip-length'))
+    await user.type(screen.getByTestId('clip-length'), '80')     // not 4n+1
+    expect(screen.getByTestId('output-summary')).toHaveTextContent('81 frames')
+    await user.click(screen.getByText('Next'))
+    await user.click(screen.getByTestId('submit'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    const video = (posts[0].body as { profile_overrides: { video: Record<string, number> } }).profile_overrides.video
+    expect(video.length).toBe(81)
   })
 })

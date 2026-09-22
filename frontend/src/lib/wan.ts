@@ -1,3 +1,26 @@
+/** Each animate workflow declares its own rules (`registry.SIZE_CONSTRAINTS` /
+ *  `LENGTH_CONSTRAINTS`): Wan wants 4n+1 frames on 16-aligned sizes, LTX 8n+1 on 32-aligned
+ *  ones. Sizes and lengths are snapped to the chosen model's rules before they are sent, or
+ *  the profile is rejected at submit ("width must be a multiple of 32, got 720"). */
+export const SIZE_MULTIPLE: Record<string, number> = {
+  multiple_of_8: 8, multiple_of_16: 16, multiple_of_32: 32,
+}
+
+/** Nearest multiple of `m`, never below it.
+ *
+ *  Ties round **down**, to agree with `formats.round_to` — Python's round() is half-to-even, so
+ *  720 at 32 is 704 there and would be 736 with JS's Math.round. Both are legal; differing from
+ *  the backend is not. */
+export const snapSize = (n: number, m: number, max = 1920): number =>
+  Math.min(Math.max(m, Math.ceil(n / m - 0.5) * m), Math.floor(max / m) * m)
+
+/** Nearest valid length for a "4n+1"/"8n+1" constraint (ties go up). */
+export function snapLength(n: number, constraint = '4n+1'): number {
+  const step = Number(constraint.split('n')[0]) || 4
+  if (!Number.isFinite(n)) return step * 12 + 1
+  return Math.max(1, step * Math.round((n - 1) / step) + 1)
+}
+
 /** Wan i2v only accepts length = 4n+1 (49, 81, 121 …). */
 export const isWanLength = (n: number): boolean => Number.isInteger(n) && n >= 1 && n % 4 === 1
 

@@ -10,7 +10,7 @@ import { AssetPicker } from '@/components/AssetPicker'
 import { EnvSummary } from '@/components/EnvSummary'
 import { ZoomButton, Zoomable } from '@/components/Lightbox'
 import { Button, Card, ErrorBox } from '@/components/ui'
-import { ASPECTS, clipSeconds, clipSize, snapToWan, stillSize, type Aspect } from '@/lib/wan'
+import { ASPECTS, SIZE_MULTIPLE, clipSeconds, clipSize, snapLength, snapSize, stillSize, type Aspect } from '@/lib/wan'
 import { estimateClip, fmtDuration, fmtRange, vramWarning } from '@/lib/render'
 
 const STEPS = ['Project', 'Profile', 'Brief', 'Review'] as const
@@ -89,19 +89,26 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
     const aspect = (clipAspect || (profile?.aspect as Aspect) || '16:9') as Aspect
     const known = (ASPECTS as readonly string[]).includes(aspect)
     const cls = clipClass || '480'
-    const [cw, ch] = clipClass || clipAspect ? clipSize(known ? aspect : '16:9', cls === '720' ? 720 : 480)
+    const workflow = clipWorkflow || v?.workflow || 'animate'
+    // The model's own rules — LTX wants 32-aligned sizes and 8n+1 frames, Wan 16 and 4n+1.
+    const spec = animateWorkflows.find((w) => w.name === workflow)
+    const multiple = SIZE_MULTIPLE[String(spec?.params?.width?.constraint ?? '')] ?? 16
+    const max = Number(spec?.params?.width?.max ?? 1280)
+    const lengthRule = String(spec?.params?.length?.constraint ?? '4n+1')
+    const [rawW, rawH] = clipClass || clipAspect ? clipSize(known ? aspect : '16:9', cls === '720' ? 720 : 480)
       : [v?.width ?? 0, v?.height ?? 0]
     const [sw, sh] = clipClass || clipAspect ? stillSize(known ? aspect : '16:9')
       : [profile?.keyframe?.width ?? 0, profile?.keyframe?.height ?? 0]
-    const length = clipLength === '' ? (v?.length ?? 49) : Number(clipLength)
-    return { aspect, width: cw, height: ch, still: [sw, sh] as [number, number], length,
-             fps: v?.fps ?? 16, workflow: clipWorkflow || v?.workflow || 'animate' }
+    const length = snapLength(clipLength === '' ? (v?.length ?? 49) : Number(clipLength), lengthRule)
+    return { aspect, width: snapSize(rawW, multiple, max), height: snapSize(rawH, multiple, max),
+             still: [sw, sh] as [number, number], length, lengthRule, multiple,
+             fps: v?.fps ?? 16, workflow }
   })()
   const overrides = (() => {
     const o: Record<string, unknown> = {}
     const video: Record<string, unknown> = {}
     if (clipWorkflow) video.workflow = clipWorkflow
-    if (clipLength !== '') video.length = snapToWan(Number(clipLength))
+    if (clipLength !== '' || clipWorkflow) video.length = output.length
     if (clipAspect || clipClass) {
       o.aspect = output.aspect
       o.keyframe = { width: output.still[0], height: output.still[1] }
@@ -119,10 +126,10 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
     if (!v?.width || !v.height || !v.length) return null
     // The overridden size and model, not the profile's — that is what will actually render.
     const est = estimateClip({ width: output.width, height: output.height,
-                               length: snapToWan(output.length), workflow: output.workflow })
+                               length: output.length, workflow: output.workflow })
     if (!est) return null
     const scenes = source === 'animate' ? (animateIds.length || null) : (nScenes === '' ? null : Number(nScenes))
-    const warning = vramWarning(output.width, output.height, snapToWan(output.length))
+    const warning = vramWarning(output.width, output.height, output.length)
     return (
       <span className={warning ? 'text-amber-800' : undefined}>
         {fmtRange(est)} per clip on {est.where}
@@ -323,7 +330,10 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
               </div>
               <p className="mt-1 text-xs text-neutral-600" data-testid="output-summary">
                 still {output.still[0]}×{output.still[1]} → clip {output.width}×{output.height} ·{' '}
-                {snapToWan(output.length)} frames @ {output.fps} fps (~{clipSeconds(snapToWan(output.length), output.fps)}s) · {output.workflow}
+                {output.length} frames @ {output.fps} fps (~{clipSeconds(output.length, output.fps)}s) · {output.workflow}
+                <span className="block text-neutral-500">
+                  sizes snapped to {output.multiple}px and frames to {output.lengthRule}, as {output.workflow} requires
+                </span>
               </p>
               {source === 'animate' && croppedAssets.length > 0 && (
                 <p className="text-xs text-amber-700" data-testid="crop-warning">
