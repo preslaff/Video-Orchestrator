@@ -188,6 +188,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/scenes/{index}/locks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Scene Locks
+         * @description Mark the parts of this scene's frame the animator must not redraw — a brand label, a
+         *     monogram — and restore them on the clip that already exists. A paste, not a render.
+         */
+        put: operations["set_scene_locks_api_jobs__job_id__scenes__index__locks_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/scenes/{index}/regenerate": {
         parameters: {
             query?: never;
@@ -1388,6 +1409,25 @@ export interface components {
             /** Unet */
             unet?: string | null;
         };
+        /**
+         * LockedRegion
+         * @description A rectangle of the frame, in fractions of its width/height, whose pixels come from
+         *     the keyframe rather than from the model — a brand label, a monogram, an emblem.
+         *
+         *     A video model redraws every frame from a latent compressed 8x in each direction, so type
+         *     below roughly 32 px of cap height cannot survive it. Marking it takes it out of the
+         *     model's hands entirely.
+         */
+        LockedRegion: {
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+            /** W */
+            w: number;
+            /** H */
+            h: number;
+        };
         /** OutputProfile */
         OutputProfile: {
             /** Id */
@@ -1732,6 +1772,14 @@ export interface components {
              */
             generate: boolean;
         };
+        /** SceneLocks */
+        SceneLocks: {
+            /**
+             * Regions
+             * @default []
+             */
+            regions: components["schemas"]["LockedRegion"][];
+        };
         /**
          * SceneOrder
          * @description The job's scenes in their new order — every scene's id, exactly once.
@@ -1880,6 +1928,11 @@ export interface components {
             /** Keyframe Asset Id */
             keyframe_asset_id?: string | null;
             reference_suggestion?: components["schemas"]["ReferenceSuggestionOut"] | null;
+            /**
+             * Locked Regions
+             * @default []
+             */
+            locked_regions: components["schemas"]["LockedRegion"][];
         };
         /**
          * SceneRegenerate
@@ -2578,6 +2631,42 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_scene_locks_api_jobs__job_id__scenes__index__locks_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SceneLocks"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

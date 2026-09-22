@@ -19,7 +19,7 @@ from .public import job_to_public, media_url, provenance_rows
 from .projects import AssetOut, asset_out
 from .schemas import (
     DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SaveSceneAsset, SceneEdits,
-    SceneInsert, SceneOrder, SceneRegenerate, VersionDetail,
+    SceneInsert, SceneLocks, SceneOrder, SceneRegenerate, VersionDetail,
 )
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -254,6 +254,27 @@ async def write_prompts(
     description changed, or whose first write failed."""
     try:
         job = manager.write_prompts(job_id, index)
+    except KeyError as e:
+        raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    except ValueError as e:
+        raise ApiError(400, "bad_request", str(e))
+    return job_to_public(job, store, manager)
+
+
+@router.put("/{job_id}/scenes/{index}/locks", response_model=JobPublic)
+async def set_scene_locks(
+    job_id: str,
+    index: int,
+    body: SceneLocks,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Mark the parts of this scene's frame the animator must not redraw — a brand label, a
+    monogram — and restore them on the clip that already exists. A paste, not a render."""
+    try:
+        job = manager.set_locked_regions(job_id, index, [r.model_dump() for r in body.regions])
     except KeyError as e:
         raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
     except RuntimeError as e:

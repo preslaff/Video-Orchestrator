@@ -491,6 +491,14 @@ class JobManager:
             job, moved=_moved(before, job), removed=[was], action="deleted", scene_id=removed.id,
             reason=label + (" (files deleted)" if delete_files else ""))
 
+    def set_locked_regions(self, job_id: str, index: int, regions: list[dict]) -> Job:
+        """Mark the parts of a scene's frame the animator must not redraw — a brand label,
+        a monogram — and put them back on the clip that already exists."""
+        job = self._editable_job(job_id)
+        o = Orchestrator.from_job(self.store, job)
+        o.set_locked_regions(job, index, regions)     # KeyError -> 404, ValueError -> 400
+        return job
+
     def reorder_scenes(self, job_id: str, scene_ids: list[str]) -> Job:
         """Put the scenes in this order (every scene, once) and renumber them."""
         job = self._editable_job(job_id)

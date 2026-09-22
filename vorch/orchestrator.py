@@ -816,11 +816,80 @@ class Orchestrator:
             self.store.save_job(job)
             self._event(job, "stills", index=scene.index, variants=len(batch))
 
-    @staticmethod
-    def _record_clip(scene: Scene, seed: int) -> Clip:
+    def _lock_regions(self, job: Job, scene: Scene, *, force: bool = False) -> None:
+        """Restore the scene's locked regions on the finished clip, from its own keyframe.
+
+        A video model redraws every frame from an 8x-compressed latent, so small printed type
+        has nowhere to live: it is wrong in frame 0 and worse from there. Marking the label
+        once takes it out of the model's hands entirely. A failure here is logged and the
+        unlocked clip kept — losing the whole render over a paste would be the worse trade.
+        """
+        # Always paste onto the *unlocked* render, never onto a previous paste, so changing the
+        # rectangles re-does the work from clean pixels instead of layering patch on patch.
+        base = scene.post_paths[-1] if scene.post_paths else (scene.raw_video_path or scene.video_path)
+        regions = [r for r in scene.locked_regions if r]
+        if not base or not scene.keyframe_path:
+            return
+        if not regions:
+            scene.video_path = str(base)         # the marks were removed: back to the render itself
+            return
+        src = Path(base)
+        dest = src.with_name(f"{src.stem}_locked.mp4")
+        if dest.is_file() and not force:         # a resumed run: the paste is already made
+            scene.video_path = str(dest)
+            return
+        try:
+            out = media.lock_regions(src, scene.keyframe_path,
+                                     [media.Region(**r) for r in regions], dest)
+        except (media.MediaError, FileNotFoundError, ValueError, TypeError) as e:
+            log.warning("job %s: scene %d locked regions failed: %s", job.id, scene.index, e)
+            self.store.log_decision(Decision(
+                job_id=job.id, scene_index=scene.index, phase="video", attempt=1, action="warning",
+                reason=f"locked regions could not be restored: {e}",
+            ))
+            return
+        scene.video_path = str(out)
+        self.store.log_decision(Decision(
+            job_id=job.id, scene_index=scene.index, phase="video", attempt=1, action="locked",
+            reason=f"{len(regions)} region(s) restored from the keyframe",
+        ))
+        self._event(job, "locked", index=scene.index, path=str(out), regions=len(regions))
+
+    def set_locked_regions(self, job: Job, index: int, regions: list[dict]) -> Scene:
+        """Mark (or clear) the regions of a scene the animator must not redraw, and re-apply
+        them to the clip that already exists — a paste, not a render, so it costs a second.
+
+        The rectangles are validated here rather than at the edge so an impossible one is
+        refused before it is stored.
+        """
+        scene = next((s for s in job.scenes if s.index == index), None)
+        if scene is None:
+            raise KeyError(f"scene {index}")
+        clean = [{"x": float(r["x"]), "y": float(r["y"]), "w": float(r["w"]), "h": float(r["h"])}
+                 for r in regions]
+        for r in clean:
+            media.Region(**r)                    # ValueError for a rectangle off the frame
+        scene.locked_regions = clean
+        was = scene.video_path
+        if scene.raw_video_path or scene.post_paths:
+            self._lock_regions(job, scene, force=True)
+            if scene.video_path != was:
+                for clip in scene.clips:
+                    if clip.video_path == was:
+                        clip.video_path = str(scene.video_path)
+                job.export = None                # the handoff folder holds the old clip
+        self.store.save_job(job)
+        return scene
+
+    def _record_clip(self, job: Job, scene: Scene, seed: int) -> Clip:
         """Append the clip just finished to the scene's history (the scene's clip fields
         stay the projection of the active one). Re-recording the same file is a no-op, so
-        a resumed run cannot duplicate an entry."""
+        a resumed run cannot duplicate an entry.
+
+        The scene's locked regions are restored first, so the version that is recorded,
+        assembled and exported is the one with the real label on it.
+        """
+        self._lock_regions(job, scene)
         existing = next((c for c in scene.clips if c.video_path == scene.video_path), None)
         if existing is not None:
             return existing
@@ -924,7 +993,7 @@ class Orchestrator:
             scene.raw_video_path = str(video)
             if not self.params.post_steps:
                 scene.video_path = str(video)
-                self._record_clip(scene, seed)
+                self._record_clip(job, scene, seed)
             self.store.log_decision(
                 Decision(job_id=job.id, scene_index=scene.index, phase="video",
                          attempt=1, action="generated")
@@ -946,7 +1015,7 @@ class Orchestrator:
             if outs:
                 scene.post_paths = [str(o) for o in outs]
                 scene.video_path = str(outs[-1])
-                self._record_clip(scene, seed)
+                self._record_clip(job, scene, seed)
                 self.store.log_decision(
                     Decision(job_id=job.id, scene_index=scene.index, phase="post", attempt=1,
                              action="generated", reason=", ".join(s.workflow for s in self.params.post_steps))
@@ -955,7 +1024,7 @@ class Orchestrator:
                     self._event(job, "postprocess", index=scene.index, step=i, path=str(o))
             else:
                 scene.video_path = scene.raw_video_path  # every step was skipped
-                self._record_clip(scene, seed)
+                self._record_clip(job, scene, seed)
         scene.status = SceneStatus.COMPLETE
         self.store.save_job(job)
 

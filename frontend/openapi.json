@@ -703,6 +703,68 @@
         }
       }
     },
+    "/api/jobs/{job_id}/scenes/{index}/locks": {
+      "put": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Set Scene Locks",
+        "description": "Mark the parts of this scene's frame the animator must not redraw — a brand label, a\nmonogram — and restore them on the clip that already exists. A paste, not a render.",
+        "operationId": "set_scene_locks_api_jobs__job_id__scenes__index__locks_put",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SceneLocks"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/scenes/{index}/regenerate": {
       "post": {
         "tags": [
@@ -3845,6 +3907,43 @@
         "type": "object",
         "title": "KeyframeSettings"
       },
+      "LockedRegion": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Y"
+          },
+          "w": {
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "W"
+          },
+          "h": {
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "H"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "w",
+          "h"
+        ],
+        "title": "LockedRegion",
+        "description": "A rectangle of the frame, in fractions of its width/height, whose pixels come from\nthe keyframe rather than from the model — a brand label, a monogram, an emblem.\n\nA video model redraws every frame from a latent compressed 8x in each direction, so type\nbelow roughly 32 px of cap height cannot survive it. Marking it takes it out of the\nmodel's hands entirely."
+      },
       "OutputProfile": {
         "properties": {
           "id": {
@@ -4680,6 +4779,20 @@
         "title": "SceneInsert",
         "description": "Add a scene at ``position`` (0 = first, len = last); Gemma writes its prompts."
       },
+      "SceneLocks": {
+        "properties": {
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/LockedRegion"
+            },
+            "type": "array",
+            "title": "Regions",
+            "default": []
+          }
+        },
+        "type": "object",
+        "title": "SceneLocks"
+      },
       "SceneOrder": {
         "properties": {
           "scene_ids": {
@@ -4981,6 +5094,14 @@
                 "type": "null"
               }
             ]
+          },
+          "locked_regions": {
+            "items": {
+              "$ref": "#/components/schemas/LockedRegion"
+            },
+            "type": "array",
+            "title": "Locked Regions",
+            "default": []
           }
         },
         "type": "object",

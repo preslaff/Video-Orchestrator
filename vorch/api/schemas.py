@@ -198,6 +198,21 @@ class VersionDetail(BaseModel):
     matches_scene_prompt: bool = True
 
 
+class LockedRegion(BaseModel):
+    """A rectangle of the frame, in fractions of its width/height, whose pixels come from
+    the keyframe rather than from the model — a brand label, a monogram, an emblem.
+
+    A video model redraws every frame from a latent compressed 8x in each direction, so type
+    below roughly 32 px of cap height cannot survive it. Marking it takes it out of the
+    model's hands entirely.
+    """
+
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    w: float = Field(gt=0, le=1)
+    h: float = Field(gt=0, le=1)
+
+
 class ScenePublic(BaseModel):
     index: int                  # position in the job; renumbered when scenes are added/moved
     id: str = ""                # stable identity, survives a renumber (edits, reorder payloads)
@@ -238,6 +253,12 @@ class ScenePublic(BaseModel):
     keyframe_source: str = "generated"
     keyframe_asset_id: str | None = None
     reference_suggestion: ReferenceSuggestionOut | None = None   # a project photo the storyboard thinks fits
+    # Rectangles of the frame the animator must not redraw, restored from the keyframe.
+    locked_regions: list[LockedRegion] = []
+
+
+class SceneLocks(BaseModel):
+    regions: list[LockedRegion] = []
 
 
 class JobPublic(BaseModel):

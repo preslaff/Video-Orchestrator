@@ -473,6 +473,31 @@ def test_regenerate_scene_route(client):
     assert client.post(f"/api/jobs/{job.id}/scenes/0/regenerate", json={"what": "audio"}).status_code == 422
 
 
+def test_scene_locks_route(client, monkeypatch):
+    """Marking a label restores it on the clip that already exists — a paste, not a render."""
+    from vorch import media
+    from vorch.state import Scene, new_job
+
+    monkeypatch.setattr(media, "lock_regions", lambda vid, src, regions, dest, **kw: Path(dest))
+    job = new_job(idea="r")
+    job.status = JobStatus.DONE
+    job.scenes = [Scene(index=0, keyframe_path="/k.png", video_path="/v.mp4", raw_video_path="/v.mp4")]
+    client.store.save_job(job)
+
+    label = {"x": 0.41, "y": 0.35, "w": 0.2, "h": 0.1}
+    r = client.put(f"/api/jobs/{job.id}/scenes/0/locks", json={"regions": [label]})
+    assert r.status_code == 200
+    scene = r.json()["scenes"][0]
+    assert scene["locked_regions"] == [label]
+    assert scene["video_path"] == "/v_locked.mp4"
+
+    assert client.put(f"/api/jobs/{job.id}/scenes/0/locks", json={"regions": []}).status_code == 200
+    assert client.put(f"/api/jobs/{job.id}/scenes/7/locks", json={"regions": []}).status_code == 404
+    assert client.put("/api/jobs/nope/scenes/0/locks", json={"regions": []}).status_code == 404
+    off = {"x": 0.9, "y": 0.1, "w": 0.3, "h": 0.1}     # a rectangle that leaves the frame
+    assert client.put(f"/api/jobs/{job.id}/scenes/0/locks", json={"regions": [off]}).status_code == 400
+
+
 def test_retry_resumes_a_failed_job(client):
     """A failed job (e.g. the API server lacked a workflow) is resumed from its state."""
     import time

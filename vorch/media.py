@@ -13,6 +13,7 @@ import logging
 import os
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import lru_cache
@@ -592,4 +593,113 @@ def assemble(
     log.info("assembled %d clip(s)%s%s -> %s (%.2fs)", len(paths),
              f", {sum(1 for sp in (speeds or []) if sp != 1)} retimed{' smooth' if smooth else ''}" if speeds else "",
              ", with audio" if with_audio else "", dest, total_duration(durations, cuts, speeds))
+    return dest
+
+
+# --- locked regions ----------------------------------------------------------
+#
+# A video model redraws every frame from a latent compressed 8x in each direction, so printed
+# type below roughly 32 px of cap height has nowhere to live: it comes back as a plausible
+# smear, wrong in frame 0 and worse as the shot moves. No prompt, seed or sampler changes
+# that. The only reliable answer is not to ask the model for it — render the shot, then put
+# the real pixels back from the source frame, which is where the type is still correct.
+#
+# This is exact when the marked object does not move, which is why the motion prompt keeps
+# printed text still (``storyboard.TEXT_SAFE_RULE``); a push-in is added afterwards, zooming
+# a sharp composite instead of asking the model to redraw a brand name.
+
+
+@dataclass(frozen=True)
+class Region:
+    """A rectangle of the frame to restore from the source image, in fractions of the
+    frame (0–1), so it survives any change of render size."""
+
+    x: float
+    y: float
+    w: float
+    h: float
+
+    def __post_init__(self) -> None:
+        if not (self.w > 0 and self.h > 0):
+            raise ValueError(f"region must have a positive size, got {self.w}x{self.h}")
+        if not (0 <= self.x and 0 <= self.y and self.x + self.w <= 1.0001 and self.y + self.h <= 1.0001):
+            raise ValueError(f"region {self} falls outside the frame")
+
+    def box(self, width: int, height: int, *, grow: int = 0) -> tuple[int, int, int, int]:
+        """Pixel ``(x, y, w, h)`` in a ``width``x``height`` frame, optionally grown by
+        ``grow`` px on every side and clamped to the frame."""
+        x0 = max(0, round(self.x * width) - grow)
+        y0 = max(0, round(self.y * height) - grow)
+        x1 = min(width, round((self.x + self.w) * width) + grow)
+        y1 = min(height, round((self.y + self.h) * height) + grow)
+        return x0, y0, x1 - x0, y1 - y0
+
+
+def lock_regions(
+    video: str | Path,
+    source: str | Path,
+    regions: Sequence[Region],
+    dest: str | Path,
+    *,
+    feather: int = 4,
+    crf: int = 16,
+    preset: str = "medium",
+    timeout: float | None = None,
+) -> Path:
+    """Paste ``regions`` of ``source`` over every frame of ``video``.
+
+    ``source`` is the clip's own keyframe — the image the model was given, where the label
+    is still the real one. It is scaled to the clip's size, masked to the regions with a
+    ``feather``-px falloff so the seam does not show, and overlaid on all frames in a single
+    pass (one decode, a few hundred milliseconds for a 5 s clip). Audio is copied through,
+    which matters for the models that generate their own.
+    """
+    video, source, dest = Path(video).expanduser(), Path(source).expanduser(), Path(dest)
+    for p in (video, source):
+        if not p.is_file():
+            raise FileNotFoundError(f"not found: {p}")
+    if not regions:
+        raise ValueError("no regions to lock")
+    info = probe(video)
+    w, h = info.width, info.height
+    if not (w and h):
+        raise MediaError(f"cannot read the size of {video}")
+    # The mask is built from the scaled source itself rather than a `color` source, so there is
+    # no second stream whose duration has to be matched to the clip's.
+    boxes = "".join(
+        f",drawbox=x={x}:y={y}:w={bw}:h={bh}:color=white@1:t=fill"
+        for x, y, bw, bh in (r.box(w, h, grow=feather) for r in regions)
+    )
+    graph = (
+        f"[1:v]scale={w}:{h}:flags=lanczos,format=rgb24,split[patch][mask];"
+        f"[mask]drawbox=x=0:y=0:w={w}:h={h}:color=black@1:t=fill{boxes},format=gray"
+        + (f",gblur=sigma={feather / 2:g}" if feather else "")
+        + "[m];"
+        "[patch][m]alphamerge[ov];"
+        "[0:v]format=rgb24[base];"
+        "[base][ov]overlay=0:0:eof_action=repeat:format=auto,format=yuv420p[out]"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+           "-i", str(video), "-i", str(source),
+           "-filter_complex", graph, "-map", "[out]"]
+    cmd += ["-map", "0:a?", "-c:a", "copy"] if info.has_audio else ["-an"]
+    cmd += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", str(part)]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                       timeout=timeout if timeout is not None else config.ASSEMBLE_TIMEOUT)
+    except subprocess.CalledProcessError as e:
+        part.unlink(missing_ok=True)
+        tail = (e.stderr or b"").decode(errors="replace")[-2000:].strip()
+        raise MediaError(f"ffmpeg could not lock the regions of {video.name}: {tail or e}") from e
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        part.unlink(missing_ok=True)
+        raise MediaError(f"ffmpeg could not lock the regions of {video.name}: {e}") from e
+    if not part.is_file() or part.stat().st_size == 0:
+        part.unlink(missing_ok=True)
+        raise MediaError("ffmpeg produced no output")
+    os.replace(part, dest)
+    log.info("locked %d region(s) of %s onto %s -> %s", len(regions), source.name, video.name, dest)
     return dest

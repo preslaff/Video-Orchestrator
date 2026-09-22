@@ -725,6 +725,83 @@ def test_a_users_own_image_is_never_shrunk_below_the_clip_it_feeds(wired, tmp_pa
     assert Orchestrator(store, params=stills).install_size() == (768, 768)
 
 
+# --- locked regions ---------------------------------------------------------------------
+
+
+def test_a_locked_region_is_restored_on_the_clip_that_is_recorded(wired, monkeypatch):
+    """A video model cannot carry small printed type. Marking it means the clip that is
+    recorded, assembled and exported is the one with the real label on it."""
+    from vorch import media
+
+    store, master, _ = wired
+    asked: list[tuple] = []
+    monkeypatch.setattr(media, "lock_regions",
+                        lambda vid, src, regions, dest, **kw:
+                        asked.append((str(vid), str(src), [(r.x, r.y, r.w, r.h) for r in regions]))
+                        or Path(dest))
+    o = Orchestrator(store, n_scenes=2, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)
+    for s in job.scenes:                    # no marks: nothing was pasted, nothing renamed
+        assert s.video_path == s.raw_video_path
+    assert asked == []
+
+    o.set_locked_regions(job, 0, [{"x": 0.4, "y": 0.3, "w": 0.2, "h": 0.1}])
+    scene = job.scenes[0]
+    assert asked == [(scene.raw_video_path, scene.keyframe_path, [(0.4, 0.3, 0.2, 0.1)])]
+    assert scene.video_path == "/video/1_locked.mp4"
+    assert [c.video_path for c in scene.clips] == ["/video/1_locked.mp4"]   # the version follows
+    assert job.export is None               # the handoff folder holds the clip without the label
+    assert job.scenes[1].video_path == "/video/2.mp4"                       # only this scene
+
+
+def test_clearing_the_marks_gives_the_render_back_and_re_marking_starts_from_it(wired, monkeypatch):
+    """Pasting onto a previous paste would compound every change; each pass starts clean."""
+    from vorch import media
+
+    store, _master, _ = wired
+    sources: list[str] = []
+    monkeypatch.setattr(media, "lock_regions",
+                        lambda vid, src, regions, dest, **kw: sources.append(str(vid)) or Path(dest))
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)
+    raw = job.scenes[0].raw_video_path
+
+    o.set_locked_regions(job, 0, [{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}])
+    o.set_locked_regions(job, 0, [{"x": 0.5, "y": 0.5, "w": 0.2, "h": 0.2}])
+    assert sources == [raw, raw]                      # never the locked file
+    o.set_locked_regions(job, 0, [])
+    assert job.scenes[0].video_path == raw and job.scenes[0].locked_regions == []
+
+
+def test_an_impossible_rectangle_is_refused_and_nothing_is_stored(wired):
+    store, _master, _ = wired
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="semi")
+    o.run(job)
+    with pytest.raises(ValueError):
+        o.set_locked_regions(job, 0, [{"x": 0.9, "y": 0.1, "w": 0.3, "h": 0.1}])
+    with pytest.raises(KeyError):
+        o.set_locked_regions(job, 7, [{"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}])
+
+
+def test_a_failed_paste_keeps_the_clip_and_says_so(wired, monkeypatch):
+    """Losing a whole render because a paste failed would be the worse trade."""
+    from vorch import media
+
+    store, _master, _ = wired
+    monkeypatch.setattr(media, "lock_regions",
+                        lambda *a, **kw: (_ for _ in ()).throw(media.MediaError("ffmpeg said no")))
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)
+    o.set_locked_regions(job, 0, [{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}])
+    assert job.scenes[0].video_path == job.scenes[0].raw_video_path
+    warned = [d for d in store.decisions(job.id) if d.action == "warning"]
+    assert warned and "ffmpeg said no" in warned[-1].reason
+
+
 def test_an_unknown_asset_stops_the_job_before_it_renders(wired, tmp_path, monkeypatch):
     store, master, _ = wired
     project, _assets = _assets_project(store, tmp_path, monkeypatch, n=1)

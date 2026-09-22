@@ -171,6 +171,10 @@ class Scene:
     regenerations: int = 0               # manual keyframe/clip redo count (seed offset)
     reference_suggestion: ReferenceSuggestion | None = None  # a photo the storyboard thinks fits
     writing_prompts: bool = False        # Gemma is writing this (inserted) scene's prompts
+    # Rectangles of the keyframe (fractions of the frame: x/y/w/h) that the animator must not
+    # be trusted with — a brand label, a monogram, an emblem. They are pasted back from the
+    # keyframe onto every rendered frame; see ``media.lock_regions``.
+    locked_regions: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -379,6 +383,7 @@ def _scene_to_dict(s: Scene) -> dict:
         "post_paths": list(s.post_paths),
         "regenerations": s.regenerations,
         "writing_prompts": s.writing_prompts,
+        "locked_regions": [dict(r) for r in s.locked_regions],
         "reference_suggestion": (
             {"asset_id": s.reference_suggestion.asset_id, "why": s.reference_suggestion.why,
              "fit": s.reference_suggestion.fit} if s.reference_suggestion else None
@@ -420,6 +425,7 @@ def _scene_from_dict(d: dict) -> Scene:
         post_paths=list(d.get("post_paths", []) or []),
         regenerations=int(d.get("regenerations", 0) or 0),
         writing_prompts=bool(d.get("writing_prompts", False)),
+        locked_regions=[dict(r) for r in d.get("locked_regions", []) or []],
         reference_suggestion=_suggestion_from_dict(d.get("reference_suggestion")),
     )
 
