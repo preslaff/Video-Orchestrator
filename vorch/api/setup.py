@@ -62,8 +62,12 @@ def _masked_dsn(dsn: str) -> str:
 
 
 def _backends() -> tuple[list[dict], str | None]:
+    # Not force=True: the setup page polls this every 30 s, and forcing re-read the YAML and
+    # logged a full backends line on every poll — which reads like a runaway loop in the log.
+    # ``load`` already invalidates its cache when the file's mtime or size changes, so edits
+    # still show up without a restart; it simply stays quiet when nothing has changed.
     try:
-        return [b.to_dict() for b in backends.load(force=True).values()], None
+        return [b.to_dict() for b in backends.load().values()], None
     except backends.BackendError as e:
         return [backends.local().to_dict()], str(e)
 

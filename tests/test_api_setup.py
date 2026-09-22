@@ -156,3 +156,16 @@ def test_config_reports_when_the_server_runs_older_code(client, monkeypatch):
 
     monkeypatch.setattr(setup_api, "_STARTED_AT", 0.0)   # every module is newer than the epoch
     assert client.get("/api/setup/config").json()["code_changed_since_start"] is True
+
+
+def test_the_config_poll_does_not_re_read_the_backends_file(client, monkeypatch):
+    """The setup page polls /config every 30 s. Forcing a re-read on each poll re-parsed the
+    YAML and logged a full backends line every time, which reads like a runaway loop."""
+    from vorch import backends
+
+    reads = []
+    real = backends.load
+    monkeypatch.setattr(backends, "load", lambda *a, **kw: reads.append(kw.get("force", False)) or real(*a, **kw))
+    for _ in range(3):
+        assert client.get("/api/setup/config").status_code == 200
+    assert reads and not any(reads), "the config route must not force a re-read"
