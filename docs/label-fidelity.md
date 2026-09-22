@@ -64,10 +64,24 @@ size, reading correctly, at every scale.
    interpolated across rather than held, then the whole path is low-passed — in centre-and-scale,
    so a growing region does not creep sideways. A camera move is smooth; the search's output
    is not.
-3. **The paste is sub-pixel and bilinear.** A rectangle that can only land on whole pixels has
-   to step, and nearest-neighbour swaps whole rows of the source in and out as it grows, so the
-   lettering crawls. Placements are fractional and the patch is resampled straight onto the
-   destination grid, with edge pixels painted only as far as the rectangle covers them.
+3. **The paste is sub-pixel and area-averaged.** A rectangle that can only land on whole pixels
+   has to step, and *point* sampling — bilinear included — reconstructs a different set of source
+   pixels each time the scale drifts a fraction, so the lettering crawls. Placements are
+   fractional; each patch is reconstructed **once**, at the largest it will ever be drawn
+   (ffmpeg Lanczos), and every frame integrates over each destination pixel's footprint rather
+   than sampling points. Edge pixels are painted only as far as the rectangle covers them.
+   Measured: 1.8x steadier than magnifying the small patch per frame.
+4. **The patch follows the scene's light.** Everything above leaves the geometry steady, and a
+   constant patch against a drifting surround still reads as the label pulsing — on the live
+   clip the band around the label drifts 156 -> 173 over five seconds as the camera pushes in.
+   `media._relight` reads that band's median per frame (outside the mark, where the model is
+   still drawing correctly) and applies the relative change as a gain, clamped to +/-18% so a
+   bad reading cannot wash the brand out and smoothed so the gain is not itself a flutter.
+   Measured: the label-to-surround mismatch swing halves, 11.9 -> 6.0.
+
+Things that turned out *not* to be the cause, having been measured: the encoder (CRF 16 -> 8
+moved it 1.24 -> 1.16 for three times the file size) and the feathered rim (the interior is
+just as lively as the whole rectangle).
 
 Measured on the live clip, before → after: stalls 37 → 11, reversals 3 → 0, jerk 2.96 → 2.30.
 The old track also under-shot badly, ending at 468 px where the label is really 624 px.

@@ -219,6 +219,45 @@ def bilinear(patch: np.ndarray, ys: np.ndarray, xs: np.ndarray) -> np.ndarray:
     return top * (1 - wy) + bottom * wy
 
 
+def _integral(a: np.ndarray, axis: int) -> np.ndarray:
+    """Running sum along ``axis`` with a leading zero, for exact area integration."""
+    a = np.moveaxis(a, axis, 0)
+    zero = np.zeros((1,) + a.shape[1:], np.float32)
+    return np.concatenate([zero, np.cumsum(a, axis=0, dtype=np.float32)])
+
+
+def _integrate(a: np.ndarray, edges: np.ndarray, axis: int) -> np.ndarray:
+    """Mean of ``a`` over each interval of ``edges``, along ``axis``.
+
+    Linear interpolation into the running sum gives the exact area under a box-pixel model,
+    which is what makes this stable: as an interval grows by a fraction of a pixel the mean
+    changes by a fraction, where a point sample would swap a whole row in or out.
+    """
+    integral = _integral(a, axis)
+    n = integral.shape[0] - 1
+
+    def at(e: np.ndarray) -> np.ndarray:
+        e = np.clip(e, 0, n)
+        i0 = np.floor(e).astype(np.intp)
+        i1 = np.minimum(i0 + 1, n)
+        t = (e - i0).reshape((-1,) + (1,) * (integral.ndim - 1))
+        return integral[i0] * (1 - t) + integral[i1] * t
+
+    lo, hi = edges[:-1], edges[1:]
+    width = np.maximum(hi - lo, 1e-6).reshape((-1,) + (1,) * (a.ndim - 1))
+    return np.moveaxis((at(hi) - at(lo)) / width, 0, axis)
+
+
+def area_resample(patch: np.ndarray, y_edges: np.ndarray, x_edges: np.ndarray) -> np.ndarray:
+    """Resample ``patch`` by averaging it over each output pixel's footprint.
+
+    Point sampling — bilinear included — reconstructs a *different* set of source pixels each
+    time the scale shifts a fraction, so fine lettering crawls as a tracked region grows. An
+    area average integrates instead, so the output changes as smoothly as the scale does.
+    """
+    return _integrate(_integrate(patch, y_edges, 0), x_edges, 1)
+
+
 def _edge_alpha(centres: np.ndarray, lo: float, hi: float, feather: float) -> np.ndarray:
     """A 0..1 ramp along one axis: fading in over ``feather`` px after ``lo`` and out before
     ``hi``. Computed from the pixel centres, so it moves smoothly with a fractional edge.
@@ -249,7 +288,12 @@ def paste(frame: np.ndarray, patch: np.ndarray, at: Placement, *, feather: float
     ph, pw = patch.shape[:2]
     xc = np.arange(x0, x1, dtype=float) + 0.5
     yc = np.arange(y0, y1, dtype=float) + 0.5
-    sub = bilinear(patch, (yc - at.y) / at.h * ph - 0.5, (xc - at.x) / at.w * pw - 0.5)
+    # Each destination pixel covers one unit of the frame; map its two edges into the patch and
+    # average what lies between them. ``patch`` is expected to be at least as large as the
+    # placement (see ``media._lock_tracked``), so this is always a minification.
+    sub = area_resample(patch,
+                        (np.arange(y0, y1 + 1, dtype=float) - at.y) / at.h * ph,
+                        (np.arange(x0, x1 + 1, dtype=float) - at.x) / at.w * pw)
     alpha = (_edge_alpha(yc, at.y, at.y + at.h, feather)[:, None]
              * _edge_alpha(xc, at.x, at.x + at.w, feather)[None, :])[..., None]
     region = frame[y0:y1, x0:x1]

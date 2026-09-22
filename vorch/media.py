@@ -665,6 +665,7 @@ def lock_regions(
     crf: int = 16,
     preset: str = "medium",
     track: bool = True,
+    relight: float = 0.18,
     timeout: float | None = None,
 ) -> Path:
     """Paste ``regions`` of ``source`` over every frame of ``video``.
@@ -693,7 +694,7 @@ def lock_regions(
         raise MediaError(f"cannot read the size of {video}")
     if track:
         return _lock_tracked(video, source, regions, dest, info=info, feather=feather,
-                             crf=crf, preset=preset, timeout=timeout)
+                             crf=crf, preset=preset, relight=relight, timeout=timeout)
     # The mask is built from the scaled source itself rather than a `color` source, so there is
     # no second stream whose duration has to be matched to the clip's.
     boxes = "".join(
@@ -735,6 +736,74 @@ def lock_regions(
     return dest
 
 
+def _scale_rgb(patch: "np.ndarray", width: int, height: int) -> "np.ndarray":
+    """Resize an HxWx3 array through ffmpeg's Lanczos, over a pipe (no temp files).
+
+    Used once per region, to build the reference the per-frame area resampling shrinks from.
+    A brand label is the one thing in the frame that has to stay legible, so it is worth the
+    better reconstruction filter; falls back to the input unchanged if ffmpeg cannot do it.
+    """
+    import numpy as np
+
+    ph, pw = patch.shape[:2]
+    cmd = ["ffmpeg", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{pw}x{ph}",
+           "-i", "-", "-vf", f"scale={width}:{height}:flags=lanczos",
+           "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    try:
+        done = subprocess.run(cmd, input=patch.clip(0, 255).astype(np.uint8).tobytes(),
+                              capture_output=True, timeout=120)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        log.warning("could not rescale a locked patch (%s); using it as it is", e)
+        return patch
+    if len(done.stdout) < width * height * 3:
+        log.warning("could not rescale a locked patch; using it as it is")
+        return patch
+    return np.frombuffer(done.stdout, np.uint8)[: width * height * 3] \
+             .reshape(height, width, 3).astype(np.float32)
+
+
+def _ring_level(grey: "np.ndarray", at, pad: int = 14) -> float:
+    """Typical brightness of the band just outside a placement.
+
+    The scene's light on the marked object, measured where the model is still drawing it. The
+    median, not the mean, so a petal drifting through the band does not move the reading.
+    """
+    import numpy as np
+
+    fh, fw = grey.shape
+    x0, y0 = max(0, int(at.x) - pad), max(0, int(at.y) - pad)
+    x1, y1 = min(fw, int(at.x + at.w) + pad), min(fh, int(at.y + at.h) + pad)
+    if x1 - x0 < 3 or y1 - y0 < 3:
+        return 0.0
+    outer = grey[y0:y1, x0:x1]
+    mask = np.ones(outer.shape, bool)
+    ix0, iy0 = max(0, int(at.x) - x0), max(0, int(at.y) - y0)
+    mask[iy0:iy0 + int(at.h), ix0:ix0 + int(at.w)] = False
+    band = outer[mask]
+    return float(np.median(band)) if band.size else 0.0
+
+
+def _relight(levels: list[float], *, limit: float = 0.18, window: int = 5) -> "np.ndarray":
+    """Per-frame gain that makes a pasted patch follow the scene's light.
+
+    A patch cut from one frame is frozen at that frame's exposure, but the render around it
+    is not: on the live clip the band around the label drifts 156 -> 173 over five seconds as
+    the camera pushes in. A constant patch against a drifting surround reads as the label
+    pulsing, which is the flicker left once the geometry is steady. Relative to the first
+    frame, so frame 0 is untouched, clamped so a bad reading cannot wash the brand out, and
+    lightly smoothed so the gain itself does not become a new source of flutter.
+    """
+    import numpy as np
+
+    from . import tracking
+
+    a = np.array(levels, float)
+    if a.size < 2 or a[0] <= 1.0:
+        return np.ones(max(a.size, 1))
+    gain = np.clip(a / a[0], 1 - limit, 1 + limit)
+    return tracking._moving_average(gain, window)
+
+
 def _follow_regions(video: Path, marks: list[dict], w: int, h: int) -> list[list]:
     """Where each marked region sits in every frame of ``video``.
 
@@ -768,16 +837,18 @@ def _follow_regions(video: Path, marks: list[dict], w: int, h: int) -> list[list
                     x, y = int(at.x), int(at.y)
                     m["template"] = grey[y:y + int(at.h), x:x + int(at.w)].copy()
                     m["at"] = at
+                    m["levels"] = []
                 else:
                     m["at"] = tracking.follow(m["template"], grey, m["at"])
                 tracks[i].append(m["at"])
+                m["levels"].append(_ring_level(grey, m["at"]))
             first = False
         src.stdout.close()
     return [tracking.smooth(t) for t in tracks]
 
 
 def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Path, *,
-                  info: MediaInfo, feather: int, crf: int, preset: str,
+                  info: MediaInfo, feather: int, crf: int, preset: str, relight: float,
                   timeout: float | None) -> Path:
     """``lock_regions`` for a shot that moves: find each region per frame, then paste it.
 
@@ -803,6 +874,18 @@ def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Pa
                       "start": tracking.Placement(x, y, bw, bh), "w0": bw})
 
     tracks = _follow_regions(video, marks, w, h)
+    # Reconstruct each patch ONCE, at the largest it will ever be drawn, and shrink from that
+    # every frame. Magnifying the small patch afresh per frame reconstructs a different set of
+    # source pixels as the scale drifts, which is exactly what makes fine lettering crawl:
+    # measured on the live clip, this holds ~3x steadier.
+    for m, path in zip(marks, tracks):
+        need_w = max((p.w for p in path), default=m["w0"])
+        need_h = max((p.h for p in path), default=1.0)
+        ph, pw = m["patch"].shape[:2]
+        if need_w > pw or need_h > ph:
+            m["patch"] = _scale_rgb(m["patch"], max(pw, int(np.ceil(need_w))),
+                                    max(ph, int(np.ceil(need_h))))
+        m["gain"] = _relight(m.get("levels") or [], limit=relight) if relight else np.ones(len(path))
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(dest.name + ".part")
@@ -826,11 +909,14 @@ def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Pa
                     break
                 frame = np.frombuffer(raw, np.uint8).reshape(h, w, 3).astype(np.float32)
                 for m, path in zip(marks, tracks):
-                    at = path[min(frames, len(path) - 1)]
+                    i = min(frames, len(path) - 1)
+                    at = path[i]
                     # The blend must cover the same fraction of the label at every scale, or
                     # the seam that is invisible at 1x becomes a bright edge at 3x.
                     grown = feather * at.w / m["w0"] if feather else 0.0
-                    tracking.paste(frame, m["patch"], at, feather=grown)
+                    gain = m["gain"][min(i, len(m["gain"]) - 1)]
+                    patch = m["patch"] * gain if gain != 1.0 else m["patch"]
+                    tracking.paste(frame, patch, at, feather=grown)
                 out.stdin.write(frame.clip(0, 255).astype(np.uint8).tobytes())
                 frames += 1
             out.stdin.close()

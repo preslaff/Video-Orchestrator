@@ -101,6 +101,43 @@ def test_region_boxes_are_pixels_grown_and_clamped():
     assert edge.box(100, 100, grow=20) == (0, 0, 70, 70)   # clamped, not negative
 
 
+def test_the_patch_follows_the_scene_light():
+    """A patch cut from one frame is frozen at that frame's exposure. The render around it is
+    not, and a constant patch against a drifting surround reads as the label pulsing."""
+    import numpy as np
+
+    steady = media._relight([100.0] * 10)
+    assert np.allclose(steady, 1.0)                     # nothing drifted: nothing to correct
+
+    brightening = media._relight([100.0 + 2 * i for i in range(12)])
+    assert brightening[0] == pytest.approx(1.0, abs=0.02)   # frame 0 is the reference
+    assert brightening[-1] > brightening[0]                 # and the patch brightens with it
+    assert np.all(np.diff(brightening) >= -1e-9)            # smoothly, never backwards
+
+    # A wild reading cannot wash the brand out, whichever way it goes.
+    assert media._relight([100.0, 900.0, 900.0, 900.0]).max() <= 1.18 + 1e-9
+    assert media._relight([100.0, 1.0, 1.0, 1.0]).min() >= 1 - 0.18 - 1e-9
+    assert np.allclose(media._relight([100.0] * 6, limit=0.0), 1.0)
+    assert media._relight([]).tolist() == [1.0]         # nothing measured: no correction
+
+
+def test_the_light_is_read_from_around_the_mark_not_inside_it():
+    """Inside is what the model got wrong; outside is the scene still lighting the object."""
+    import numpy as np
+
+    from vorch.tracking import Placement
+
+    grey = np.full((100, 100), 80.0, np.float32)
+    grey[40:60, 40:60] = 250.0                          # the marked region: bright, and ignored
+    assert media._ring_level(grey, Placement(40, 40, 20, 20)) == pytest.approx(80.0)
+
+    grey[20:80, 20:80] = np.where(grey[20:80, 20:80] == 250.0, 250.0, 130.0)
+    assert media._ring_level(grey, Placement(40, 40, 20, 20)) == pytest.approx(130.0)
+    # A region flush against the edge still reads, and a degenerate one does not raise.
+    assert media._ring_level(grey, Placement(0, 0, 20, 20)) > 0
+    assert media._ring_level(grey, Placement(0, 0, 1, 1), pad=0) == 0.0
+
+
 def test_missing_inputs_and_empty_marks_are_errors(tmp_path):
     clip, source = tmp_path / "clip.mp4", tmp_path / "kf.png"
     _lavfi(clip, "color=c=black:s=32x32:rate=8:duration=0.25", "-pix_fmt", "yuv420p")
