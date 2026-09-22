@@ -1,16 +1,16 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { errorDetails, errorMessage } from '@/api/client'
 import type { JobSpec, OutputProfile } from '@/api/types'
 import { useCreateJob } from '@/hooks/useJobs'
-import { useEnv, useProfiles, useProject, useProjects, type EnvReport } from '@/hooks/useSetup'
+import { useEnv, useProfiles, useProject, useProjects, useWorkflows, type EnvReport } from '@/hooks/useSetup'
 import { AssetPicker } from '@/components/AssetPicker'
 import { EnvSummary } from '@/components/EnvSummary'
 import { ZoomButton, Zoomable } from '@/components/Lightbox'
 import { Button, Card, ErrorBox } from '@/components/ui'
-import { clipSeconds } from '@/lib/wan'
+import { ASPECTS, clipSeconds, clipSize, snapToWan, stillSize, type Aspect } from '@/lib/wan'
 import { estimateClip, fmtDuration, fmtRange, vramWarning } from '@/lib/render'
 
 const STEPS = ['Project', 'Profile', 'Brief', 'Review'] as const
@@ -23,6 +23,30 @@ export function profileSummary(p: OutputProfile): string {
   const v = p.video
   if (!v) return `video · ${p.aspect} · ${kf}`
   return `video · ${p.aspect} · ${kf} · clip ${v.width}×${v.height} · ${v.length} frames @ ${v.fps} fps (~${clipSeconds(v.length, v.fps)}s)`
+}
+
+/** Aspect ratio of each thumbnail, measured in the browser.
+ *
+ *  The API does not carry asset dimensions, and thumbnails keep the original ratio — which is
+ *  all that decides whether an image survives the centre crop. Nothing renders differently
+ *  until a measurement arrives, so a headless environment simply shows no crop warning. */
+function useThumbAspects(urls: string[]): Record<string, number> {
+  const [ratios, setRatios] = useState<Record<string, number>>({})
+  const key = urls.join('|')
+  useEffect(() => {
+    let alive = true
+    for (const url of key ? key.split('|') : []) {
+      const img = new window.Image()
+      img.onload = () => {
+        if (alive && img.naturalHeight) {
+          setRatios((m) => (m[url] ? m : { ...m, [url]: img.naturalWidth / img.naturalHeight }))
+        }
+      }
+      img.src = url
+    }
+    return () => { alive = false }
+  }, [key])
+  return ratios
 }
 
 export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: string } = {}) {
@@ -40,6 +64,12 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
   // already exist as project assets — one scene each, and only the motion is written.
   const [source, setSource] = useState<'generate' | 'animate'>('generate')
   const [animateIds, setAnimateIds] = useState<string[]>([])
+  // Output overrides: the model (a registered animate workflow, which also picks the backend)
+  // and the size class. '' = whatever the profile says.
+  const [clipWorkflow, setClipWorkflow] = useState('')
+  const [clipAspect, setClipAspect] = useState<Aspect | ''>('')
+  const [clipClass, setClipClass] = useState<'' | '480' | '720'>('')
+  const [clipLength, setClipLength] = useState<number | ''>('')
   const [refIds, setRefIds] = useState<string[]>([])
   const [masterFace, setMasterFace] = useState('')
   const [faceSwap, setFaceSwap] = useState<'profile' | 'on' | 'off'>('profile')
@@ -52,15 +82,47 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
   const effectiveProfileId = profileId || project.data?.default_profile_id || 'cinematic_16x9'
   const profile = profiles.data?.find((p) => p.id === effectiveProfileId)
   const env = useEnv(effectiveProfileId, false, step === 3)
+  const animateWorkflows = useWorkflows('animate').data?.workflows ?? []
+  // What this job will actually render at, once the overrides are folded in.
+  const output = (() => {
+    const v = profile?.video
+    const aspect = (clipAspect || (profile?.aspect as Aspect) || '16:9') as Aspect
+    const known = (ASPECTS as readonly string[]).includes(aspect)
+    const cls = clipClass || '480'
+    const [cw, ch] = clipClass || clipAspect ? clipSize(known ? aspect : '16:9', cls === '720' ? 720 : 480)
+      : [v?.width ?? 0, v?.height ?? 0]
+    const [sw, sh] = clipClass || clipAspect ? stillSize(known ? aspect : '16:9')
+      : [profile?.keyframe?.width ?? 0, profile?.keyframe?.height ?? 0]
+    const length = clipLength === '' ? (v?.length ?? 49) : Number(clipLength)
+    return { aspect, width: cw, height: ch, still: [sw, sh] as [number, number], length,
+             fps: v?.fps ?? 16, workflow: clipWorkflow || v?.workflow || 'animate' }
+  })()
+  const overrides = (() => {
+    const o: Record<string, unknown> = {}
+    const video: Record<string, unknown> = {}
+    if (clipWorkflow) video.workflow = clipWorkflow
+    if (clipLength !== '') video.length = snapToWan(Number(clipLength))
+    if (clipAspect || clipClass) {
+      o.aspect = output.aspect
+      o.keyframe = { width: output.still[0], height: output.still[1] }
+      video.width = output.width
+      video.height = output.height
+    }
+    if (Object.keys(video).length) o.video = video
+    return Object.keys(o).length ? o : null
+  })()
+
   // What this job will cost in GPU time, from measured runs — the scene count is the multiplier
   // that turns a comfortable size into an overnight render.
   const renderCost = (() => {
     const v = profile?.video
     if (!v?.width || !v.height || !v.length) return null
-    const est = estimateClip({ width: v.width, height: v.height, length: v.length, workflow: v.workflow })
+    // The overridden size and model, not the profile's — that is what will actually render.
+    const est = estimateClip({ width: output.width, height: output.height,
+                               length: snapToWan(output.length), workflow: output.workflow })
     if (!est) return null
     const scenes = source === 'animate' ? (animateIds.length || null) : (nScenes === '' ? null : Number(nScenes))
-    const warning = vramWarning(v.width, v.height, v.length)
+    const warning = vramWarning(output.width, output.height, snapToWan(output.length))
     return (
       <span className={warning ? 'text-amber-800' : undefined}>
         {fmtRange(est)} per clip on {est.where}
@@ -74,6 +136,14 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
   const masterAsset = project.data?.assets.find((a) => a.kind === 'master_face')
   const swapOn = faceSwap === 'on' || (faceSwap === 'profile' && !!profile?.face_swap?.enabled)
   const refAssets = project.data?.assets.filter((a) => a.kind !== 'master_face') ?? []
+
+  // Which of the picked images would lose pixels to the still's centre crop.
+  const picked = animateIds.map((id) => refAssets.find((a) => a.id === id)).filter(Boolean) as typeof refAssets
+  const thumbRatios = useThumbAspects(picked.map((a) => a.thumb_url || a.url))
+  const croppedAssets = picked.filter((a) => {
+    const r = thumbRatios[a.thumb_url || a.url]
+    return r !== undefined && Math.abs(r - output.still[0] / output.still[1]) > 0.02
+  })
 
   const problems = useMemo(() => {
     const out: string[] = []
@@ -103,6 +173,7 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
     seed,
     project_id: projectId || null,
     profile_id: profileId || null,
+    profile_overrides: overrides,
     mode,
     reference_asset_ids: source === 'generate' && mode === 'edit' ? refIds : [],
     reference_images: [],
@@ -212,6 +283,55 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
                 </p>
               </div>
             )}
+            <div className="md:col-span-2 rounded border border-neutral-200 bg-neutral-50 p-3">
+              <span className="text-sm font-medium">Output</span>
+              <div className="mt-1 grid gap-2 sm:grid-cols-4">
+                <label className="block text-sm sm:col-span-2">
+                  <span className="text-xs text-neutral-500">model</span>
+                  <select data-testid="clip-workflow" value={clipWorkflow} onChange={(e) => setClipWorkflow(e.target.value)}
+                    className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1">
+                    <option value="">profile default ({profile?.video?.workflow ?? 'animate'})</option>
+                    {animateWorkflows.map((w) => (
+                      <option key={w.name} value={w.name}>{w.name} — {w.backend}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  <span className="text-xs text-neutral-500">aspect</span>
+                  <select data-testid="clip-aspect" value={clipAspect} onChange={(e) => setClipAspect(e.target.value as Aspect | '')}
+                    className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1">
+                    <option value="">profile ({profile?.aspect ?? '16:9'})</option>
+                    {ASPECTS.map((a2) => <option key={a2} value={a2}>{a2}</option>)}
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  <span className="text-xs text-neutral-500">size class</span>
+                  <select data-testid="clip-class" value={clipClass} onChange={(e) => setClipClass(e.target.value as '' | '480' | '720')}
+                    className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1">
+                    <option value="">profile</option>
+                    <option value="480">480 — fits this GPU</option>
+                    <option value="720">720 — cloud backend</option>
+                  </select>
+                </label>
+                <label className="block text-sm">
+                  <span className="text-xs text-neutral-500">frames (4n+1)</span>
+                  <input type="number" data-testid="clip-length" min={5} step={4} value={clipLength}
+                    onChange={(e) => setClipLength(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder={String(profile?.video?.length ?? 49)}
+                    className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" />
+                </label>
+              </div>
+              <p className="mt-1 text-xs text-neutral-600" data-testid="output-summary">
+                still {output.still[0]}×{output.still[1]} → clip {output.width}×{output.height} ·{' '}
+                {snapToWan(output.length)} frames @ {output.fps} fps (~{clipSeconds(snapToWan(output.length), output.fps)}s) · {output.workflow}
+              </p>
+              {source === 'animate' && croppedAssets.length > 0 && (
+                <p className="text-xs text-amber-700" data-testid="crop-warning">
+                  {croppedAssets.length} of your {animateIds.length} image(s) will be centre-cropped to{' '}
+                  {output.still[0]}×{output.still[1]} — sides or top and bottom are lost.
+                </p>
+              )}
+            </div>
             {source === 'generate' && <label className="block text-sm">
               <span className="font-medium">Style (free text, goes first in every keyframe prompt)</span>
               <input value={style} onChange={(e) => setStyle(e.target.value)} className="mt-1 block w-full rounded border border-neutral-300 px-2 py-1" placeholder="impasto oil painting / 35mm film still / phone photo" />

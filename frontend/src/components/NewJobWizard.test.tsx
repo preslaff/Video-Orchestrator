@@ -201,3 +201,53 @@ describe('NewJobWizard animating existing images', () => {
     expect(await screen.findByText(/would paste a face onto your images/)).toBeInTheDocument()
   })
 })
+
+describe('NewJobWizard output overrides', () => {
+  beforeEach(() => push.mockReset())
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('sends the chosen model and size as profile overrides, still and clip together', async () => {
+    const posts = mockFetch({ ok: true, checks: [] })
+    const user = userEvent.setup()
+    renderWizard()
+    await user.click(screen.getByText('Next'))
+    await screen.findByText('Cinematic 16:9')
+    await user.click(screen.getByText('Next'))
+    await user.type(screen.getByTestId('idea'), 'a teaser')
+
+    // Default: no overrides at all, and the summary reflects the profile.
+    expect(screen.getByTestId('output-summary')).toHaveTextContent('still 1024×576 → clip 832×480')
+
+    await user.selectOptions(screen.getByTestId('clip-aspect'), '9:16')
+    await user.selectOptions(screen.getByTestId('clip-class'), '720')
+    await user.clear(screen.getByTestId('clip-length'))
+    await user.type(screen.getByTestId('clip-length'), '81')
+    expect(screen.getByTestId('output-summary')).toHaveTextContent('still 576×1024 → clip 720×1280')
+    expect(screen.getByTestId('output-summary')).toHaveTextContent('81 frames @ 16 fps (~5.06s)')
+
+    await user.click(screen.getByText('Next'))
+    await user.click(screen.getByTestId('submit'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    const body = posts[0].body as { profile_overrides: { aspect: string; keyframe: object; video: object } }
+    // The still moves with the clip: a profile whose aspects differ is rejected at submit.
+    expect(body.profile_overrides).toEqual({
+      aspect: '9:16',
+      keyframe: { width: 576, height: 1024 },
+      video: { length: 81, width: 720, height: 1280 },
+    })
+  })
+
+  it('leaves the profile alone when nothing is chosen', async () => {
+    const posts = mockFetch({ ok: true, checks: [] })
+    const user = userEvent.setup()
+    renderWizard()
+    await user.click(screen.getByText('Next'))
+    await screen.findByText('Cinematic 16:9')
+    await user.click(screen.getByText('Next'))
+    await user.type(screen.getByTestId('idea'), 'x')
+    await user.click(screen.getByText('Next'))
+    await user.click(screen.getByTestId('submit'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect((posts[0].body as { profile_overrides: unknown }).profile_overrides).toBeNull()
+  })
+})

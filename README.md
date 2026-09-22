@@ -134,7 +134,12 @@ the UI).
 | Route | Purpose |
 |---|---|
 | `/jobs` | All jobs with id, status, project, kind and profile name; filters by project, unassigned and status, kept in the URL (`/jobs?project_id=…`, `?unassigned=1`); live status badges; delete. |
-| `/jobs/new` | The **new-job wizard**, in two shapes. *Generate images*: project → profile → brief (idea, style, scenes, seed, autonomy, keyframe mode + references, face swap, evaluation) → review. *Animate my images*: the keyframes already exist as project assets — pick them in playing order, give a one-line **direction**, and vorch makes one scene per asset with that image installed as its keyframe and the motion written by Gemma **looking at the frame**. No storyboard, no keyframe generation; face swap must be off, and an asset of another aspect is flagged before it is centre-cropped. Submission is blocked, with reasons, while the environment check fails (a *force* switch overrides). |
+| `/jobs/new` | The **new-job wizard**, in two shapes. *Generate images*: project → profile → brief (idea, style, scenes, seed, autonomy, keyframe mode + references, face swap, evaluation) → review. *Animate my images*: the keyframes already exist as project assets — pick them in playing order, give a one-line **direction**, and vorch makes one scene per asset with that image installed as its keyframe and the motion written by Gemma **looking at the frame**. No storyboard, no keyframe generation; face swap must be off, and an asset of another aspect is flagged before it is centre-cropped. Either shape can override the **output** for this job without touching the profile: the model
+(any registered `animate` workflow — local Wan, Wan fp8/fp16 on Modal, LTX-2.5), the aspect, the
+480/720 size class and the frame count, with the measured render time and the VRAM headroom shown
+as you choose. The still and the clip size always move together, because a profile whose aspects
+differ is rejected at submit; in *Animate my images* the panel also counts how many of the picked
+images that crop would cut. Submission is blocked, with reasons, while the environment check fails (a *force* switch overrides). |
 | `/jobs/[id]` | The **job page**: progress panel, gate/review panel, scene grid (keyframes, variants, clips), assemble panel, export panel, collapsible decision log and provenance. Everything updates live over SSE; the stream resumes across approval gates and reloads. |
 | `/setup/env` | Environment check with a re-run button and the effective configuration. |
 | `/setup/workflows` | Registered ComfyUI workflows, their parameters and requirements; how to add one. |
