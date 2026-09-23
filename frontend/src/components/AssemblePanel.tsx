@@ -6,6 +6,7 @@ import { errorMessage } from '@/api/client'
 import { describeStep, type JobEvent } from '@/api/events'
 import type { AssemblyClip, AssemblySpecIn, AssemblyStatus as AssemblyStatusT, JobPublic } from '@/api/types'
 import { useAssembly, useRunAssembly } from '@/hooks/useJobs'
+import { ClipPreview } from '@/components/ClipPreview'
 import { MediaThumb } from '@/components/MediaThumb'
 import { AssemblyVersions } from '@/components/AssemblyVersions'
 import { Button, Empty, ErrorBox, fmtTime } from '@/components/ui'
@@ -18,8 +19,13 @@ type Row = {
   uid: string; scene_index: number; selected: boolean; source: 'final' | 'raw'
   target: string | null; clip_id: string | null; start: string | null; end: string | null
 }
+// Seeded rows take their identity from their position, so re-deriving the draft (which happens
+// on every render until the first edit) yields the *same* ids: React keys stay put and anything
+// remembering a row by id — an open preview — survives. Rows added later get a unique id of
+// their own, in a separate namespace so the two can never collide.
 let nextUid = 0
-const newUid = () => `r${nextUid++}`
+const newUid = () => `d${nextUid++}`
+const seedUid = (position: number) => `s${position}`
 
 function clipSize(job: JobPublic): [number, number] | null {
   const v = (job.profile as { video?: { width?: number; height?: number } } | null)?.video
@@ -40,12 +46,12 @@ function seedDraft(status: AssemblyStatusT | undefined): Draft {
   // throw away half of a timeline that deliberately played a shot twice.
   for (const it of spec?.items ?? []) {
     if (known.has(it.scene_index)) {
-      rows.push({ uid: newUid(), scene_index: it.scene_index, selected: true, source: it.source ?? 'final',
+      rows.push({ uid: seedUid(rows.length), scene_index: it.scene_index, selected: true, source: it.source ?? 'final',
                   target: num(it.target_seconds), clip_id: it.clip_id ?? null, start: num(it.start), end: num(it.end) })
     }
   }
   const placed = new Set(rows.map((r) => r.scene_index))
-  for (const c of clips) if (!placed.has(c.scene_index)) rows.push({ uid: newUid(), scene_index: c.scene_index, selected: !spec, source: 'final', target: null, clip_id: null, start: null, end: null })
+  for (const c of clips) if (!placed.has(c.scene_index)) rows.push({ uid: seedUid(rows.length), scene_index: c.scene_index, selected: !spec, source: 'final', target: null, clip_id: null, start: null, end: null })
   const n = rows.filter((r) => r.selected).length
   const cuts = defaultCuts(n).map((d, i) => spec?.cuts?.[i] ?? d)
   return { rows, cuts, fps: spec?.fps ?? '', smooth: !!spec?.smooth, audio: !!spec?.audio }
@@ -70,6 +76,8 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
   // 480p); this is where they become a file you can deliver.
   const [delivery, setDelivery] = useState<string | null>(null)
   const [grain, setGrain] = useState(0)
+  // One open preview at a time — two clips playing together is noise, not a comparison.
+  const [preview, setPreview] = useState<string | null>(null)
 
   const selected = rows.filter((r) => r.selected)
   const targetFps = fps || status.data?.profile_fps || clips[0]?.fps || 16
@@ -258,9 +266,20 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
                           <button type="button" onClick={() => { setTrim(i, 'start', ''); setTrim(i, 'end', '') }}
                             className="text-neutral-500 underline">all</button>
                         )}
+                        <button type="button" data-testid={`preview-toggle-${i}`}
+                          onClick={() => setPreview(preview === r.uid ? null : r.uid)}
+                          className="text-neutral-700 underline">
+                          {preview === r.uid ? 'hide' : 'preview'}
+                        </button>
                       </label>
                     )
                   })()}
+                  {preview === r.uid && clip?.url && clip.duration != null && (
+                    <div className="mt-2 max-w-sm">
+                      <ClipPreview url={clip.url} duration={clip.duration} fps={clip.fps || targetFps}
+                        start={parseNum(r.start)} end={parseNum(r.end)} testId={`preview-${i}`} />
+                    </div>
+                  )}
                   {r.selected && (clip?.takes?.length ?? 0) > 1 && (
                     <label className="mt-1 block text-xs text-neutral-600">take
                       <select value={r.clip_id ?? ''} onChange={(e) => setTake(i, e.target.value || null)}

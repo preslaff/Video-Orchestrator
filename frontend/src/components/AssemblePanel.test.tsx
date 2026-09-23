@@ -165,6 +165,22 @@ describe('AssemblePanel trims and repeats', () => {
     expect(items[1].start).toBe(1.234)                            // the raw value; the server snaps it
   })
 
+  it('opens one preview at a time, showing the span it will keep', async () => {
+    mockFetch()
+    renderPanel()
+    const user = userEvent.setup()
+    await screen.findByText('Scene 1')
+    expect(screen.queryByTestId('preview-0')).toBeNull()
+
+    await user.click(screen.getByTestId('preview-toggle-0'))
+    expect(screen.getByTestId('preview-0')).toBeInTheDocument()
+    await user.click(screen.getByTestId('preview-toggle-1'))     // opening another closes the first
+    expect(screen.queryByTestId('preview-0')).toBeNull()
+    expect(screen.getByTestId('preview-1')).toBeInTheDocument()
+    await user.click(screen.getByTestId('preview-toggle-1'))
+    expect(screen.queryByTestId('preview-1')).toBeNull()
+  })
+
   it('a trim shortens the total by what it cut', async () => {
     mockFetch()
     renderPanel()
