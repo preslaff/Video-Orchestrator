@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query, Response
 
+from .. import media
 from .. import projects as projects_mod
 from .. import provenance
 from .. import versions as versions_mod
@@ -19,7 +20,7 @@ from .public import job_to_public, media_url, provenance_rows
 from .projects import AssetOut, asset_out
 from .schemas import (
     DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SaveSceneAsset, SceneEdits,
-    SceneInsert, SceneLocks, SceneOrder, SceneRegenerate, VersionDetail,
+    SaveCut, SceneInsert, SceneLocks, SceneOrder, SceneRegenerate, VersionDetail,
 )
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -280,6 +281,32 @@ async def set_scene_locks(
     except RuntimeError as e:
         raise ApiError(409, "conflict", str(e))
     except ValueError as e:
+        raise ApiError(400, "bad_request", str(e))
+    return job_to_public(job, store, manager)
+
+
+@router.post("/{job_id}/scenes/{index}/cut", response_model=JobPublic, status_code=201)
+async def save_cut(
+    job_id: str,
+    index: int,
+    body: SaveCut,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Render a trimmed span to a file and keep it as one of the scene's takes.
+
+    A trim in a timeline reaches nothing but `assembly.mp4`. Saved, the cut is a clip like any
+    other — offered as a take, listed in the version strip, and with `make_active` the scene's
+    deliverable, so the export folder carries the cut and not the whole render.
+    """
+    try:
+        job = manager.save_cut(job_id, index, clip_id=body.clip_id, start=body.start,
+                               end=body.end, make_active=body.make_active)
+    except KeyError as e:
+        raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    except (ValueError, media.MediaError) as e:
         raise ApiError(400, "bad_request", str(e))
     return job_to_public(job, store, manager)
 

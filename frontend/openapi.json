@@ -765,6 +765,68 @@
         }
       }
     },
+    "/api/jobs/{job_id}/scenes/{index}/cut": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Save Cut",
+        "description": "Render a trimmed span to a file and keep it as one of the scene's takes.\n\nA trim in a timeline reaches nothing but `assembly.mp4`. Saved, the cut is a clip like any\nother — offered as a take, listed in the version strip, and with `make_active` the scene's\ndeliverable, so the export folder carries the cut and not the whole render.",
+        "operationId": "save_cut_api_jobs__job_id__scenes__index__cut_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveCut"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/scenes/{index}/regenerate": {
       "post": {
         "tags": [
@@ -4596,6 +4658,55 @@
           "asset_id"
         ],
         "title": "ReferenceSuggestionOut"
+      },
+      "SaveCut": {
+        "properties": {
+          "clip_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clip Id",
+            "description": "which take to cut from; omit for the scene's current clip"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "make_active": {
+            "type": "boolean",
+            "title": "Make Active",
+            "description": "also make the cut this scene's clip, so the export folder carries it",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "SaveCut",
+        "description": "Keep a timeline's trim as a real take of that scene."
       },
       "SaveSceneAsset": {
         "properties": {

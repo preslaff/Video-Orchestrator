@@ -246,6 +246,31 @@ export function useSceneLocks(id: string) {
   })
 }
 
+/** Keep a timeline's trim as a real take of that scene — and optionally as its clip, so the
+ *  export folder carries the cut rather than the whole render. Returns the new take's id. */
+export function useSaveCut(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ index, clipId, start, end, makeActive }: {
+      index: number; clipId?: string | null; start: number | null; end: number | null; makeActive?: boolean
+    }) => {
+      const { data, error } = await api.POST('/api/jobs/{job_id}/scenes/{index}/cut', {
+        params: { path: { job_id: id, index } },
+        body: { clip_id: clipId ?? null, start, end, make_active: !!makeActive },
+      })
+      if (error) throw error
+      const clips = data?.scenes?.find((s) => s.index === index)?.clips ?? []
+      return { job: data, takeId: clips.length ? clips[clips.length - 1].id : null }
+    },
+    onSuccess: ({ job }) => {
+      if (job) qc.setQueryData(keys.job(id), job)
+      void qc.invalidateQueries({ queryKey: keys.job(id) })
+      void qc.invalidateQueries({ queryKey: keys.assembly(id) })
+      void qc.invalidateQueries({ queryKey: keys.decisions(id) })
+    },
+  })
+}
+
 /** Structural storyboard edits: insert a scene, drop one, put them in a new order, or ask
  *  Gemma to (re)write one scene's prompts. Each returns the whole job, so the cache is written
  *  through — the scene list must never lag behind a reorder the user just made. */

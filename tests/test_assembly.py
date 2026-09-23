@@ -422,3 +422,54 @@ def test_a_spec_saved_before_takes_and_trims_loads_unchanged(tmp_path):
     item = assembly._item_from_dict({"scene_index": 2, "source": "raw", "target_seconds": 6.0})
     assert (item.clip_id, item.start, item.end) == (None, None, None)
     assert item.scene_index == 2 and item.source == "raw" and item.target_seconds == 6.0
+
+
+# --- keeping a cut ------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _real_clip(tmp_path, monkeypatch):
+    """A genuine 4 s file, since save_cut actually renders."""
+    import shutil
+    import subprocess
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        pytest.skip("ffmpeg not installed")
+    monkeypatch.undo()                       # the autouse fake probe would lie about the file
+    monkeypatch.setattr(config, "COMFY_OUTPUT", tmp_path / "out")
+    src = tmp_path / "real.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=64x64:rate=16:duration=4", "-pix_fmt", "yuv420p", str(src)], check=True)
+    return src
+
+
+def test_a_cut_becomes_a_take_and_can_become_the_scene_s_clip(tmp_path, _real_clip):
+    """A trim in a timeline reaches nothing but assembly.mp4. Saved, it is a clip like any other —
+    which is what lets the export folder carry the cut instead of the whole render."""
+    job = new_job(idea="asm", kind="video", profile={"video": {"width": 64, "height": 64, "fps": 16}})
+    job.scenes = [Scene(index=0, video_path=str(_real_clip), animation_prompt="drift")]
+
+    clip = assembly.save_cut(job, 0, start=1.234, end=2.0)
+    assert media.probe(clip.video_path).frame_duration == pytest.approx(0.75, abs=0.03)  # snapped 1.25
+    assert clip in job.scenes[0].clips
+    assert job.scenes[0].video_path == str(_real_clip), "the scene's own clip is untouched by default"
+    assert clip.prompt == "drift"                    # the take carries what made the footage
+
+    second = assembly.save_cut(job, 0, start=0.0, end=1.0, make_active=True)
+    assert second.video_path != clip.video_path      # a second cut does not overwrite the first
+    assert job.scenes[0].video_path == second.video_path, "make_active makes it the deliverable"
+    assert len(job.scenes[0].clips) == 2
+
+
+def test_a_saved_cut_can_be_cut_again_and_refuses_the_impossible(tmp_path, _real_clip):
+    job = new_job(idea="asm", kind="video", profile={"video": {"width": 64, "height": 64, "fps": 16}})
+    job.scenes = [Scene(index=0, video_path=str(_real_clip))]
+    first = assembly.save_cut(job, 0, start=0.0, end=2.0)
+    again = assembly.save_cut(job, 0, clip_id=first.id, start=0.5, end=1.0)
+    assert media.probe(again.video_path).frame_duration == pytest.approx(0.5, abs=0.03)
+
+    with pytest.raises(ValueError, match="nothing is trimmed"):
+        assembly.save_cut(job, 0, start=None, end=None)
+    with pytest.raises(ValueError, match="no take"):
+        assembly.save_cut(job, 0, clip_id="ghost", start=0.0, end=1.0)
+    with pytest.raises(KeyError):
+        assembly.save_cut(job, 7, start=0.0, end=1.0)

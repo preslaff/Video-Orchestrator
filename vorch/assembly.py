@@ -18,7 +18,8 @@ from typing import Any
 
 from . import config, media, provenance
 from .media import Cut
-from .state import Job, Scene
+from . import versions
+from .state import Clip, Job, Scene
 
 log = logging.getLogger("vorch.assembly")
 
@@ -368,6 +369,58 @@ def _clip_path(scene: Scene, source: str, clip_id: str | None = None) -> str | N
     if source == "raw":
         return scene.raw_video_path or scene.video_path
     return scene.video_path
+
+
+def save_cut(job: Job, index: int, *, clip_id: str | None = None, start: float | None = None,
+             end: float | None = None, make_active: bool = False) -> Clip:
+    """Render a trimmed span to a real file and keep it as one of the scene's takes.
+
+    A trim in a timeline is an instruction: it lives in the spec and reaches nothing but
+    ``assembly.mp4``. Saved, the same cut becomes a clip like any other — offered in the take
+    selector, listed in the version strip, and (with ``make_active``) the scene's deliverable, so
+    the export folder carries the cut rather than the whole render.
+
+    One ffmpeg pass over an existing file; no GPU, no model.
+    """
+    scene = next((s for s in job.scenes if s.index == index), None)
+    if scene is None:
+        raise KeyError(f"scene {index}")
+    if clip_id and not any(c.id == clip_id for c in scene.clips):
+        raise ValueError(f"scene {index + 1}: no take {clip_id!r} in its history")
+    src = _clip_path(scene, "final", clip_id)
+    if not src or not Path(src).is_file():
+        raise ValueError(f"scene {index + 1}: no clip to cut")
+    if start is None and end is None:
+        raise ValueError(f"scene {index + 1}: nothing is trimmed, so there is no cut to save")
+    info = media.probe(src)
+    lo, hi = media.trim_span(info.frame_duration, start, end, info.fps or 0.0)
+
+    folder = config.COMFY_OUTPUT / "vorch" / job.id[:8]
+    folder.mkdir(parents=True, exist_ok=True)
+    stem = f"s{index:02d}_cut"
+    n = 1 + sum(1 for p in folder.glob(f"{stem}_*.mp4"))
+    dest = folder / f"{stem}_{n}.mp4"
+    media.assemble([Path(src)], [], dest, trims=[(lo, hi)], audio=True)
+
+    source_take = next((c for c in scene.clips if c.video_path == src), None)
+    clip = Clip(
+        video_path=str(dest), raw_video_path=None, post_paths=[],
+        seed=source_take.seed if source_take else None,
+        # The same footage, so whatever was judged about it still holds; only its length changed.
+        verdict=source_take.verdict if source_take else scene.video_verdict,
+        keyframe_path=source_take.keyframe_path if source_take else scene.keyframe_path,
+        prompt=scene.animation_prompt, negative=scene.animation_negative,
+        created_at=_now(), batch=scene.regenerations,
+    )
+    scene.clips.append(clip)
+    if make_active:
+        versions.select_clip(scene, clip)
+        job.export = None          # the handoff folder holds the uncut clip
+    provenance.write_manifest(dest, "cut", {
+        "source": src, "start": lo, "end": hi, "seconds": round(hi - lo, 3),
+    }, {"kind": "clip_cut", "job_id": job.id, "scene": index})
+    log.info("job %s: scene %d cut %.3f-%.3f s -> %s", job.id, index, lo, hi, dest.name)
+    return clip
 
 
 def profile_video(job: Job) -> dict:

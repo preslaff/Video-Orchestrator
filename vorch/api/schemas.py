@@ -409,6 +409,16 @@ class AssemblyTakeOut(BaseModel):
     active: bool = False
 
 
+class SaveCut(BaseModel):
+    """Keep a timeline's trim as a real take of that scene."""
+
+    clip_id: str | None = Field(None, description="which take to cut from; omit for the scene's current clip")
+    start: float | None = Field(None, ge=0)
+    end: float | None = Field(None, gt=0)
+    make_active: bool = Field(
+        False, description="also make the cut this scene's clip, so the export folder carries it")
+
+
 class AssemblyClipOut(BaseModel):
     scene_index: int
     source: str = "final"

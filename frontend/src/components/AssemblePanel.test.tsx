@@ -181,6 +181,36 @@ describe('AssemblePanel trims and repeats', () => {
     expect(screen.queryByTestId('preview-1')).toBeNull()
   })
 
+  it('saving a cut turns the trim into a take and points the row at it', async () => {
+    const posts: { url: string; body: Record<string, unknown> }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const url = new URL(raw, 'http://localhost').pathname
+      const json = (d: unknown) => new Response(JSON.stringify(d), { status: 200, headers: { 'content-type': 'application/json' } })
+      if (url === '/api/jobs/j1/scenes/0/cut') {
+        const body = init?.body ? JSON.parse(String(init.body)) : input instanceof Request ? await input.json() : {}
+        posts.push({ url, body })
+        return json({ ...job, scenes: [{ ...job.scenes[0], clips: [{ id: 'cut1' }] }, job.scenes[1], job.scenes[2]] })
+      }
+      if (url === '/api/jobs/j1/assemble') return json(STATUS)
+      return json(job)
+    }))
+    renderPanel()
+    const user = userEvent.setup()
+    await screen.findByText('Scene 1')
+
+    expect(screen.queryByTestId('save-cut-0')).toBeNull()       // nothing trimmed, nothing to save
+    const to = screen.getByLabelText('clip 1 to')
+    await user.clear(to)
+    await user.type(to, '1')
+    await user.click(screen.getByTestId('save-cut-0'))
+
+    await waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].body).toMatchObject({ start: null, end: 1, make_active: false })
+    // The timeline now plays the same thing, but from a file rather than an instruction.
+    await waitFor(() => expect(screen.getByTestId('trim-0')).toHaveTextContent('whole clip'))
+  })
+
   it('a trim shortens the total by what it cut', async () => {
     mockFetch()
     renderPanel()

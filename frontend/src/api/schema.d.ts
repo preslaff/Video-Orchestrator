@@ -209,6 +209,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/scenes/{index}/cut": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save Cut
+         * @description Render a trimmed span to a file and keep it as one of the scene's takes.
+         *
+         *     A trim in a timeline reaches nothing but `assembly.mp4`. Saved, the cut is a clip like any
+         *     other — offered as a take, listed in the version strip, and with `make_active` the scene's
+         *     deliverable, so the export folder carries the cut and not the whole render.
+         */
+        post: operations["save_cut_api_jobs__job_id__scenes__index__cut_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/scenes/{index}/regenerate": {
         parameters: {
             query?: never;
@@ -1728,6 +1752,27 @@ export interface components {
             fit: string;
         };
         /**
+         * SaveCut
+         * @description Keep a timeline's trim as a real take of that scene.
+         */
+        SaveCut: {
+            /**
+             * Clip Id
+             * @description which take to cut from; omit for the scene's current clip
+             */
+            clip_id?: string | null;
+            /** Start */
+            start?: number | null;
+            /** End */
+            end?: number | null;
+            /**
+             * Make Active
+             * @description also make the cut this scene's clip, so the export folder carries it
+             * @default false
+             */
+            make_active: boolean;
+        };
+        /**
          * SaveSceneAsset
          * @description Copy a scene's generated keyframe into the job's project, to reuse as a reference.
          */
@@ -2715,6 +2760,42 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_cut_api_jobs__job_id__scenes__index__cut_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveCut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

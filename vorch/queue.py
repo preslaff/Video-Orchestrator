@@ -654,6 +654,22 @@ class JobManager:
         self._spawn(self._assemble_task(job, resolved, paths))
         return job
 
+    def save_cut(self, job_id: str, index: int, *, clip_id: str | None, start: float | None,
+                 end: float | None, make_active: bool) -> Job:
+        """Keep a timeline's trim as a real take of that scene (and optionally as its clip)."""
+        job = self._editable_job(job_id)
+        clip = assembly_mod.save_cut(job, index, clip_id=clip_id, start=start, end=end,
+                                     make_active=make_active)
+        self.store.log_decision(Decision(
+            job_id=job.id, scene_index=index, scene_id=None, phase="clip", attempt=1, action="cut",
+            reason=f"{round((end or 0) - (start or 0), 2)}s kept as a take"
+                   + (" and made this scene's clip" if make_active else ""),
+        ))
+        self.store.save_job(job)
+        if make_active:
+            self._reexport_sync(job)
+        return job
+
     def select_assembly_version(self, job_id: str, version: int) -> Job:
         """Make an earlier assembly version the current one (and re-export)."""
         job = self._assembly_job(job_id)

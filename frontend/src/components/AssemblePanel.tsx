@@ -5,7 +5,7 @@ import { ArrowDown, ArrowUp } from 'lucide-react'
 import { errorMessage } from '@/api/client'
 import { describeStep, type JobEvent } from '@/api/events'
 import type { AssemblyClip, AssemblySpecIn, AssemblyStatus as AssemblyStatusT, JobPublic } from '@/api/types'
-import { useAssembly, useRunAssembly } from '@/hooks/useJobs'
+import { useAssembly, useRunAssembly, useSaveCut } from '@/hooks/useJobs'
 import { ClipPreview } from '@/components/ClipPreview'
 import { MediaThumb } from '@/components/MediaThumb'
 import { AssemblyVersions } from '@/components/AssemblyVersions'
@@ -78,6 +78,18 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
   const [grain, setGrain] = useState(0)
   // One open preview at a time — two clips playing together is noise, not a comparison.
   const [preview, setPreview] = useState<string | null>(null)
+  const saveCut = useSaveCut(job.id)
+  /** Keep this row's trim as a real take, then point the row at it: the timeline plays exactly
+   *  the same thing, but the cut is now a file rather than an instruction — so it survives
+   *  export, reuse, and anyone else opening the job. */
+  const keepCut = (i: number, makeActive: boolean) => {
+    const r = rows[i]
+    saveCut.mutate(
+      { index: r.scene_index, clipId: r.clip_id, start: parseNum(r.start), end: parseNum(r.end), makeActive },
+      { onSuccess: ({ takeId }: { takeId: string | null }) => update({ rows: rows.map((x, k) =>
+          (k === i ? { ...x, clip_id: takeId ?? x.clip_id, start: null, end: null } : x)) }) },
+    )
+  }
 
   const selected = rows.filter((r) => r.selected)
   const targetFps = fps || status.data?.profile_fps || clips[0]?.fps || 16
@@ -265,6 +277,22 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
                         {(r.start != null || r.end != null) && (
                           <button type="button" onClick={() => { setTrim(i, 'start', ''); setTrim(i, 'end', '') }}
                             className="text-neutral-500 underline">all</button>
+                        )}
+                        {(r.start != null || r.end != null) && (
+                          <>
+                            <button type="button" data-testid={`save-cut-${i}`} disabled={saveCut.isPending}
+                              onClick={() => keepCut(i, false)}
+                              title="render this span to a file and keep it as one of the scene's takes"
+                              className="rounded border border-neutral-300 bg-white px-2 py-0.5 disabled:opacity-50">
+                              {saveCut.isPending ? 'saving…' : 'save cut'}
+                            </button>
+                            <button type="button" data-testid={`save-cut-active-${i}`} disabled={saveCut.isPending}
+                              onClick={() => keepCut(i, true)}
+                              title="save it and make it this scene's clip, so the export folder carries the cut"
+                              className="text-neutral-700 underline disabled:opacity-50">
+                              + use as scene clip
+                            </button>
+                          </>
                         )}
                         <button type="button" data-testid={`preview-toggle-${i}`}
                           onClick={() => setPreview(preview === r.uid ? null : r.uid)}
