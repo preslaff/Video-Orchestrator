@@ -6,6 +6,17 @@ import { apiOrigin } from '@/api/client'
 import { DELIVERABLE_EVENTS, EVENT_TYPES, LIST_EVENTS, type JobEvent } from '@/api/events'
 import { keys } from '@/api/keys'
 
+/**
+ * The timeline keeps the most recent events and drops the rest.
+ *
+ * It only ever grew before. A job page left open across many runs — regenerate a scene, lock
+ * a label, re-animate, a dozen times over an evening — accumulated every event of every
+ * segment, and the progress panel rescans the list once a second while a job runs. Nothing
+ * looked wrong at first and it got steadily worse, until a reload cured it. Well past what
+ * any panel shows, and the persisted job (not this list) is what the page really renders from.
+ */
+const MAX_EVENTS = 600
+
 export interface UseJobEventsOptions {
   enabled?: boolean
   /**
@@ -76,7 +87,11 @@ export function useJobEvents(jobId: string | undefined, opts: UseJobEventsOption
         return                     // a protocol marker, not something to show or invalidate
       }
       if (typeof data.id === 'number') lastId.current = Math.max(lastId.current, data.id)
-      setEvents((prev) => [...prev, { ...data, _at: Date.now() }])
+      setEvents((prev) => {
+        const next = prev.length >= MAX_EVENTS ? prev.slice(prev.length - MAX_EVENTS + 1) : prev.slice()
+        next.push({ ...data, _at: Date.now() })
+        return next
+      })
       invalidateJob()
       if (LIST_EVENTS.has(data.type)) void qc.invalidateQueries({ queryKey: ['jobs'] })
       if (DELIVERABLE_EVENTS.has(data.type)) {

@@ -73,3 +73,20 @@ describe('ProgressPanel', () => {
     expect(describeStep({ type: 'step', step: 'post', index: 0, chain: ['interp', 'upscale'], job_id: 'j' })).toBe('Post-processing scene 1: interp → upscale')
   })
 })
+
+describe('ProgressPanel with a long-lived page', () => {
+  it('scans a large timeline without copying it', () => {
+    // The panel re-renders every second while a job runs; the old code copied and reversed
+    // the whole array three times per render, which is what made a page left open all evening
+    // spin the browser's GC.
+    const many = Array.from({ length: 20_000 }, (_, i) => ({ type: 'step', step: `s${i}`, index: 0, job_id: 'j' }))
+    // Frozen: a copy-and-reverse would mutate nothing, but scanning must not need one.
+    const frozen = Object.freeze([...many, { type: 'phase', phase: 'videos', job_id: 'j' }])
+    const j = base({ scenes: [scene(0), scene(1)] })
+    const t0 = performance.now()
+    const p = deriveProgress(j, frozen)
+    expect(performance.now() - t0).toBeLessThan(50)
+    expect(p.current).toBe('videos')
+    expect(p.step).not.toBeNull()
+  })
+})

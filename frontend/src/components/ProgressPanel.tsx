@@ -17,8 +17,19 @@ export interface Progress {
   step: JobEvent | null         // last announced step (only meaningful while running)
 }
 
+/** The last event matching ``pred``, walked backwards in place.
+ *
+ *  ``[...events].reverse().find(...)`` copies and reverses the whole array — three times per
+ *  render here, and this panel re-renders every second while a job runs. On a page left open
+ *  for hours that is thousands of entries copied every tick, which drives the browser's GC
+ *  hard enough to spin its thread pool. */
+function findLast(events: readonly JobEvent[], pred: (e: JobEvent) => boolean): JobEvent | undefined {
+  for (let i = events.length - 1; i >= 0; i--) if (pred(events[i])) return events[i]
+  return undefined
+}
+
 /** Derive the progress model from the persisted job + the live events. */
-export function deriveProgress(job: JobPublic, events: JobEvent[]): Progress {
+export function deriveProgress(job: JobPublic, events: readonly JobEvent[]): Progress {
   const phases = job.kind === 'stills' ? STILLS_PHASES : VIDEO_PHASES
   const n = job.scenes.length
   const kfDone = job.scenes.filter((s) => !!s.keyframe_path).length
@@ -32,10 +43,10 @@ export function deriveProgress(job: JobPublic, events: JobEvent[]): Progress {
   const running = job.status === 'running' || job.status === 'pending'
   let current: string | null = null
   if (running) {
-    const lastPhase = [...events].reverse().find((e) => e.type === 'phase')
+    const lastPhase = findLast(events, (e) => e.type === 'phase')
     current = lastPhase ? String(lastPhase.phase) : n === 0 ? 'storyboard' : kfDone < n ? 'keyframes' : phases[2]
   }
-  const lastStep = [...events].reverse().find((e) => e.type === 'step') ?? null
+  const lastStep = findLast(events, (e) => e.type === 'step') ?? null
   const perScene = job.kind === 'stills' ? 2 : 2
   const total = Math.max(1, n) * perScene
   const units = n === 0 ? 0 : kfDone + finalDone
@@ -65,7 +76,7 @@ export function ProgressPanel({ job, events, connected }: { job: JobPublic; even
   const paused = job.status === 'needs_approval'
   const failed = job.status === 'failed'
   const stopped = job.status === 'cancelled'
-  const lastError = failed ? [...events].reverse().find((e) => e.type === 'error') : undefined
+  const lastError = failed ? findLast(events, (e) => e.type === 'error') : undefined
 
   return (
     <section className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm" aria-live="polite">
