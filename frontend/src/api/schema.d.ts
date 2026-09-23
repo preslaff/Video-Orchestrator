@@ -737,6 +737,11 @@ export interface components {
              * @default false
              */
             has_raw: boolean;
+            /**
+             * Takes
+             * @default []
+             */
+            takes: components["schemas"]["AssemblyTakeOut"][];
             /** Error */
             error?: string | null;
         };
@@ -765,9 +770,24 @@ export interface components {
             source: "final" | "raw";
             /**
              * Target Seconds
-             * @description play the clip in N seconds (0.25x–4x of its length); omit for natural speed
+             * @description play the KEPT part in N seconds (0.25x-4x of it); omit for natural speed. Trim first, then retime: this measures what start/end kept, not the whole clip.
              */
             target_seconds?: number | null;
+            /**
+             * Clip Id
+             * @description which take from the scene's history; omit for whatever the scene points at now. A scene may be listed more than once, so two takes can be joined into one longer shot.
+             */
+            clip_id?: string | null;
+            /**
+             * Start
+             * @description seconds into the clip to start at; omit for the beginning. Snapped to the clip's own frame grid (at 16 fps one frame is 62.5 ms, so 1.234 becomes 1.25).
+             */
+            start?: number | null;
+            /**
+             * End
+             * @description seconds to end at; omit for the end. Snapped like `start`.
+             */
+            end?: number | null;
         };
         /** AssemblyRecordOut */
         AssemblyRecordOut: {
@@ -925,6 +945,34 @@ export interface components {
              * @default []
              */
             versions: components["schemas"]["AssemblyVersionOut"][];
+        };
+        /**
+         * AssemblyTakeOut
+         * @description One render this scene has had. Placing an older take beside the current one extends a shot
+         *     with footage already paid for.
+         */
+        AssemblyTakeOut: {
+            /** Id */
+            id: string;
+            /** Path */
+            path: string;
+            /** Url */
+            url?: string | null;
+            /**
+             * Created At
+             * @default
+             */
+            created_at: string;
+            /**
+             * Batch
+             * @default 0
+             */
+            batch: number;
+            /**
+             * Active
+             * @default false
+             */
+            active: boolean;
         };
         /** AssemblyVersionOut */
         AssemblyVersionOut: {

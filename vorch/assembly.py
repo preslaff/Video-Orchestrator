@@ -129,8 +129,15 @@ def _now() -> str:
 class AssemblyItem:
     scene_index: int
     source: str = "final"      # final = scene.video_path (post-processed), raw = scene.raw_video_path
-    target_seconds: float | None = None   # play the clip in N seconds; None = natural length
-    speed: float = 1.0                    # derived by resolve(): source duration / target_seconds
+    target_seconds: float | None = None   # play the kept part in N seconds; None = natural length
+    speed: float = 1.0                    # derived by resolve(): kept duration / target_seconds
+    # Which take. None = whatever the scene currently points at, which is how every spec written
+    # before this field behaved, and still does.
+    clip_id: str | None = None
+    # The part of the clip to keep, in seconds; None = from the start / to the end. Snapped to the
+    # clip's own frame grid by ``media.trim_span``. Trim first, then retime.
+    start: float | None = None
+    end: float | None = None
 
 
 @dataclass
@@ -177,11 +184,18 @@ class AssemblySpec:
 
 
 def _item_from_dict(i: dict) -> AssemblyItem:
-    target = i.get("target_seconds")
+    """Parse one stored item. Every field after ``source`` is optional, so a spec saved before
+    takes and trims existed loads unchanged."""
+    def num(key: str) -> float | None:
+        v = i.get(key)
+        return float(v) if v is not None else None
+
     return AssemblyItem(
         int(i["scene_index"]), str(i.get("source", "final")),
-        target_seconds=float(target) if target is not None else None,
+        target_seconds=num("target_seconds"),
         speed=float(i.get("speed", 1.0) or 1.0),
+        clip_id=str(i["clip_id"]) if i.get("clip_id") else None,
+        start=num("start"), end=num("end"),
     )
 
 
@@ -337,7 +351,20 @@ def _link_replace(src: Path, dest: Path) -> None:
     os.replace(tmp, dest)
 
 
-def _clip_path(scene: Scene, source: str) -> str | None:
+def _where(position: int, item: "AssemblyItem") -> str:
+    """How to name an item in an error. Position first, because a scene can now appear twice and
+    "scene 4" alone would not say which of them."""
+    return f"clip {position + 1} (scene {item.scene_index + 1})"
+
+
+def _clip_path(scene: Scene, source: str, clip_id: str | None = None) -> str | None:
+    if clip_id:
+        take = next((c for c in scene.clips if c.id == clip_id), None)
+        if take is None:
+            return None
+        if source == "raw":
+            return take.raw_video_path or take.video_path
+        return take.video_path
     if source == "raw":
         return scene.raw_video_path or scene.video_path
     return scene.video_path
@@ -360,29 +387,30 @@ def resolve(job: Job, spec: dict | None) -> tuple[AssemblySpec, list[Path]]:
         raise ValueError("the job has no clips yet")
     d = dict(spec or {})
     items = [_item_from_dict(i) for i in d["items"]] if d.get("items") is not None else base.items
-    for it in items:
+    for n, it in enumerate(items):
         it.speed = 1.0  # derived below from the probed source length
         if it.target_seconds is not None and it.target_seconds <= 0:
-            raise ValueError(f"scene {it.scene_index + 1}: target_seconds must be positive")
+            raise ValueError(f"{_where(n, it)}: target_seconds must be positive")
     if not items:
         raise ValueError("select at least one clip")
+    # A scene may appear more than once: a repeat, or two different takes joined into one longer
+    # shot. Everything downstream is positional, so the only thing that ever forbade it was a
+    # guard here.
     by_index = {s.index: s for s in job.scenes}
-    seen: set[int] = set()
     paths: list[Path] = []
-    for it in items:
-        if it.scene_index in seen:
-            raise ValueError(f"scene {it.scene_index + 1} is listed twice")
-        seen.add(it.scene_index)
+    for n, it in enumerate(items):
         scene = by_index.get(it.scene_index)
         if scene is None:
             raise ValueError(f"no scene {it.scene_index + 1}")
         if it.source not in SOURCES:
-            raise ValueError(f"scene {it.scene_index + 1}: source must be one of {SOURCES}")
-        p = _clip_path(scene, it.source)
+            raise ValueError(f"{_where(n, it)}: source must be one of {SOURCES}")
+        if it.clip_id and not any(c.id == it.clip_id for c in scene.clips):
+            raise ValueError(f"{_where(n, it)}: no take {it.clip_id!r} in its history")
+        p = _clip_path(scene, it.source, it.clip_id)
         if not p:
-            raise ValueError(f"scene {it.scene_index + 1} has no clip")
+            raise ValueError(f"{_where(n, it)} has no clip")
         if not Path(p).is_file():
-            raise ValueError(f"scene {it.scene_index + 1}: clip file is missing on disk ({Path(p).name})")
+            raise ValueError(f"{_where(n, it)}: clip file is missing on disk ({Path(p).name})")
         paths.append(Path(p))
     if d.get("cuts") is not None:
         cuts = [Cut(str(c.get("transition", DEFAULT_TRANSITION)), float(c.get("duration", DEFAULT_CUT_SECONDS)))
@@ -420,20 +448,32 @@ def resolve(job: Job, spec: dict | None) -> tuple[AssemblySpec, list[Path]]:
                             audio=bool(d.get("audio", False)), delivery=delivery, max_mbps=max_mbps, grain=grain)
     # Speeds from target durations, then transition lengths vs the RETIMED clip lengths.
     infos = [media.probe(p) for p in paths]
-    for it, info in zip(items, infos):
+    # Trim first: the kept length is what a target duration is a target *for*, and what the
+    # transitions must fit inside.
+    kept: list[float] = []
+    for n, (it, info) in enumerate(zip(items, infos)):
+        if it.start is None and it.end is None:
+            kept.append(info.frame_duration)
+            continue
+        try:
+            lo, hi = media.trim_span(info.frame_duration, it.start, it.end, info.fps or 0.0)
+        except ValueError as e:
+            raise ValueError(f"{_where(n, it)}: {e}") from None
+        it.start, it.end = lo, hi          # store what was actually used, snapped
+        kept.append(hi - lo)
+    for n, (it, src) in enumerate(zip(items, kept)):
         if it.target_seconds is None:
             continue
-        src = info.frame_duration
         speed = src / it.target_seconds
         if not media.MIN_SPEED <= speed <= media.MAX_SPEED:
             raise ValueError(
-                f"scene {it.scene_index + 1}: target {it.target_seconds:g} s is outside "
+                f"{_where(n, it)}: target {it.target_seconds:g} s is outside "
                 f"{src / media.MAX_SPEED:.2f}–{src * media.MAX_SPEED:.2f} s "
                 f"({media.MIN_SPEED:g}×–{media.MAX_SPEED:g}× of its {src:.2f} s clip)"
             )
         it.speed = speed
     fps = float(resolved.fps or profile_video(job).get("fps") or infos[0].fps or config.WAN_FPS)
-    media.validate_cuts(media.retimed([i.frame_duration for i in infos], resolved.speeds), cuts, fps=fps)
+    media.validate_cuts(media.retimed(kept, resolved.speeds), cuts, fps=fps)
     return resolved, paths
 
 
@@ -449,6 +489,13 @@ def clip_infos(job: Job) -> list[dict]:
             row.update(duration=round(info.frame_duration, 3), fps=info.fps, width=info.width, height=info.height)
         except (media.MediaError, FileNotFoundError) as e:
             row["error"] = str(e)
+        # Every take this scene has rendered, so the timeline can place an older one beside the
+        # current take and make one longer shot without paying for a new render.
+        row["takes"] = [
+            {"id": c.id, "path": c.video_path, "created_at": c.created_at, "batch": c.batch,
+             "active": c.video_path == s.video_path}
+            for c in s.clips if c.video_path
+        ]
         out.append(row)
     return out
 
@@ -484,7 +531,8 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
                   "smooth": spec.smooth, "audio": spec.audio, "retimed": sum(1 for sp in speeds if sp != 1.0)})
         media.assemble(paths, spec.cuts, dest, fps=fps, size=(width, height), crf=spec.crf,
                        encoder=spec.encoder, speeds=speeds, smooth=spec.smooth, audio=spec.audio,
-                       max_mbps=spec.max_mbps, grain=spec.grain)
+                       max_mbps=spec.max_mbps, grain=spec.grain,
+                       trims=[(i.start, i.end) for i in spec.items])
         info = media.probe(dest)
         rec = AssemblyRecord(
             path=str(dest), created_at=created, duration=round(info.frame_duration, 3), n_clips=len(paths),
@@ -495,6 +543,7 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
             "spec": spec.to_dict(), "clips": [str(p) for p in paths], "fps": fps, "width": width,
             "height": height, "crf": spec.crf, "encoder": spec.encoder, "version": version,
             "speeds": speeds, "smooth": spec.smooth, "audio": spec.audio,
+            "trims": [[i.start, i.end] for i in spec.items],
         }, {"kind": "assembly", "job_id": job.id})
         _link_replace(dest, output_path(job))
         side = provenance.manifest_path(dest)
@@ -521,7 +570,13 @@ def is_stale(job: Job, record: AssemblyRecord) -> bool:
     by_index = {s.index: s for s in job.scenes}
     for item, clip in zip(items, clips):
         scene = by_index.get(int(item["scene_index"]))
-        if scene is None or _clip_path(scene, str(item.get("source", "final"))) != clip:
+        if scene is None:
+            return True
+        if item.get("clip_id"):
+            # A named take is not "the scene's current clip" and was never meant to be: it was
+            # pinned on purpose, so re-rendering that scene does not make this assembly stale.
+            continue
+        if _clip_path(scene, str(item.get("source", "final"))) != clip:
             return True
     return False
 

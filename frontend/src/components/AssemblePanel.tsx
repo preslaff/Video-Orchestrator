@@ -9,9 +9,17 @@ import { useAssembly, useRunAssembly } from '@/hooks/useJobs'
 import { MediaThumb } from '@/components/MediaThumb'
 import { AssemblyVersions } from '@/components/AssemblyVersions'
 import { Button, Empty, ErrorBox, fmtTime } from '@/components/ui'
-import { clampCut, clampTarget, defaultCuts, fmtBytes, fmtSeconds, fmtSpeed, groupTransitions, maxTransition, retimed, round2, speedFor, totalDuration, MAX_SPEED, type CutDraft } from '@/lib/assembly'
+import { clampCut, clampTarget, defaultCuts, effectiveSource, snapToFrame, fmtBytes, fmtSeconds, fmtSpeed, groupTransitions, maxTransition, retimed, round2, speedFor, totalDuration, MAX_SPEED, type CutDraft } from '@/lib/assembly'
 
-type Row = { scene_index: number; selected: boolean; source: 'final' | 'raw'; target: string | null }  // raw field text; null = natural
+// `uid` is the row's own identity: a scene may appear more than once (a repeat, or two takes of
+// one shot joined), so `scene_index` no longer identifies a row. `target`/`start`/`end` hold raw
+// field text — null means "not set".
+type Row = {
+  uid: string; scene_index: number; selected: boolean; source: 'final' | 'raw'
+  target: string | null; clip_id: string | null; start: string | null; end: string | null
+}
+let nextUid = 0
+const newUid = () => `r${nextUid++}`
 
 function clipSize(job: JobPublic): [number, number] | null {
   const v = (job.profile as { video?: { width?: number; height?: number } } | null)?.video
@@ -25,16 +33,19 @@ function seedDraft(status: AssemblyStatusT | undefined): Draft {
   if (!status) return { rows: [], cuts: [], fps: '', smooth: false, audio: false }
   const clips = status.clips
   const known = new Set(clips.map((c) => c.scene_index))
-  const spec = status.record?.spec as { items?: { scene_index: number; source: 'final' | 'raw'; target_seconds?: number | null }[]; cuts?: CutDraft[]; fps?: number | null; smooth?: boolean; audio?: boolean } | undefined
+  const spec = status.record?.spec as { items?: { scene_index: number; source: 'final' | 'raw'; target_seconds?: number | null; clip_id?: string | null; start?: number | null; end?: number | null }[]; cuts?: CutDraft[]; fps?: number | null; smooth?: boolean; audio?: boolean } | undefined
+  const num = (v: number | null | undefined) => (v != null ? String(v) : null)
   const rows: Row[] = []
-  const used = new Set<number>()
+  // Every saved item becomes its own row, repeats included — collapsing them by scene used to
+  // throw away half of a timeline that deliberately played a shot twice.
   for (const it of spec?.items ?? []) {
-    if (known.has(it.scene_index) && !used.has(it.scene_index)) {
-      rows.push({ scene_index: it.scene_index, selected: true, source: it.source ?? 'final', target: it.target_seconds != null ? String(it.target_seconds) : null })
-      used.add(it.scene_index)
+    if (known.has(it.scene_index)) {
+      rows.push({ uid: newUid(), scene_index: it.scene_index, selected: true, source: it.source ?? 'final',
+                  target: num(it.target_seconds), clip_id: it.clip_id ?? null, start: num(it.start), end: num(it.end) })
     }
   }
-  for (const c of clips) if (!used.has(c.scene_index)) rows.push({ scene_index: c.scene_index, selected: !spec, source: 'final', target: null })
+  const placed = new Set(rows.map((r) => r.scene_index))
+  for (const c of clips) if (!placed.has(c.scene_index)) rows.push({ uid: newUid(), scene_index: c.scene_index, selected: !spec, source: 'final', target: null, clip_id: null, start: null, end: null })
   const n = rows.filter((r) => r.selected).length
   const cuts = defaultCuts(n).map((d, i) => spec?.cuts?.[i] ?? d)
   return { rows, cuts, fps: spec?.fps ?? '', smooth: !!spec?.smooth, audio: !!spec?.audio }
@@ -62,7 +73,18 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
 
   const selected = rows.filter((r) => r.selected)
   const targetFps = fps || status.data?.profile_fps || clips[0]?.fps || 16
-  const sources = selected.map((r) => byIndex.get(r.scene_index)?.duration ?? 0)
+  const parseNum = (raw: string | null): number | null => {
+    if (raw == null || raw === '') return null
+    const n = Number(raw)
+    return Number.isFinite(n) && n >= 0 ? n : null
+  }
+  /** What this row actually plays: the trimmed span, else the whole clip. */
+  const srcOf = (r: Row) => {
+    const d = byIndex.get(r.scene_index)?.duration ?? 0
+    const f = byIndex.get(r.scene_index)?.fps || targetFps
+    return effectiveSource(d, parseNum(r.start), parseNum(r.end), f)
+  }
+  const sources = selected.map(srcOf)
   const parseTarget = (raw: string | null): number | null => {
     if (raw == null) return null
     const n = Number(raw)
@@ -97,10 +119,23 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
   }
   const setFps = (v: number | '') => update({ fps: v })
   const setTarget = (i: number, target: string | null) => update({ rows: rows.map((x, k) => (k === i ? { ...x, target } : x)) })
+  const setTrim = (i: number, which: 'start' | 'end', raw: string) =>
+    update({ rows: rows.map((x, k) => (k === i ? { ...x, [which]: raw === '' ? null : raw } : x)) })
+  const setTake = (i: number, clip_id: string | null) => update({ rows: rows.map((x, k) => (k === i ? { ...x, clip_id } : x)) })
+  /** Place this clip again, right after itself — two takes of one shot, or a deliberate repeat.
+   *  The copy gets its own identity, so editing one instance never touches the other. */
+  const duplicate = (i: number) => {
+    const copy = [...rows]
+    copy.splice(i + 1, 0, { ...rows[i], uid: newUid(), selected: true })
+    update({ rows: copy, cuts: [...cuts, defaultCuts(2)[0]] })
+  }
 
   const submit = () => {
     const spec: AssemblySpecIn = {
-      items: selected.map((r, i) => ({ scene_index: r.scene_index, source: r.source, target_seconds: targets[i] })),
+      items: selected.map((r, i) => ({
+        scene_index: r.scene_index, source: r.source, target_seconds: targets[i],
+        clip_id: r.clip_id, start: parseNum(r.start), end: parseNum(r.end),
+      })),
       cuts: cutList,
       fps: fps || null,
       width: null,
@@ -163,12 +198,14 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
       <ol className="space-y-2">
         {rows.map((r, i) => {
           const clip = byIndex.get(r.scene_index) as AssemblyClip | undefined
-          const selPos = selected.findIndex((s) => s.scene_index === r.scene_index)
+          // By identity, not by scene: two rows can share a scene and only one of them owns the
+          // transition that follows it.
+          const selPos = selected.findIndex((s) => s.uid === r.uid)
           const pos = selPos > 0 ? selPos - 1 : -1            // index of the cut before this clip
           const cut = pos >= 0 ? cutList[pos] : null
           const maxT = pos >= 0 ? maxTransition(durations[pos], durations[pos + 1], targetFps) : 0
           return (
-            <li key={r.scene_index} className="space-y-2">
+            <li key={r.uid} className="space-y-2">
               {cut && (
                 <div className="ml-10 flex flex-wrap items-center gap-2 rounded border border-dashed border-neutral-300 bg-neutral-50 px-3 py-1.5 text-sm" data-testid={`cut-${pos}`}>
                   <span className="text-xs uppercase text-neutral-500">cut</span>
@@ -188,26 +225,68 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
                 </div>
               )}
               <div className={`flex items-center gap-3 rounded border p-2 ${r.selected ? 'border-neutral-300 bg-white' : 'border-neutral-100 bg-neutral-50 opacity-60'}`}>
-                <input type="checkbox" checked={r.selected} onChange={() => toggle(i)} aria-label={`include scene ${r.scene_index + 1}`} />
+                <input type="checkbox" checked={r.selected} onChange={() => toggle(i)} aria-label={`include clip ${i + 1}`} />
                 <div className="w-28 shrink-0">
                   <MediaThumb url={clip?.url} video width={size?.[0]} height={size?.[1]} caption={`Scene ${r.scene_index + 1} · clip`} />
                 </div>
                 <div className="flex-1 text-sm">
                   <div className="font-medium">Scene {r.scene_index + 1} <span className="text-xs font-normal text-neutral-500">{fmtSeconds(clip?.duration)} · {clip?.width}×{clip?.height} @ {clip?.fps} fps</span></div>
                   {r.selected && clip?.duration != null && (() => {
-                    const src = clip.duration!
+                    const cf = clip.fps || targetFps
+                    const snap = (raw: string | null) => { const n = parseNum(raw); return n == null ? null : snapToFrame(n, cf) }
+                    const lo = snap(r.start)
+                    const hi = snap(r.end)
+                    return (
+                      <label className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-600">
+                        use
+                        <input type="number" aria-label={`clip ${i + 1} from`} min={0} max={round2(clip.duration!)} step={0.001}
+                          value={r.start ?? ''} placeholder="0" onChange={(e) => setTrim(i, 'start', e.target.value)}
+                          className="w-20 rounded border border-neutral-300 px-2 py-0.5 text-sm" />
+                        to
+                        <input type="number" aria-label={`clip ${i + 1} to`} min={0} max={round2(clip.duration!)} step={0.001}
+                          value={r.end ?? ''} placeholder={String(round2(clip.duration!))} onChange={(e) => setTrim(i, 'end', e.target.value)}
+                          className="w-20 rounded border border-neutral-300 px-2 py-0.5 text-sm" />
+                        s
+                        {/* A cut lands on a frame, so say which one — a field that silently moves
+                            the number you typed reads as broken. */}
+                        <span data-testid={`trim-${i}`} className="text-neutral-500">
+                          {lo == null && hi == null
+                            ? 'whole clip'
+                            : `${round2(lo ?? 0)}–${round2(hi ?? clip.duration!)}s · frame ${Math.round((lo ?? 0) * cf)} · ${fmtSeconds(srcOf(r))}`}
+                        </span>
+                        {(r.start != null || r.end != null) && (
+                          <button type="button" onClick={() => { setTrim(i, 'start', ''); setTrim(i, 'end', '') }}
+                            className="text-neutral-500 underline">all</button>
+                        )}
+                      </label>
+                    )
+                  })()}
+                  {r.selected && (clip?.takes?.length ?? 0) > 1 && (
+                    <label className="mt-1 block text-xs text-neutral-600">take
+                      <select value={r.clip_id ?? ''} onChange={(e) => setTake(i, e.target.value || null)}
+                        aria-label={`clip ${i + 1} take`}
+                        className="ml-1 rounded border border-neutral-300 bg-white px-1 py-0.5">
+                        <option value="">current</option>
+                        {clip!.takes!.map((tk, k) => (
+                          <option key={tk.id} value={tk.id!}>take {k + 1}{tk.active ? ' (current)' : ''}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {r.selected && clip?.duration != null && (() => {
+                    const src = srcOf(r)
                     const parsed = parseTarget(r.target)
                     const eff = parsed == null ? src : clampTarget(src, parsed)
                     const spd = speedFor(src, parsed == null ? null : eff)
                     return (
                       <label className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-600">
                         play in
-                        <input type="number" aria-label={`scene ${r.scene_index + 1} seconds`} min={round2(src / MAX_SPEED)} max={round2(src * MAX_SPEED)} step={0.1}
+                        <input type="number" aria-label={`clip ${i + 1} seconds`} min={round2(src / MAX_SPEED)} max={round2(src * MAX_SPEED)} step={0.1}
                           value={r.target ?? String(round2(src))} onChange={(e) => setTarget(i, e.target.value)}
                           onBlur={() => { if (r.target != null && parseTarget(r.target) == null) setTarget(i, null) }}
                           className="w-20 rounded border border-neutral-300 px-2 py-0.5 text-sm" />
                         s
-                        <span data-testid={`speed-${r.scene_index}`} className={`rounded px-1.5 py-0.5 ${spd === 1 ? 'bg-neutral-100' : spd < 1 ? 'bg-blue-100 text-blue-900' : 'bg-amber-100 text-amber-900'}`}>{fmtSpeed(spd)}</span>
+                        <span data-testid={`speed-${i}`} className={`rounded px-1.5 py-0.5 ${spd === 1 ? 'bg-neutral-100' : spd < 1 ? 'bg-blue-100 text-blue-900' : 'bg-amber-100 text-amber-900'}`}>{fmtSpeed(spd)}</span>
                         {r.target != null && <button type="button" onClick={() => setTarget(i, null)} className="text-neutral-500 underline">natural</button>}
                       </label>
                     )
@@ -224,6 +303,10 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
                 </div>
                 <div className="flex flex-col gap-1">
                   <button type="button" onClick={() => move(i, -1)} disabled={i === 0} className="rounded border border-neutral-300 p-1 disabled:opacity-30" aria-label="move up"><ArrowUp className="h-3 w-3" /></button>
+                  <button type="button" onClick={() => duplicate(i)} disabled={!clip?.duration}
+                    data-testid={`duplicate-${i}`} title="place this clip again, so two takes can make one longer shot"
+                    className="rounded border border-neutral-300 p-1 text-[10px] leading-none disabled:opacity-30"
+                    aria-label={`duplicate clip ${i + 1}`}>⧉</button>
                   <button type="button" onClick={() => move(i, 1)} disabled={i === rows.length - 1} className="rounded border border-neutral-300 p-1 disabled:opacity-30" aria-label="move down"><ArrowDown className="h-3 w-3" /></button>
                 </div>
               </div>

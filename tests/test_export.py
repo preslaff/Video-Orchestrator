@@ -142,7 +142,10 @@ def test_assembly_listed_in_plan_manifest_and_readme(store, tmp_path):
     m = json.loads((dest / "manifest.json").read_text())
     assert m["assembly"]["n_clips"] == 2
     readme = (dest / "README.txt").read_text()
-    assert "assembly.mp4: 2 clip(s), 5.62s, cuts: fade 0.5s, none, speed: s01 0.5× (smooth slow motion)" in readme
+    # "#1 s01" = timeline position 1, scene 1. The position used to be printed alone, wearing an
+    # "sNN" that claimed to be the scene — wrong for any non-default selection, and ambiguous now
+    # that one scene can appear more than once.
+    assert "assembly.mp4: 2 clip(s), 5.62s, cuts: fade 0.5s, none, speed: #1 s01 0.5× (smooth slow motion)" in readme
     assert "ready cut" in readme
 
 

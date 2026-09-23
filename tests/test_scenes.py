@@ -102,3 +102,22 @@ def test_remap_assembly_follows_moved_scenes_and_drops_removed_ones():
 
     assert scenes.remap_assembly(job, {}, removed=[]) is False        # nothing to do
     assert scenes.remap_assembly(new_job(idea="no assembly"), {1: 0}) is False
+
+
+def test_removing_a_scene_takes_its_transition_with_it():
+    """`resolve` needs exactly len(items)-1 cuts. Dropping an item and leaving its cut behind made
+    the saved spec unresolvable, and silently stopped `is_stale` ever flagging again."""
+    job = _job(3)
+    job.assembly = {"spec": {"items": [{"scene_index": 0}, {"scene_index": 1}, {"scene_index": 2}],
+                             "cuts": [{"transition": "fade", "duration": 0.5},
+                                      {"transition": "none", "duration": 0.0}]}}
+    assert scenes.remap_assembly(job, {2: 1}, removed=[1]) is True
+    spec = job.assembly["spec"]
+    assert len(spec["cuts"]) == len(spec["items"]) - 1 == 1
+    assert spec["cuts"][0]["transition"] == "none"     # the survivor keeps the cut on its own side
+
+    # Dropping the first clip keeps the cut that followed it, not one that never existed.
+    job.assembly = {"spec": {"items": [{"scene_index": 0}, {"scene_index": 1}],
+                             "cuts": [{"transition": "wipeleft", "duration": 0.3}]}}
+    assert scenes.remap_assembly(job, {1: 0}, removed=[0]) is True
+    assert job.assembly["spec"]["cuts"] == []          # one clip left needs no transition

@@ -207,7 +207,8 @@ def build_readme(job: Job, manifest: dict, files: list[str]) -> str:
         )
         spec = asm.get("spec") or {}
         speeds = ", ".join(
-            f"s{i + 1:02d} {it.get('speed', 1):g}×" for i, it in enumerate(spec.get("items", []))
+            f"#{i + 1} s{int(it.get('scene_index', 0)) + 1:02d} {it.get('speed', 1):g}×"
+            for i, it in enumerate(spec.get("items", []))
             if it.get("target_seconds") is not None
         )
         mastered = (f", {asm.get('width')}x{asm.get('height')} @ {asm.get('fps'):g} fps"

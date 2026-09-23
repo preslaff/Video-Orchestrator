@@ -24,6 +24,8 @@ def _status(store: Store, manager: JobManager, job_id: str) -> AssemblyStatus:
     st = assembly_mod.status(job, active=manager.is_active(job_id))
     for c in st["clips"]:
         c["url"] = media_url(c.get("path"))
+        for take in c.get("takes") or []:
+            take["url"] = media_url(take.get("path"))
     for v in st.get("versions", []):
         v["url"] = _busted(media_url(v.get("path")), v)
     if st["record"]:

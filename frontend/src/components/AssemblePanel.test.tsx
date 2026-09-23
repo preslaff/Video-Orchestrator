@@ -61,7 +61,7 @@ describe('AssemblePanel', () => {
     expect(screen.getByTestId('total')).toHaveTextContent('8.19s')          // 3×3.062 − 2×0.5
     expect(screen.getAllByLabelText('transition')).toHaveLength(2)
 
-    await user.click(screen.getByLabelText('include scene 3'))
+    await user.click(screen.getByLabelText('include clip 3'))
     expect(screen.getByTestId('total')).toHaveTextContent('2 clip(s)')
     expect(screen.getAllByLabelText('transition')).toHaveLength(1)
     expect(screen.getByTestId('total')).toHaveTextContent('5.62s')
@@ -88,7 +88,7 @@ describe('AssemblePanel speed', () => {
     renderPanel()
     const user = userEvent.setup()
     await screen.findByText('Scene 1')
-    const field = screen.getByLabelText('scene 1 seconds')
+    const field = screen.getByLabelText('clip 1 seconds')
     await user.clear(field)
     await user.type(field, '6.124')
     expect(screen.getByTestId('speed-0')).toHaveTextContent('0.5×')
@@ -138,3 +138,42 @@ describe('AssemblePanel speed', () => {
   })
 })
 
+
+describe('AssemblePanel trims and repeats', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('places a clip twice and posts both, each with its own trim', async () => {
+    const posts = mockFetch()
+    renderPanel()
+    const user = userEvent.setup()
+    await screen.findByText('Scene 1')
+
+    await user.click(screen.getByTestId('duplicate-0'))          // scene 1 again, right after itself
+    const from = screen.getByLabelText('clip 2 from')            // the copy, not the original
+    await user.clear(from)
+    await user.type(from, '1.234')
+    // A cut lands on a frame: 16 fps means 62.5 ms steps, so 1.234 is shown as 1.25.
+    expect(screen.getByTestId('trim-1')).toHaveTextContent('1.25')
+    expect(screen.getByTestId('trim-1')).toHaveTextContent('frame 20')
+    expect(screen.getByTestId('trim-0')).toHaveTextContent('whole clip')
+
+    await user.click(screen.getByTestId('assemble'))
+    await waitFor(() => expect(posts).toHaveLength(1))
+    const items = (posts[0] as { items: { scene_index: number; start: number | null }[] }).items
+    expect(items.map((i) => i.scene_index)).toEqual([0, 0, 1, 2])
+    expect(items[0].start).toBeNull()
+    expect(items[1].start).toBe(1.234)                            // the raw value; the server snaps it
+  })
+
+  it('a trim shortens the total by what it cut', async () => {
+    mockFetch()
+    renderPanel()
+    const user = userEvent.setup()
+    await screen.findByText('Scene 1')
+    expect(screen.getByTestId('total')).toHaveTextContent('8.19s')   // 3×3.062 − 2×0.5
+    const to = screen.getByLabelText('clip 1 to')
+    await user.clear(to)
+    await user.type(to, '1')
+    expect(screen.getByTestId('total')).toHaveTextContent('6.12s')   // 1 + 2×3.062 − 2×0.5
+  })
+})

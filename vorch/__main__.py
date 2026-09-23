@@ -599,8 +599,9 @@ def _cmd_assemble(args) -> int:
                 cuts = ", ".join(c["transition"] if c["transition"] == "none" else f"{c['transition']} {c['duration']:g}s"
                                  for c in (v.get("spec") or {}).get("cuts", []))
                 spec = v.get("spec") or {}
-                speeds = ", ".join(f"s{i + 1:02d} {it.get('speed', 1):g}x" for i, it in enumerate(spec.get("items", []))
-                                   if it.get("target_seconds") is not None)
+                speeds = ", ".join(
+                    f"#{i + 1} s{int(it.get('scene_index', 0)) + 1:02d} {it.get('speed', 1):g}x"
+                    for i, it in enumerate(spec.get("items", [])) if it.get("target_seconds") is not None)
                 extra = (f"  speed: {speeds}" if speeds else "") + ("  smooth" if spec.get("smooth") else "")
                 mark = "*" if int(v.get("version", 0)) == cur else " "
                 print(f"{mark} v{v['version']:<3} {v.get('duration')}s  {v.get('n_clips')} clip(s)  {cuts or 'single clip'}{extra}  {v.get('path')}")

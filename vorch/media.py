@@ -333,6 +333,33 @@ def retimed(durations: list[float], speeds: list[float] | None = None) -> list[f
     return [d / s for d, s in zip(durations, speeds)]
 
 
+def trim_span(duration: float, start: float | None, end: float | None, fps: float) -> tuple[float, float]:
+    """The kept span of a clip, snapped to its own frame grid. Raises ValueError when impossible.
+
+    A cut cannot land between frames, so a millisecond value typed by a person is snapped here
+    rather than silently shifted by ffmpeg — at 16 fps one frame is 62.5 ms, so 1.234 s becomes
+    1.25 s. ``fps`` is the *clip's* rate, not the output's: the trim happens before the graph
+    normalises the frame rate.
+    """
+    frame = 1.0 / fps if fps else 0.0
+    lo = 0.0 if start is None else float(start)
+    hi = duration if end is None else float(end)
+    if frame:
+        lo = round(lo / frame) * frame
+        hi = round(hi / frame) * frame
+    lo = max(0.0, lo)
+    hi = min(duration, hi)
+    if hi - lo < frame or hi <= lo:
+        raise ValueError(
+            f"trim {lo:.3f}-{hi:.3f} s keeps less than one frame of a {duration:.3f} s clip")
+    return lo, hi
+
+
+def validate_trims(trims: "list[tuple[float | None, float | None]] | None", n: int) -> None:
+    if trims is not None and len(trims) != n:
+        raise ValueError(f"{n} clip(s) need {n} trim(s), got {len(trims)}")
+
+
 def validate_speeds(speeds: list[float] | None, n: int) -> None:
     if speeds is None:
         return
@@ -374,7 +401,8 @@ def validate_cuts(durations: list[float], cuts: list[Cut], *, fps: float) -> Non
 
 
 def _norm(width: int, height: int, fps: float, *, speed: float = 1.0, smooth: bool = False,
-          target: float | None = None, grain: float = 0.0) -> str:
+          target: float | None = None, grain: float = 0.0,
+          span: tuple[float, float] | None = None) -> str:
     """Per-input normalisation: size, (retimed) rate, format, timebase.
 
     speed 1 keeps the historical chain byte for byte. Other speeds retime with
@@ -384,9 +412,13 @@ def _norm(width: int, height: int, fps: float, *, speed: float = 1.0, smooth: bo
     the exact retimed length so xfade offsets stay frame-exact.
     """
     fps_s = f"{fps:g}"
+    # The source trim comes first, before the scale: it selects which part of the clip exists at
+    # all. Distinct from the `trim=duration=` further down, which clips the *retimed* result to an
+    # exact length so xfade offsets stay frame-accurate.
+    cut = f"trim=start={span[0]:.4f}:end={span[1]:.4f},setpts=PTS-STARTPTS," if span else ""
     # lanczos, not ffmpeg's default: delivering a 480p clip as 1080p is an upscale, where the
     # scaler is visible. `decrease` never stretches; a mismatched clip is padded, not cropped.
-    head = (f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
+    head = (f"{cut}scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1")
     # Light grain last: an upscale smooths AI footage into plastic, and a little noise reads as film.
     noise = f",noise=alls={max(0.0, min(grain, 3.0)):g}:allf=t+u" if grain else ""
@@ -417,18 +449,22 @@ def _tempo(speed: float) -> str:
     return "".join(p + "," for p in parts)
 
 
-def _audio_norm(i: int, has_audio: bool, *, speed: float, target: float) -> str:
+def _audio_norm(i: int, has_audio: bool, *, speed: float, target: float,
+                span: tuple[float, float] | None = None) -> str:
     """Per-input audio: retimed with ``atempo``, padded/trimmed to exactly ``target``
     seconds (so ``acrossfade`` durations line up with ``xfade``); silence for
     clips without a track."""
     if not has_audio:
         return f"anullsrc=r=48000:cl=stereo,atrim=duration={target:.4f},asetpts=PTS-STARTPTS[a{i}]"
-    return (f"[{i}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+    # The same span as the picture: a trimmed video against an untrimmed track drifts.
+    cut = f"atrim=start={span[0]:.4f}:end={span[1]:.4f},asetpts=PTS-STARTPTS," if span else ""
+    return (f"[{i}:a]{cut}aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
             f"{_tempo(speed)}apad=whole_dur={target:.4f},atrim=duration={target:.4f},asetpts=PTS-STARTPTS[a{i}]")
 
 
 def build_audio_filtergraph(
     durations: list[float], cuts: list[Cut], has_audio: list[bool], *, speeds: list[float] | None = None,
+    spans: list[tuple[float, float] | None] | None = None,
 ) -> tuple[str, str]:
     """``(filter_complex_part, output_label)`` for the audio track, mirroring
     :func:`build_filtergraph`: ``acrossfade`` where the video ``xfade``s, ``concat``
@@ -436,7 +472,8 @@ def build_audio_filtergraph(
     n = len(durations)
     speeds = list(speeds) if speeds else [1.0] * n
     durations = retimed(durations, speeds)
-    parts = [_audio_norm(i, has_audio[i], speed=speeds[i], target=durations[i]) for i in range(n)]
+    parts = [_audio_norm(i, has_audio[i], speed=speeds[i], target=durations[i],
+                         span=spans[i] if spans else None) for i in range(n)]
     groups: list[list[int]] = [[0]]
     for i, c in enumerate(cuts):
         if c.transition == "none":
@@ -462,6 +499,7 @@ def build_audio_filtergraph(
 def build_filtergraph(
     durations: list[float], cuts: list[Cut], *, width: int, height: int, fps: float,
     speeds: list[float] | None = None, smooth: bool = False, grain: float = 0.0,
+    spans: list[tuple[float, float] | None] | None = None,
 ) -> tuple[str, str]:
     """``(filter_complex, output_label)`` for ``xfade`` chains joined by ``concat`` at hard cuts.
 
@@ -473,7 +511,7 @@ def build_filtergraph(
     speeds = list(speeds) if speeds else [1.0] * n
     durations = retimed(durations, speeds)
     parts = [
-        f"[{i}:v]{_norm(width, height, fps, speed=speeds[i], smooth=smooth, target=durations[i], grain=grain)}[v{i}]"
+        f"[{i}:v]{_norm(width, height, fps, speed=speeds[i], smooth=smooth, target=durations[i], grain=grain, span=spans[i] if spans else None)}[v{i}]"
         for i in range(n)
     ]
     groups: list[list[int]] = [[0]]
@@ -523,8 +561,14 @@ def assemble(
     audio: bool = False,
     max_mbps: float | None = None,
     grain: float = 0.0,
+    trims: list[tuple[float | None, float | None]] | None = None,
 ) -> Path:
     """Join ``clips`` into one h264 mp4 with per-cut xfade transitions.
+
+    ``trims`` (one ``(start, end)`` per clip, either end ``None`` for "as it is") keep only part
+    of a clip, snapped to that clip's own frame grid; the kept length is then what every other
+    calculation sees, so transitions and the total follow from it. Trim first, then retime:
+    ``speeds`` apply to what the trim kept.
 
     ``speeds`` (one per clip, 0.25–4) retime clips; ``smooth`` renders slow-downs
     with motion interpolation (much slower). ``audio=True`` keeps the clips'
@@ -543,15 +587,30 @@ def assemble(
     infos = [probe(p) for p in paths]
     fps = float(fps or infos[0].fps or config.WAN_FPS)
     width, height = size or (infos[0].width, infos[0].height)
-    durations = [i.frame_duration for i in infos]
+    validate_trims(trims, len(paths))
+    spans: list[tuple[float, float] | None] = []
+    durations: list[float] = []
+    for i, info in enumerate(infos):
+        start, end = trims[i] if trims else (None, None)
+        if start is None and end is None:
+            spans.append(None)
+            durations.append(info.frame_duration)
+            continue
+        try:
+            span = trim_span(info.frame_duration, start, end, info.fps or fps)
+        except ValueError as e:
+            raise ValueError(f"clip {i + 1} ({paths[i].name}): {e}") from None
+        spans.append(span)
+        durations.append(span[1] - span[0])
     validate_speeds(speeds, len(paths))
     rt = retimed(durations, speeds)
     validate_cuts(rt, cuts, fps=fps)
     graph, out = build_filtergraph(durations, cuts, width=width, height=height, fps=fps,
-                                   speeds=speeds, smooth=smooth, grain=grain)
+                                   speeds=speeds, smooth=smooth, grain=grain, spans=spans)
     with_audio = bool(audio) and any(i.has_audio for i in infos)
     if with_audio:
-        agraph, aout = build_audio_filtergraph(durations, cuts, [i.has_audio for i in infos], speeds=speeds)
+        agraph, aout = build_audio_filtergraph(durations, cuts, [i.has_audio for i in infos],
+                                              speeds=speeds, spans=spans)
         graph = graph + ";" + agraph
     if timeout is None:
         smooth_secs = sum(t for t, sp in zip(rt, speeds or []) if smooth and sp < 1.0)

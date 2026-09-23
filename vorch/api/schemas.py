@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 T = TypeVar("T")
 
@@ -350,8 +350,29 @@ class AssemblyItemIn(BaseModel):
     scene_index: int
     source: Literal["final", "raw"] = "final"
     target_seconds: float | None = Field(
-        None, gt=0, description="play the clip in N seconds (0.25x–4x of its length); omit for natural speed"
+        None, gt=0,
+        description="play the KEPT part in N seconds (0.25x-4x of it); omit for natural speed. "
+                    "Trim first, then retime: this measures what start/end kept, not the whole clip.",
     )
+    clip_id: str | None = Field(
+        None,
+        description="which take from the scene's history; omit for whatever the scene points at now. "
+                    "A scene may be listed more than once, so two takes can be joined into one longer shot.",
+    )
+    start: float | None = Field(
+        None, ge=0,
+        description="seconds into the clip to start at; omit for the beginning. Snapped to the clip's "
+                    "own frame grid (at 16 fps one frame is 62.5 ms, so 1.234 becomes 1.25).",
+    )
+    end: float | None = Field(
+        None, gt=0, description="seconds to end at; omit for the end. Snapped like `start`.",
+    )
+
+    @model_validator(mode="after")
+    def _span_is_possible(self) -> "AssemblyItemIn":
+        if self.start is not None and self.end is not None and self.end <= self.start:
+            raise ValueError(f"end ({self.end:g} s) must be after start ({self.start:g} s)")
+        return self
 
 
 class AssemblyCutIn(BaseModel):
@@ -376,6 +397,18 @@ class AssemblySpecIn(BaseModel):
     grain: float = 0.0                # 0-3: light film grain (an upscale reads plastic without it)
 
 
+class AssemblyTakeOut(BaseModel):
+    """One render this scene has had. Placing an older take beside the current one extends a shot
+    with footage already paid for."""
+
+    id: str
+    path: str
+    url: str | None = None
+    created_at: str = ""
+    batch: int = 0
+    active: bool = False
+
+
 class AssemblyClipOut(BaseModel):
     scene_index: int
     source: str = "final"
@@ -386,6 +419,7 @@ class AssemblyClipOut(BaseModel):
     width: int | None = None
     height: int | None = None
     has_raw: bool = False
+    takes: list[AssemblyTakeOut] = []
     error: str | None = None
 
 

@@ -2480,6 +2480,14 @@
             "title": "Has Raw",
             "default": false
           },
+          "takes": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblyTakeOut"
+            },
+            "type": "array",
+            "title": "Takes",
+            "default": []
+          },
           "error": {
             "anyOf": [
               {
@@ -2541,7 +2549,45 @@
               }
             ],
             "title": "Target Seconds",
-            "description": "play the clip in N seconds (0.25x–4x of its length); omit for natural speed"
+            "description": "play the KEPT part in N seconds (0.25x-4x of it); omit for natural speed. Trim first, then retime: this measures what start/end kept, not the whole clip."
+          },
+          "clip_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clip Id",
+            "description": "which take from the scene's history; omit for whatever the scene points at now. A scene may be listed more than once, so two takes can be joined into one longer shot."
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start",
+            "description": "seconds into the clip to start at; omit for the beginning. Snapped to the clip's own frame grid (at 16 fps one frame is 62.5 ms, so 1.234 becomes 1.25)."
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End",
+            "description": "seconds to end at; omit for the end. Snapped like `start`."
           }
         },
         "type": "object",
@@ -2865,6 +2911,51 @@
           "clips"
         ],
         "title": "AssemblyStatus"
+      },
+      "AssemblyTakeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "default": ""
+          },
+          "batch": {
+            "type": "integer",
+            "title": "Batch",
+            "default": 0
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "path"
+        ],
+        "title": "AssemblyTakeOut",
+        "description": "One render this scene has had. Placing an older take beside the current one extends a shot\nwith footage already paid for."
       },
       "AssemblyVersionOut": {
         "properties": {

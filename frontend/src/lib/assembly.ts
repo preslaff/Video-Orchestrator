@@ -82,6 +82,35 @@ export function speedFor(source: number, target: number | null | undefined): num
   return source / target
 }
 
+/**
+ * Snap a time to the clip's own frame grid — the mirror of `media.trim_span`.
+ *
+ * A cut cannot land between frames, so a value typed to the millisecond is moved to the nearest
+ * one: at 16 fps the grid is 62.5 ms, and 1.234 s becomes 1.25 s. Doing it here rather than
+ * leaving it to ffmpeg is what lets the field show the number you will actually get.
+ */
+export function snapToFrame(t: number, fps: number): number {
+  if (!fps || !Number.isFinite(t)) return t
+  return Math.round(t * fps) / fps
+}
+
+/**
+ * How much of a clip an item actually plays: the trimmed span, else the whole thing.
+ *
+ * This is the number every other calculation hangs off — the speed a target implies, the longest
+ * transition that fits, the total. Trim first, then retime.
+ */
+export function effectiveSource(
+  duration: number, start: number | null | undefined, end: number | null | undefined, fps: number,
+): number {
+  // No trim asked: the clip's own length, untouched. Rounding it here would quietly shift the
+  // total of every timeline that predates trimming.
+  if (!duration || (start == null && end == null)) return duration
+  const lo = Math.max(0, snapToFrame(start ?? 0, fps))
+  const hi = Math.min(duration, snapToFrame(end ?? duration, fps))
+  return hi > lo ? round2(hi - lo) : duration
+}
+
 /** Keep a target within 0.25x–4x of the source length (rounded to 0.01 s, clamped after rounding). */
 export function clampTarget(source: number, target: number): number {
   const lo = round2(source / MAX_SPEED)

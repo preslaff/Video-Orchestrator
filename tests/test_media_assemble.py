@@ -256,3 +256,55 @@ def test_encoder_flags_carry_gop_and_an_optional_bitrate_cap(tmp_path, monkeypat
     assert cmd[cmd.index("-keyint_min") + 1] == "24"
     assert cmd[cmd.index("-maxrate") + 1] == "25M" and cmd[cmd.index("-bufsize") + 1] == "50M"
     assert "+faststart" in cmd[cmd.index("-movflags") + 1]      # streams without a full download
+
+
+# --- trims ------------------------------------------------------------------------------
+
+
+def test_trim_span_snaps_to_the_frame_grid():
+    """A person types milliseconds; a cut can only land on a frame. At 16 fps that grid is
+    62.5 ms, so 1.234 s is not available and 1.25 s is."""
+    assert media.trim_span(4.0, 1.234, None, 16.0) == (1.25, 4.0)
+    assert media.trim_span(4.0, None, 2.03, 16.0) == (0.0, 2.0)
+    assert media.trim_span(4.0, None, None, 16.0) == (0.0, 4.0)
+    assert media.trim_span(4.0, -5.0, 99.0, 16.0) == (0.0, 4.0)          # clamped to the clip
+    # At 8 fps the same request snaps somewhere else: the grid is the CLIP's, not the output's.
+    assert media.trim_span(4.0, 1.234, None, 8.0) == (1.25, 4.0)
+    assert media.trim_span(4.0, 1.1, None, 8.0) == (1.125, 4.0)
+    for start, end in ((3.0, 3.01), (2.0, 2.0), (3.0, 1.0)):
+        with pytest.raises(ValueError, match="less than one frame"):
+            media.trim_span(4.0, start, end, 16.0)
+
+
+def test_the_span_is_cut_before_anything_else_in_the_graph():
+    graph, _ = media.build_filtergraph([1.0], [], width=64, height=64, fps=8, spans=[(0.5, 1.5)])
+    assert graph.startswith("[0:v]trim=start=0.5000:end=1.5000,setpts=PTS-STARTPTS,scale=")
+    plain, _ = media.build_filtergraph([1.0], [], width=64, height=64, fps=8)
+    assert "trim=start=" not in plain                                    # no trim asked, none added
+
+
+def test_the_audio_is_cut_to_the_same_span():
+    """A trimmed picture against an untrimmed track drifts, and nothing downstream would notice."""
+    graph, _ = media.build_audio_filtergraph([1.0], [], [True], spans=[(0.5, 1.5)])
+    assert graph.startswith("[0:a]atrim=start=0.5000:end=1.5000,asetpts=PTS-STARTPTS,aresample=")
+    silent, _ = media.build_audio_filtergraph([1.0], [], [False], spans=[(0.5, 1.5)])
+    assert "anullsrc" in silent and "atrim=duration=1.0000" in silent     # generated, already exact
+
+
+@needs_ffmpeg
+def test_a_trimmed_clip_contributes_only_the_part_it_kept(tmp_path):
+    a, b = _clip(tmp_path, "a", "red", secs=4, rate=16), _clip(tmp_path, "b", "blue", secs=4, rate=16)
+    out = media.assemble([a, b], [Cut("none")], tmp_path / "j.mp4",
+                         trims=[(1.234, 2.0), (0.0, 0.5)])               # snaps to 1.25 -> 2.0
+    assert media.probe(out).frame_duration == pytest.approx(0.75 + 0.5, abs=0.03)
+    whole = media.assemble([a], [], tmp_path / "w.mp4")
+    assert media.probe(whole).frame_duration == pytest.approx(4.0, abs=0.03)
+
+
+@needs_ffmpeg
+def test_an_impossible_trim_names_the_clip_it_belongs_to(tmp_path):
+    a = _clip(tmp_path, "a", "red", secs=2, rate=16)
+    with pytest.raises(ValueError, match=r"clip 1 \(a\.mp4\)"):
+        media.assemble([a], [], tmp_path / "x.mp4", trims=[(1.0, 1.01)])
+    with pytest.raises(ValueError, match="need 2 trim"):
+        media.assemble([a, a], [Cut("none")], tmp_path / "y.mp4", trims=[(0.0, 1.0)])

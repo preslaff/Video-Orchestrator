@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampCut, clampTarget, defaultCuts, fmtSpeed, groupTransitions, maxTransition, retimed, speedFor, totalDuration } from './assembly'
+import { clampCut, clampTarget, defaultCuts, fmtSpeed, groupTransitions, maxTransition, retimed, speedFor, totalDuration, effectiveSource, snapToFrame } from './assembly'
 
 describe('assembly helpers', () => {
   it('totalDuration ignores hard cuts', () => {
@@ -34,4 +34,21 @@ describe('assembly helpers', () => {
     expect(defaultCuts(3)).toHaveLength(2)
     expect(defaultCuts(1)).toEqual([])
   })
+})
+
+it('snaps a typed time to the clip frame grid', () => {
+  // 16 fps = 62.5 ms per frame, so 1.234 s is not a place a cut can land.
+  expect(snapToFrame(1.234, 16)).toBe(1.25)
+  expect(snapToFrame(1.2, 8)).toBe(1.25)
+  expect(snapToFrame(1.234, 0)).toBe(1.234)          // unknown rate: leave it alone
+})
+
+it('an effective source is the trimmed span, and untouched when nothing is trimmed', () => {
+  expect(effectiveSource(3.062, null, null, 16)).toBe(3.062)   // exactly as before trimming existed
+  expect(effectiveSource(3.062, 1.234, 2, 16)).toBe(0.75)      // snapped 1.25 -> 2.0
+  expect(effectiveSource(3.062, 1, null, 16)).toBe(2.06)
+  expect(effectiveSource(3.062, 2, 1, 16)).toBe(3.062)         // nonsense span: fall back to whole
+  expect(effectiveSource(0, 1, 2, 16)).toBe(0)
+  // A trim is what the speed is measured against: half of the kept 0.75 s, not of the clip.
+  expect(speedFor(effectiveSource(3.062, 1.25, 2, 16), 1.5)).toBe(0.5)
 })

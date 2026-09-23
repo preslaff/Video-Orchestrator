@@ -144,6 +144,10 @@ def remap_assembly(job: Job, moved: dict[int, int], removed: Iterable[int] = ())
     The spec addresses clips by ``scene_index``, so without this a reorder would silently join
     different clips, and a delete would make ``assembly.resolve`` raise "no scene N". Items for
     removed scenes are dropped, the rest follow their scene. Returns True when anything changed.
+
+    A dropped item takes its transition with it: ``resolve`` requires exactly ``len(items) - 1``
+    cuts, so leaving them behind made the saved spec unresolvable — and ``assembly.is_stale``
+    quietly returned False ever after, because its ``len(clips) != len(items)`` guard was hit.
     """
     record = job.assembly
     if not record or not isinstance(record.get("spec"), dict):
@@ -152,17 +156,26 @@ def remap_assembly(job: Job, moved: dict[int, int], removed: Iterable[int] = ())
     if not isinstance(items, list):
         return False
     gone = set(removed)
+    cuts = record["spec"].get("cuts")
+    cuts = list(cuts) if isinstance(cuts, list) else None
     kept: list[dict] = []
     changed = False
-    for item in items:
+    for pos, item in enumerate(items):
         old = item.get("scene_index")
         if old in gone:
             changed = True
+            if cuts:
+                # The cut *before* this clip, or — for the first clip — the one after it, since a
+                # transition sits between two clips and the survivor keeps its other side.
+                del cuts[pos - 1 if pos else 0]
             continue
         if old in moved:
             item = {**item, "scene_index": moved[old]}
             changed = True
         kept.append(item)
     if changed:
-        record["spec"] = {**record["spec"], "items": kept}
+        spec = {**record["spec"], "items": kept}
+        if cuts is not None:
+            spec["cuts"] = cuts[:max(0, len(kept) - 1)]
+        record["spec"] = spec
     return changed

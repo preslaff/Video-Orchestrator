@@ -55,7 +55,7 @@ def test_resolve_merges_partial_spec_and_validates(tmp_path):
     for bad, msg in [
         ({"items": []}, "at least one"),
         ({"items": [{"scene_index": 9}]}, "no scene 10"),
-        ({"items": [{"scene_index": 0}, {"scene_index": 0}]}, "twice"),
+        ({"items": [{"scene_index": 0, "clip_id": "ghost"}]}, "no take"),
         ({"items": [{"scene_index": 0, "source": "weird"}]}, "source"),
         ({"cuts": [{"transition": "fade"}]}, "need 2 cut"),
         ({"cuts": [{"transition": "swoosh"}, {"transition": "fade"}]}, "unknown transition"),
@@ -355,3 +355,70 @@ def test_the_record_and_spec_carry_the_mastering_settings(tmp_path, monkeypatch)
     assembly.run(job, spec, paths)
     assert seen["size"] == (1920, 1080) and seen["fps"] == 24.0
     assert seen["grain"] == 1.5 and seen["max_mbps"] == 25
+
+
+# --- takes, repeats and trims ------------------------------------------------------------
+
+
+def _with_takes(tmp_path, job):
+    """Give scene 0 a second, older take on disk."""
+    from vorch.state import Clip
+    old = tmp_path / "s0_take1.mp4"
+    old.write_bytes(b"v")
+    job.scenes[0].clips = [Clip(video_path=str(old), id="take1"),
+                           Clip(video_path=job.scenes[0].video_path, id="take2")]
+    return old
+
+
+def test_a_scene_may_be_placed_twice(tmp_path):
+    """Two takes of one shot joined make a longer shot; the same clip twice is a repeat. Nothing
+    downstream ever cared — the list is positional — so only the old guard forbade it."""
+    job = _job(tmp_path)
+    spec, paths = assembly.resolve(job, {"items": [{"scene_index": 0}, {"scene_index": 1}, {"scene_index": 0}],
+                                         "cuts": [{"transition": "none"}, {"transition": "none"}]})
+    assert [i.scene_index for i in spec.items] == [0, 1, 0]
+    assert [p.name for p in paths] == ["s0.mp4", "s1.mp4", "s0.mp4"]
+
+
+def test_a_take_is_chosen_by_id_and_an_unknown_one_is_refused(tmp_path):
+    job = _job(tmp_path)
+    old = _with_takes(tmp_path, job)
+    spec, paths = assembly.resolve(job, {"items": [{"scene_index": 0, "clip_id": "take1"},
+                                                   {"scene_index": 0, "clip_id": "take2"}],
+                                         "cuts": [{"transition": "none"}]})
+    assert [p.name for p in paths] == [old.name, "s0.mp4"]      # the older take, then the current one
+    assert [i.clip_id for i in spec.items] == ["take1", "take2"]
+    with pytest.raises(ValueError, match="clip 1 .scene 1.: no take"):
+        assembly.resolve(job, {"items": [{"scene_index": 0, "clip_id": "nope"}]})
+
+
+def test_a_pinned_take_does_not_go_stale_when_the_scene_is_re_rendered(tmp_path):
+    """The take was named explicitly, so a newer render of that scene has not replaced it."""
+    job = _job(tmp_path)
+    _with_takes(tmp_path, job)
+    rec = assembly.AssemblyRecord(
+        path=str(tmp_path / "a.mp4"), created_at="", ok=True, clips=[str(tmp_path / "s0_take1.mp4"), str(tmp_path / "s1.mp4")],
+        spec={"items": [{"scene_index": 0, "clip_id": "take1"}, {"scene_index": 1}]})
+    assert assembly.is_stale(job, rec) is False
+    job.scenes[1].video_path = str(tmp_path / "s1_new.mp4")     # scene 1 re-rendered, and it is not pinned
+    assert assembly.is_stale(job, rec) is True
+
+
+def test_a_trim_shortens_the_clip_and_is_snapped_to_its_frame_grid(tmp_path):
+    """A person types milliseconds; a cut can only land on a frame. 16 fps = 62.5 ms."""
+    job = _job(tmp_path)
+    spec, _ = assembly.resolve(job, {"items": [{"scene_index": 0, "start": 1.234, "end": 2.0}],
+                                     "cuts": []})
+    assert (spec.items[0].start, spec.items[0].end) == (1.25, 2.0)   # snapped, and stored snapped
+    # The kept length is what a target duration is measured against: 0.75 s, not the full 3.06 s.
+    with pytest.raises(ValueError, match="outside"):
+        assembly.resolve(job, {"items": [{"scene_index": 0, "start": 1.25, "end": 2.0, "target_seconds": 9}],
+                               "cuts": []})
+    with pytest.raises(ValueError, match="less than one frame"):
+        assembly.resolve(job, {"items": [{"scene_index": 0, "start": 1.0, "end": 1.01}], "cuts": []})
+
+
+def test_a_spec_saved_before_takes_and_trims_loads_unchanged(tmp_path):
+    item = assembly._item_from_dict({"scene_index": 2, "source": "raw", "target_seconds": 6.0})
+    assert (item.clip_id, item.start, item.end) == (None, None, None)
+    assert item.scene_index == 2 and item.source == "raw" and item.target_seconds == 6.0
