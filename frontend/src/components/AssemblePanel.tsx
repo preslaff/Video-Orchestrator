@@ -302,12 +302,20 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
                       </label>
                     )
                   })()}
-                  {preview === r.uid && clip?.url && clip.duration != null && (
-                    <div className="mt-2 max-w-sm">
-                      <ClipPreview url={clip.url} duration={clip.duration} fps={clip.fps || targetFps}
-                        start={parseNum(r.start)} end={parseNum(r.end)} testId={`preview-${i}`} />
-                    </div>
-                  )}
+                  {preview === r.uid && clip?.url && clip.duration != null && (() => {
+                    // The same two numbers the row shows: the trim decides what plays, "play in"
+                    // decides how fast, and the preview has to obey both to be worth looking at.
+                    const s = srcOf(r)
+                    const want = parseTarget(r.target)
+                    return (
+                      <div className="mt-2 max-w-sm">
+                        <ClipPreview url={clip.url} duration={clip.duration} fps={clip.fps || targetFps}
+                          start={parseNum(r.start)} end={parseNum(r.end)}
+                          speed={speedFor(s, want == null ? null : clampTarget(s, want))}
+                          testId={`preview-${i}`} />
+                      </div>
+                    )
+                  })()}
                   {r.selected && (clip?.takes?.length ?? 0) > 1 && (
                     <label className="mt-1 block text-xs text-neutral-600">take
                       <select value={r.clip_id ?? ''} onChange={(e) => setTake(i, e.target.value || null)}

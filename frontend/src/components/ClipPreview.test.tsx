@@ -32,6 +32,18 @@ describe('playhead', () => {
   })
 })
 
+describe('playhead with a retime', () => {
+  it('counts the clock a viewer experiences, not the position in the file', () => {
+    // 1 s of footage asked to play in 2 s: half speed, so it takes two seconds to watch.
+    expect(playhead(1.5, 1.0, 2.0, false, 4, 0.5)).toMatchObject({ elapsed: 1, total: 2 })
+    expect(playhead(1.5, 1.0, 2.0, false, 4, 2)).toMatchObject({ elapsed: 0.25, total: 0.5 })
+    // The playhead still marks where it is in the clip — the retime does not move the frame.
+    expect(playhead(1.5, 1.0, 2.0, false, 4, 0.5).at).toBeCloseTo(0.5)
+    // Whole-clip mode shows what the file holds, so the retime is not applied there.
+    expect(playhead(1.5, 1.0, 2.0, true, 4, 0.5)).toMatchObject({ elapsed: 1.5, total: 4 })
+  })
+})
+
 describe('ClipPreview', () => {
   beforeEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -60,6 +72,21 @@ describe('ClipPreview', () => {
     expect(mode).toHaveTextContent('whole clip')
     expect(mode).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByTestId('preview-time')).toHaveTextContent('/ 4.00s')   // the whole file
+  })
+
+  it('plays at the speed the timeline will, and says how long that takes', async () => {
+    stubMedia()
+    render(<ClipPreview url="/c.mp4" duration={4} fps={16} start={1} end={2} speed={0.5} />)
+    const v = document.querySelector('video')!
+    expect(v.playbackRate).toBe(0.5)
+    expect(screen.getByTestId('preview-time')).toHaveTextContent('/ 2.00s')   // 1 s of footage, half speed
+    expect(screen.getByTestId('preview-speed')).toHaveTextContent('0.5×')
+
+    // Inspecting the source is a different question, so that mode plays it as it is.
+    await userEvent.click(screen.getByTestId('preview-mode'))
+    expect(v.playbackRate).toBe(1)
+    expect(screen.getByTestId('preview-time')).toHaveTextContent('/ 4.00s')
+    expect(screen.queryByTestId('preview-speed')).toBeNull()
   })
 
   it('marks the kept span on the bar, in the whole clip s own scale', () => {

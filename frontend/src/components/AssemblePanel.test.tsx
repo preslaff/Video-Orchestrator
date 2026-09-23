@@ -211,6 +211,25 @@ describe('AssemblePanel trims and repeats', () => {
     await waitFor(() => expect(screen.getByTestId('trim-0')).toHaveTextContent('whole clip'))
   })
 
+  it('the preview obeys the row s play-in as well as its trim', async () => {
+    mockFetch()
+    renderPanel()
+    const user = userEvent.setup()
+    await screen.findByText('Scene 1')
+
+    const to = screen.getByLabelText('clip 1 to')
+    await user.clear(to)
+    await user.type(to, '1')                                   // keep 1 s of the 3.062 s clip
+    const playIn = screen.getByLabelText('clip 1 seconds')
+    await user.clear(playIn)
+    await user.type(playIn, '2')                               // and stretch it over 2 s
+    await user.click(screen.getByTestId('preview-toggle-0'))
+
+    // 1 s of footage over 2 s is half speed, and that is what the preview reports and plays.
+    expect(screen.getByTestId('preview-0-speed')).toHaveTextContent('0.5×')
+    expect(screen.getByTestId('preview-0-time')).toHaveTextContent('/ 2.00s')
+  })
+
   it('a trim shortens the total by what it cut', async () => {
     mockFetch()
     renderPanel()

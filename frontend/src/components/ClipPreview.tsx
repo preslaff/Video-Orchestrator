@@ -3,12 +3,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { round2, snapToFrame } from '@/lib/assembly'
 
-/** Where the playhead sits and what the counter says, for a given mode. */
-export function playhead(now: number, lo: number, hi: number, whole: boolean, duration: number) {
+/**
+ * Where the playhead sits and what the counter says, for a given mode.
+ *
+ * `speed` is the retime ("play in N seconds"): the position inside the clip is source time, but
+ * the clock a viewer experiences is that divided by the speed — which is the number the "play in"
+ * field asked for, and therefore the one the counter has to show.
+ */
+export function playhead(
+  now: number, lo: number, hi: number, whole: boolean, duration: number, speed = 1,
+) {
   const from = whole ? 0 : lo
   const to = whole ? duration : hi
   const span = Math.max(1e-6, to - from)
-  return { at: Math.min(1, Math.max(0, (now - from) / span)), elapsed: Math.max(0, now - from), total: to - from }
+  const rate = whole || !speed ? 1 : speed        // the whole clip is shown as the file holds it
+  return {
+    at: Math.min(1, Math.max(0, (now - from) / span)),
+    elapsed: Math.max(0, now - from) / rate,
+    total: (to - from) / rate,
+  }
 }
 
 /**
@@ -20,12 +33,14 @@ export function playhead(now: number, lo: number, hi: number, whole: boolean, du
  * will use and what the clip actually holds costs nothing and needs no render.
  */
 export function ClipPreview({
-  url, poster, duration, fps, start, end, testId = 'preview',
+  url, poster, duration, fps, start, end, speed = 1, testId = 'preview',
 }: {
   url: string
   poster?: string | null
   duration: number
   fps: number
+  /** The retime from "play in N seconds" (source length / target). 1 = natural. */
+  speed?: number
   /** The kept span, already snapped; null means the clip's own edge. */
   start: number | null
   end: number | null
@@ -64,6 +79,14 @@ export function ClipPreview({
 
   useEffect(() => () => { if (raf.current) cancelAnimationFrame(raf.current) }, [])
 
+  // Play it at the speed the timeline will: a slow-motion clip that previews at natural speed is
+  // not showing you the shot you are about to cut. The whole-clip mode stays natural, since that
+  // mode exists to show what the file holds.
+  useEffect(() => {
+    const v = ref.current
+    if (v) v.playbackRate = whole ? 1 : Math.min(4, Math.max(0.25, speed || 1))
+  }, [speed, whole])
+
   // Retyping the span moves the picture to the new in-point, so the number in the field and the
   // frame on screen never tell different stories. Keyed on the in-point alone: reacting to
   // `playing` too would snap back to the start every time you pressed pause.
@@ -95,7 +118,7 @@ export function ClipPreview({
     setNow(v.currentTime)
   }
 
-  const head = playhead(now, lo, hi, whole, duration)
+  const head = playhead(now, lo, hi, whole, duration, speed)
   const pct = (t: number) => `${Math.min(100, Math.max(0, (t / (duration || 1)) * 100))}%`
 
   return (
@@ -143,6 +166,11 @@ export function ClipPreview({
         <span data-testid={`${testId}-time`} className="font-mono tabular-nums">
           {round2(head.elapsed).toFixed(2)} / {round2(head.total).toFixed(2)}s · frame {Math.round(now * fps)}
         </span>
+        {!whole && speed !== 1 && (
+          <span data-testid={`${testId}-speed`} className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-900">
+            {round2(speed)}×
+          </span>
+        )}
         {trimmed && !whole && <span className="text-neutral-400">cut from {round2(duration)}s</span>}
       </div>
     </div>
