@@ -50,6 +50,9 @@ export function useConfig() {
     },
     // Cheap, and it lets the stale-code banner disappear on its own once the server restarts.
     refetchInterval: 30_000,
+    // Nav renders this on every page, and a query is stale on mount by default — so anything
+    // that remounts the tree re-requests it. The interval already keeps it fresh enough.
+    staleTime: 30_000,
   })
 }
 
