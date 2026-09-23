@@ -51,6 +51,7 @@ Working rules: keep changes surgical, keep `pytest -q` green, regenerate `fronte
   - `skills/gemma-evaluate.md` — vision evaluation, image + video (frame extraction), JSON verdict parsing
   - `skills/gemma-prompt.md` — storyboard + keyframe/animation prompt generation; learned FLUX.2 prompting rules
   - `skills/vram-manager.md` — avoiding OOM between models
+  - `skills/fixing-distortions.md` — repairing a bad frame: which instrument for which defect (kv_edit vs identity_edit vs t2i vs locked regions), how to write a corrective prompt, how to pick a reference. The `/fix-frame` skill (`.claude/skills/`) drives it and the read-only `frame-doctor` agent does the looking.
 
 ## Architecture invariants (from SKILL.md — do not violate)
 

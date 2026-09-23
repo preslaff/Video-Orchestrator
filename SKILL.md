@@ -1,6 +1,12 @@
 ---
 name: video-orchestrator
-description: Оркестрира локална AI видео продукция чрез Gemma 4 (LLM + vision) и ComfyUI (Klein keyframes, Wan animation, ReActor face swap). Използвай този skill ВИНАГИ когато работата засяга: пускане на ComfyUI workflow през API, изпращане на изображение/кадър до Gemma за оценка, управление на VRAM между моделите, или изграждане на pipeline стъпки за видео генерация. Тригери: "пусни workflow", "оцени кадъра", "генерирай keyframe", "анимирай", "face swap", "ComfyUI API", "Gemma vision", "orchestrator", "pipeline стъпка", "VRAM суичване".
+description: >-
+  Оркестрира локална AI видео продукция чрез Gemma 4 (LLM + vision) и ComfyUI (Klein keyframes, Wan
+  animation, ReActor face swap). Използвай този skill ВИНАГИ когато работата засяга: пускане на ComfyUI
+  workflow през API, изпращане на изображение/кадър до Gemma за оценка, управление на VRAM между
+  моделите, или изграждане на pipeline стъпки за видео генерация. Тригери: "пусни workflow", "оцени
+  кадъра", "генерирай keyframe", "анимирай", "face swap", "ComfyUI API", "Gemma vision", "orchestrator",
+  "pipeline стъпка", "VRAM суичване".
 ---
 
 # Video Orchestrator
@@ -17,6 +23,7 @@ description: Оркестрира локална AI видео продукци�
 - **Gemma оценка на изображение/видео** (vision заявка, structured JSON verdict) → `skills/gemma-evaluate.md`
 - **Gemma текстова генерация** (storyboard, промпти) → `skills/gemma-prompt.md`
 - **VRAM управление** (кой модел зареден, разтоварване, суичване) → `skills/vram-manager.md`
+- **Поправка на сбъркан кадър** (деформации, дръжки/ръце, разкривен текст — кой инструмент) → `skills/fixing-distortions.md`
 
 ## Архитектурни инварианти (не нарушавай)
 
