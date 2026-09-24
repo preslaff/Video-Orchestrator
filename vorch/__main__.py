@@ -688,14 +688,21 @@ def _cmd_up(args) -> int:
     for name in services.order(specs, args.names or None):
         spec = specs[name]
         before = supervisor.resolve(spec)
-        if before.orphan and not args.reclaim_orphans:
-            print(f"[FAIL] {name:<9} orphan from an earlier vorch (pid {before.pid}"
-                  f"{f', {before.vram_mb} MB' if before.vram_mb else ''}) — "
-                  f"rerun with --reclaim-orphans, or `vorch down {name} --force`")
-            failed.append(name)
-            continue
-        if before.running and not before.orphan:
-            extra = "adopted, started outside vorch" if before.adopted else "already running"
+        # A running service is only a problem if something is actually wrong with it. Outliving the
+        # `vorch up` that started it is normal — that is the whole point of `vorch up` — so the
+        # question is its status, not whether a pidfile's author is still around.
+        if before.running and before.status == "fail":
+            remedy = (f"rerun with --reclaim-orphans, or `vorch down {name} --force`"
+                      if before.orphan else f"`vorch down {name} --force` and let vorch start it")
+            print(f"[FAIL] {name:<9} {before.detail} — {remedy}")
+            if not args.reclaim_orphans:
+                failed.append(name)
+                continue
+        elif before.running:
+            if before.adopted:
+                extra = "adopted, started outside vorch"
+            else:
+                extra = "already running, started by vorch"
             print(f"[ ok ] {name:<9} {extra}"
                   f"{f'; {before.identity_detail}' if before.identity == 'verified' else ''}")
             running.append(name)

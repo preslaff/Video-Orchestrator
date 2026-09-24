@@ -388,3 +388,57 @@ def test_configure_survives_an_unwritable_log_file(tmp_path, capsys):
         logging.getLogger("vorch.testing").info("still works")
     finally:
         logsetup.reset()
+
+
+# --- `vorch up` on a world that is already running --------------------------------------
+
+
+def _state(spec, **kw):
+    from vorch import supervisor
+
+    return supervisor.ServiceState(spec=spec, **kw)
+
+
+def test_vorch_up_is_idempotent_on_a_healthy_world(monkeypatch, capsys):
+    """It reported `[FAIL] orphan` and exited 1 for services `vorch status` called ok.
+
+    `vorch up` exits the moment it finishes, so everything it started is an "orphan" by the literal
+    definition a second later. What matters is whether anything is actually wrong.
+    """
+    from vorch import services, supervisor
+    from vorch.__main__ import build_parser
+
+    specs = services.load(force=True)
+    seen: list[str] = []
+    monkeypatch.setattr(supervisor, "start", lambda *a, **k: seen.append("started"))
+    monkeypatch.setattr(supervisor, "resolve", lambda spec, **kw: _state(
+        spec if not isinstance(spec, str) else specs[spec],
+        running=True, pid=42, orphan=True, adopted=False, identity="ours",
+        detail="pid 42; started by vorch"))
+    monkeypatch.setattr(supervisor, "states", lambda **kw: [])
+
+    args = build_parser().parse_args(["up"])
+    assert args.func(args) == 0, "a healthy world is not a failure"
+    out = capsys.readouterr().out
+    assert "[FAIL]" not in out
+    assert "already running, started by vorch" in out
+    assert seen == [], "nothing may be restarted"
+
+
+def test_vorch_up_still_refuses_a_service_that_is_genuinely_broken(monkeypatch, capsys):
+    from vorch import services, supervisor
+    from vorch.__main__ import build_parser
+
+    specs = services.load(force=True)
+    monkeypatch.setattr(supervisor, "start", lambda *a, **k: None)
+    monkeypatch.setattr(supervisor, "states", lambda **kw: [])
+    monkeypatch.setattr(supervisor, "resolve", lambda spec, **kw: _state(
+        spec if not isinstance(spec, str) else specs[spec],
+        running=True, pid=42, identity="mismatch", identity_detail="wrong voice",
+        detail="pid 42; WRONG INSTANCE: wrong voice"))
+
+    args = build_parser().parse_args(["up"])
+    assert args.func(args) == 1
+    out = capsys.readouterr().out
+    assert "[FAIL]" in out and "WRONG INSTANCE" in out
+    assert "--force" in out, "it must say how to fix it"
