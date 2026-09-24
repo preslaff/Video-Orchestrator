@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
 
 import pytest
@@ -325,3 +327,64 @@ def test_project_set_kind_and_the_project_hint_steers_label_assets(labelled_proj
     assert cli.main(["project", "set-kind", "bela-ireland", aid, "logo"]) == 0
     assert projects.load_by_slug(store, "bela-ireland").asset(aid).kind == "logo"
     assert cli.main(["project", "set-kind", "bela-ireland", "nope", "logo"]) == 1
+
+
+# --- logging configuration (vorch/logsetup.py) ---------------------------------------
+
+
+def test_log_level_and_file_flags_are_global(monkeypatch, tmp_path):
+    """--log-level / --log-file sit on the top parser, so every subcommand accepts them."""
+    from vorch import logsetup
+    from vorch.__main__ import build_parser
+
+    args = build_parser().parse_args(["--log-level", "debug", "--log-file", str(tmp_path / "v.log"),
+                                      "jobs"])
+    assert args.log_level == "debug"
+    assert logsetup.resolve_level(args.log_level) == logging.DEBUG
+
+
+def test_configure_writes_to_the_requested_file(tmp_path):
+    from vorch import logsetup
+
+    path = tmp_path / "logs" / "vorch.log"
+    logsetup.reset()
+    try:
+        assert logsetup.configure("debug", log_file=path) == path
+        logging.getLogger("vorch.testing").info("hello from a module logger")
+        for h in logging.getLogger(logsetup.ROOT).handlers:
+            h.flush()
+        assert "hello from a module logger" in path.read_text(encoding="utf-8")
+        # The file format carries the timestamp and pid that the terse stderr format omits.
+        assert f"[{os.getpid()}]" in path.read_text(encoding="utf-8")
+    finally:
+        logsetup.reset()
+
+
+def test_configure_is_idempotent_and_empty_log_file_means_stderr_only(tmp_path):
+    from vorch import logsetup
+
+    logsetup.reset()
+    try:
+        assert logsetup.configure("info", log_file="") is None
+        handlers = list(logging.getLogger(logsetup.ROOT).handlers)
+        # A second call must not stack a second set of handlers on the same logger.
+        assert logsetup.configure("debug", log_file=tmp_path / "ignored.log") is None
+        assert logging.getLogger(logsetup.ROOT).handlers == handlers
+        assert not (tmp_path / "ignored.log").exists()
+    finally:
+        logsetup.reset()
+
+
+def test_configure_survives_an_unwritable_log_file(tmp_path, capsys):
+    """Logging must never be the reason a run fails."""
+    from vorch import logsetup
+
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("", encoding="utf-8")
+    logsetup.reset()
+    try:
+        assert logsetup.configure("info", log_file=blocker / "vorch.log") is None
+        assert "cannot write the log file" in capsys.readouterr().err
+        logging.getLogger("vorch.testing").info("still works")
+    finally:
+        logsetup.reset()

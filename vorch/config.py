@@ -139,6 +139,15 @@ VRAM_SETTLE_SEC = float(os.environ.get("VORCH_VRAM_SETTLE_SEC", "3"))
 # (`vorch db init` creates it). Tests use VORCH_TEST_DATABASE_URL (tests/conftest.py).
 DATABASE_URL = os.environ.get("VORCH_DATABASE_URL", "postgresql:///vorch")
 
+# --- Runtime state and logs ---------------------------------------------------
+# Pidfiles for supervised services (so an orphan survives a hard kill and can be found again)
+# and per-service log files. Both live under ~/vorch/, beside backends.yaml and vorch.env.
+RUN_DIR = Path(os.environ.get("VORCH_RUN_DIR", "~/vorch/run")).expanduser()
+LOG_DIR = Path(os.environ.get("VORCH_LOG_DIR", "~/vorch/logs")).expanduser()
+# Rotation, applied to vorch's own log by logsetup and to each service's log at start.
+LOG_MAX_BYTES = int(os.environ.get("VORCH_LOG_MAX_BYTES", str(8 * 1024 * 1024)))
+LOG_BACKUPS = int(os.environ.get("VORCH_LOG_BACKUPS", "5"))
+
 # Setup phase: where projects keep their assets and where finished jobs are exported.
 PROJECTS_ROOT = Path(os.environ.get("VORCH_PROJECTS_ROOT", "~/vorch/projects")).expanduser()
 EXPORT_ROOT = Path(os.environ.get("VORCH_EXPORT_ROOT", "~/vorch/export")).expanduser()

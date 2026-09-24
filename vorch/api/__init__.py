@@ -13,7 +13,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from .. import __version__, config
+from .. import __version__, config, logsetup
 from ..describer import AssetDescriber
 from ..queue import JobManager
 from ..state import Store
@@ -66,6 +66,10 @@ def create_app(
 
     ``media_dir`` defaults to ComfyUI's output directory (``config.COMFY_OUTPUT``).
     """
+    # A no-op when the CLI already configured logging; the point is the other entry points —
+    # `uvicorn vorch.api:app`, an embedded app, a notebook — which otherwise get nothing and
+    # silently drop every INFO line the orchestrator writes about what it decided.
+    logsetup.configure()
     if store is None:
         store = Store.open()
     if manager is None:

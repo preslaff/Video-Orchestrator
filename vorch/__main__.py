@@ -19,7 +19,7 @@ import logging
 import sys
 from pathlib import Path
 
-from . import config, formats, provenance
+from . import config, formats, logsetup, provenance
 from .clients import comfy
 from .clients.gemma import GemmaError
 from .evaluator import EvaluationError, evaluate_image
@@ -334,9 +334,12 @@ def _cmd_serve(args) -> int:
     from .api import create_app
 
     app = create_app(_open_store())
+    level = logging.getLevelName(logsetup.resolve_level(args.log_level)).lower()
     print(f"API on http://{args.host}:{args.port}/api  (docs: /docs)")
     print(f"UI: {config.UI_URL}  (run `npm run dev` in frontend/)")
-    uvicorn.run(app, host=args.host, port=args.port)
+    if (path := logsetup.configure(args.log_level, log_file=args.log_file)) is not None:
+        print(f"log: {path}")
+    uvicorn.run(app, host=args.host, port=args.port, log_level=level)
     return 0
 
 
@@ -772,6 +775,11 @@ def registry_kinds() -> tuple[str, ...]:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vorch", description=__doc__.split("\n")[0])
+    # Global, not per-subcommand: every command logs, and the level belongs to the run.
+    p.add_argument("--log-level", choices=logsetup.LEVELS, default=None,
+                   help="stderr + file log level (default: VORCH_LOG_LEVEL, else info)")
+    p.add_argument("--log-file", default=None,
+                   help="log file (default: ~/vorch/logs/vorch.log; empty string = stderr only)")
     sub = p.add_subparsers(dest="command", required=True)
 
     kf = sub.add_parser("keyframe", help="generate a keyframe from a prompt")
@@ -979,8 +987,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     args = build_parser().parse_args(argv)
+    logsetup.configure(args.log_level, log_file=args.log_file)
     try:
         return args.func(args)
     except (

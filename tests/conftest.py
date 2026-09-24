@@ -22,6 +22,10 @@ from vorch.state import Store
 
 TEST_DSN = os.environ.get("VORCH_TEST_DATABASE_URL", "postgresql:///vorch_test")
 
+# The suite builds apps and runs CLI commands, both of which configure logging. An empty
+# VORCH_LOG_FILE means "stderr only", so `pytest -q` never writes into ~/vorch/logs.
+os.environ.setdefault("VORCH_LOG_FILE", "")
+
 
 @pytest.fixture(scope="session")
 def pg_dsn() -> str:
