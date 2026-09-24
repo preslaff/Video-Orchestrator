@@ -152,6 +152,8 @@ class AssemblySpec:
     encoder: str = "libx264"
     smooth: bool = False            # motion-interpolated slow motion (slow render)
     audio: bool = False             # keep the clips' audio (LTX clips carry a track; Wan clips do not)
+    narration: bool = True          # lay each scene's spoken line over its clip, when it has one
+    duck: float = 6.0               # how hard the clips duck under the voice (compression ratio)
     delivery: str = DELIVERY_SOURCE  # a target from `deliveries()`; width/height/fps override it
     max_mbps: float | None = None   # cap the bitrate (a platform ceiling); None = CRF alone
     grain: float = 0.0              # 0-3: light film grain, which upscaled 480p needs to not read plastic
@@ -166,6 +168,7 @@ class AssemblySpec:
             "cuts": [asdict(c) for c in self.cuts],
             "fps": self.fps, "width": self.width, "height": self.height,
             "crf": self.crf, "encoder": self.encoder, "smooth": self.smooth, "audio": self.audio,
+            "narration": self.narration, "duck": self.duck,
             "delivery": self.delivery, "max_mbps": self.max_mbps, "grain": self.grain,
         }
 
@@ -178,6 +181,7 @@ class AssemblySpec:
             fps=d.get("fps"), width=d.get("width"), height=d.get("height"),
             crf=int(d.get("crf", 18)), encoder=str(d.get("encoder", "libx264")),
             smooth=bool(d.get("smooth", False)), audio=bool(d.get("audio", False)),
+            narration=bool(d.get("narration", True)), duck=float(d.get("duck", 6.0) or 6.0),
             delivery=str(d.get("delivery") or DELIVERY_SOURCE),
             max_mbps=float(d["max_mbps"]) if d.get("max_mbps") else None,
             grain=float(d.get("grain", 0) or 0),
@@ -498,7 +502,8 @@ def resolve(job: Job, spec: dict | None) -> tuple[AssemblySpec, list[Path]]:
     delivery_by_id(job, delivery if delivery != DELIVERY_SOURCE else None)   # ValueError -> 400
     resolved = AssemblySpec(items=items, cuts=cuts, fps=d.get("fps"), width=d.get("width"),
                             height=d.get("height"), crf=crf, encoder=encoder, smooth=bool(d.get("smooth", False)),
-                            audio=bool(d.get("audio", False)), delivery=delivery, max_mbps=max_mbps, grain=grain)
+                            audio=bool(d.get("audio", False)), delivery=delivery, max_mbps=max_mbps, grain=grain,
+                            narration=bool(d.get("narration", True)), duck=float(d.get("duck", 6.0) or 6.0))
     # Speeds from target durations, then transition lengths vs the RETIMED clip lengths.
     infos = [media.probe(p) for p in paths]
     # Trim first: the kept length is what a target duration is a target *for*, and what the
@@ -563,6 +568,26 @@ def target_format(job: Job, spec: AssemblySpec, first: media.MediaInfo) -> tuple
     return fps, width, height
 
 
+def _narration_for(job: Job, spec: AssemblySpec, durations: list[float]) -> list[tuple[Path, float]]:
+    """Each scene's spoken line, paired with the second its clip starts at.
+
+    The offsets come from ``media.item_offsets`` — the same arithmetic the picture uses for its
+    transitions — so a voice cannot drift from the shot it belongs to. A scene placed twice is
+    spoken twice; that is what placing it twice means.
+    """
+    if not spec.narration:
+        return []
+    by_index = {s.index: s for s in job.scenes}
+    offsets = media.item_offsets(durations, spec.cuts, spec.speeds)
+    out: list[tuple[Path, float]] = []
+    for item, at in zip(spec.items, offsets):
+        scene = by_index.get(item.scene_index)
+        said = (scene.narration_path or "") if scene else ""
+        if said and Path(said).is_file():
+            out.append((Path(said), at))
+    return out
+
+
 def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict], None] | None = None) -> AssemblyRecord:
     """Render a new assembly version; never raises (failures are recorded in the returned record).
 
@@ -575,9 +600,18 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
     try:
         first = media.probe(paths[0])
         fps, width, height = target_format(job, spec, first)
-        durations = [media.probe(p).frame_duration for p in paths]
+        # The KEPT length of each clip: `resolve` has already snapped any trim onto the item, so
+        # a trimmed clip contributes only its span. Using the full length here would misreport
+        # the total and — worse — put the narration offsets in the wrong place.
+        durations = []
+        for p, it in zip(paths, spec.items):
+            if it.start is not None and it.end is not None:
+                durations.append(it.end - it.start)
+            else:
+                durations.append(media.probe(p).frame_duration)
         speeds = spec.speeds
         total = media.total_duration(durations, spec.cuts, speeds)
+        voices = _narration_for(job, spec, durations)
         if emit:
             emit({"job_id": job.id, "type": "step", "step": "assemble", "n_clips": len(paths),
                   "seconds": round(total, 2), "fps": fps, "width": width, "height": height,
@@ -585,7 +619,8 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
         media.assemble(paths, spec.cuts, dest, fps=fps, size=(width, height), crf=spec.crf,
                        encoder=spec.encoder, speeds=speeds, smooth=spec.smooth, audio=spec.audio,
                        max_mbps=spec.max_mbps, grain=spec.grain,
-                       trims=[(i.start, i.end) for i in spec.items])
+                       trims=[(i.start, i.end) for i in spec.items],
+                       narration=voices, duck=spec.duck)
         info = media.probe(dest)
         rec = AssemblyRecord(
             path=str(dest), created_at=created, duration=round(info.frame_duration, 3), n_clips=len(paths),

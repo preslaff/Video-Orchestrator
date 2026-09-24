@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query, Response
 
 from .. import media
+from ..clients import tts
 from .. import projects as projects_mod
 from .. import provenance
 from .. import versions as versions_mod
@@ -260,6 +261,29 @@ async def write_prompts(
     except RuntimeError as e:
         raise ApiError(409, "conflict", str(e))
     except ValueError as e:
+        raise ApiError(400, "bad_request", str(e))
+    return job_to_public(job, store, manager)
+
+
+@router.post("/{job_id}/scenes/{index}/speak", response_model=JobPublic, status_code=201)
+async def speak_scene(
+    job_id: str,
+    index: int,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Speak this scene's line in the cloned voice.
+
+    Synchronous and deliberate: it loads a ~5 GB model, so it frees ComfyUI first and releases
+    the card again afterwards. Saving new text does not trigger this — you ask for it.
+    """
+    try:
+        job = manager.speak_scene(job_id, index)
+    except KeyError as e:
+        raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    except (ValueError, tts.TTSError) as e:
         raise ApiError(400, "bad_request", str(e))
     return job_to_public(job, store, manager)
 

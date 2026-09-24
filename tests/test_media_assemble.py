@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from pathlib import Path
 
+import numpy as np
 import pytest
 
 from vorch import media
@@ -308,3 +310,90 @@ def test_an_impossible_trim_names_the_clip_it_belongs_to(tmp_path):
         media.assemble([a], [], tmp_path / "x.mp4", trims=[(1.0, 1.01)])
     with pytest.raises(ValueError, match="need 2 trim"):
         media.assemble([a, a], [Cut("none")], tmp_path / "y.mp4", trims=[(0.0, 1.0)])
+
+
+# --- narration ---------------------------------------------------------------------------
+
+
+def test_item_offsets_agree_with_the_picture():
+    """A voice is placed by time, so its arithmetic must be the picture's arithmetic — a
+    transition overlaps two clips, and every later clip starts earlier than the plain sum."""
+    d, c = [3.0, 3.0, 3.0], [Cut("fade", 0.5), Cut("none", 0.0)]
+    offs = media.item_offsets(d, c)
+    assert offs == [0.0, 2.5, 5.5]
+    assert offs[-1] + d[-1] == pytest.approx(media.total_duration(d, c)), "the last clip ends at the total"
+    # Retiming moves everything after it.
+    assert media.item_offsets([2.0, 4.0], [Cut("fade", 1.0)], [1.0, 2.0]) == [0.0, 1.0]
+    assert media.item_offsets([2.0], []) == [0.0]
+
+
+def test_a_voice_forces_a_track_onto_silent_clips():
+    """A Wan timeline has no audio at all; a voice over it is the entire point, so the gate that
+    turns audio off when no clip has a track must not apply to narration."""
+    graph, out = media.build_filtergraph([2.0], [], width=64, height=64, fps=8)
+    assert "[0:a]" not in graph                       # unchanged without narration
+    parts, label = media._narration_graph([(Path("/v.wav"), 1.25)], first_input=3, bed=None,
+                                          total=4.0, duck=6.0)
+    assert "[3:a]" in parts and "adelay=1250|1250" in parts
+    assert "apad=whole_dur=4.0000,atrim=duration=4.0000" in parts, "padded short, cut long"
+    assert label == "[n0]" and "sidechaincompress" not in parts, "nothing to duck"
+
+
+def test_the_clips_duck_under_the_voice():
+    parts, label = media._narration_graph(
+        [(Path("/a.wav"), 0.0), (Path("/b.wav"), 2.0)], first_input=2, bed="[aout]", total=5.0, duck=6.0)
+    assert "amix=inputs=2:normalize=0" in parts, "normalize=0 or the clips are quietly halved"
+    assert "[voice]asplit=2[vkey][vmix]" in parts, "the voice is heard AND presses the bed down"
+    assert "[aout][vkey]sidechaincompress=" in parts and "ratio=6" in parts
+    assert label == "[amixed]"
+
+
+@needs_ffmpeg
+def test_a_voice_lands_at_its_offset_and_the_bed_ducks_under_it(tmp_path):
+    bed = _clip_with_audio(tmp_path / "bed.mp4", 4, fps=16)
+    voice = tmp_path / "v.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+                    "-i", "sine=frequency=900:sample_rate=24000:duration=1", str(voice)], check=True)
+    out = media.assemble([bed], [], tmp_path / "n.mp4", audio=True, narration=[(voice, 2.0)])
+    assert media.probe(out).has_audio
+    assert media.probe(out).frame_duration == pytest.approx(4.0, abs=0.2), "the voice never lengthens the film"
+
+    def tone(path, hz):
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path),
+                              "-af", f"bandpass=f={hz}:width_type=h:w=40", "-ac", "1", "-ar", "8000",
+                              "-f", "f32le", "-"], capture_output=True).stdout
+        a = np.frombuffer(raw, np.float32)
+        return [float(np.sqrt((a[i * 4000:(i + 1) * 4000] ** 2).mean())) for i in range(len(a) // 4000)]
+
+    voiced = tone(out, 900)
+    assert max(voiced[4:6]) > 3 * (voiced[0] + 1e-6), "the voice is there, and only after 2 s"
+    bedline = tone(out, 440)
+    assert min(bedline[4:6]) < 0.7 * bedline[0], "the bed ducks while it speaks"
+    assert bedline[-1] > 0.8 * bedline[0], "and comes back up after"
+
+
+@needs_ffmpeg
+def test_joining_spoken_pieces_puts_a_breath_between_them(tmp_path):
+    src = tmp_path / "p.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+                    "-i", "sine=frequency=440:sample_rate=24000:duration=1", str(src)], check=True)
+    blob = src.read_bytes()
+    one = media.concat_audio([blob], tmp_path / "one.wav")
+    assert media.audio_seconds(one) == pytest.approx(1.0, abs=0.05)
+    two = media.concat_audio([blob, blob], tmp_path / "two.wav", gap=0.35)
+    assert media.audio_seconds(two) == pytest.approx(2.35, abs=0.1)
+    with pytest.raises(media.MediaError, match="nothing to join"):
+        media.concat_audio([], tmp_path / "none.wav")
+
+
+@needs_ffmpeg
+def test_probe_refuses_audio_but_audio_seconds_reads_it(tmp_path):
+    """`probe` requires a video stream, so a narration wav needs its own reader."""
+    wav = tmp_path / "a.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+                    "-i", "sine=frequency=440:sample_rate=24000:duration=1.5", str(wav)], check=True)
+    with pytest.raises(media.MediaError, match="no video stream"):
+        media.probe(wav)
+    assert media.audio_seconds(wav) == pytest.approx(1.5, abs=0.05)
+    with pytest.raises(FileNotFoundError):
+        media.audio_seconds(tmp_path / "gone.wav")

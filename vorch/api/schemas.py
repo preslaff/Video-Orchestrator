@@ -58,7 +58,10 @@ class SceneEdit(BaseModel):
     identity_asset_id: str | None = None           # face for this scene's swap; "" clears it (no swap)
     chosen_variant: int | None = None      # legacy: pick a keyframe version by list position
     chosen_variant_id: str | None = None   # pick which keyframe version is active (stable id)
-    chosen_clip_id: str | None = None      # pick which rendered clip is the deliverable
+    chosen_clip_id: str | None = None       # pick which rendered clip is the deliverable
+    # The Bulgarian line spoken over this scene. Plain Cyrillic: the TTS verbalises numbers and
+    # marks stress itself. Saving new text does not re-speak it — that is an explicit action.
+    narration: str | None = None
 
 
 class SceneInsert(BaseModel):
@@ -258,6 +261,10 @@ class ScenePublic(BaseModel):
     reference_suggestion: ReferenceSuggestionOut | None = None   # a project photo the storyboard thinks fits
     # Rectangles of the frame the animator must not redraw, restored from the keyframe.
     locked_regions: list[LockedRegion] = []
+    narration: str = ""                  # the line to speak over this scene
+    narration_url: str | None = None     # the voice, once spoken
+    narration_seconds: float = 0.0
+    narration_stale: bool = False        # the line has been reworded since it was spoken
 
 
 class SceneLocks(BaseModel):
@@ -395,6 +402,8 @@ class AssemblySpecIn(BaseModel):
     encoder: Literal["libx264", "h264_nvenc"] = "libx264"
     smooth: bool = False   # motion-interpolated slow motion for clips slower than 1x (much slower render)
     audio: bool = False    # keep the clips' audio (LTX clips have a track; Wan clips are silent -> ignored)
+    narration: bool = True            # lay each scene's spoken line over its clip, when it has one
+    duck: float = Field(6.0, ge=1, le=20, description="how hard the clips duck under the voice")
     delivery: str = "source"          # a target id from AssemblyStatus.deliveries; width/height/fps win
     max_mbps: float | None = None     # cap the bitrate for a platform ceiling
     grain: float = 0.0                # 0-3: light film grain (an upscale reads plastic without it)

@@ -44,6 +44,15 @@ load_env_file()  # before any VORCH_* / token lookup below
 # --- Service endpoints -------------------------------------------------------
 GEMMA_URL = os.environ.get("VORCH_GEMMA_URL", "http://localhost:8080")
 COMFY_URL = os.environ.get("VORCH_COMFY_URL", "http://localhost:8188")
+# OmniVoice-BG: Bulgarian narration, cloned from a reference clip. A third local service, spoken
+# to over HTTP exactly like the other two — but unlike them it is started only for the narration
+# phase, because it wants ~5.3 GB and the card is 16 (measured: it OOMs against a loaded ComfyUI).
+TTS_URL = os.environ.get("VORCH_TTS_URL", "http://localhost:8002")
+OMNIVOICE_DIR = Path(os.environ.get("VORCH_OMNIVOICE_DIR", "~/WORK/OmniVoice")).expanduser()
+# The cloned voice: a reference clip and its EXACT transcript. Viktoria/11s is the clean pair —
+# the 20 s and 30 s transcripts carry a typo ("нибо" for "ниво"), and ref_text must match.
+TTS_REF_AUDIO = os.environ.get("VORCH_TTS_REF_AUDIO", "Viktoria/11s.wav")
+TTS_REF_TEXT_FILE = os.environ.get("VORCH_TTS_REF_TEXT_FILE", "Viktoria/11s.txt")
 
 # --- Filesystem locations ----------------------------------------------------
 # ComfyUI reads LoadImage nodes from input/ and writes results to output/.
@@ -86,6 +95,13 @@ COMFY_COLD_START_GRACE = float(os.environ.get("VORCH_COMFY_COLD_START_GRACE", "2
 # Remote ComfyUI backends (e.g. Modal): name -> url/auth/timeouts. Missing file = local only.
 BACKENDS_FILE = Path(os.environ.get("VORCH_BACKENDS_FILE", "~/vorch/backends.yaml")).expanduser()
 ASSEMBLE_TIMEOUT = int(os.environ.get("VORCH_ASSEMBLE_TIMEOUT", "600"))  # ffmpeg clip assembly
+# Narration. One line is about a second to synthesise; the model takes ~90 s to load, which is
+# why the phase opens the server once for a whole job. Chunking mirrors OmniVoice's own
+# read_book.py: its accentor is trained on sentences under 250 characters.
+TTS_REQUEST_TIMEOUT = float(os.environ.get("VORCH_TTS_REQUEST_TIMEOUT", "180"))
+TTS_START_TIMEOUT = float(os.environ.get("VORCH_TTS_START_TIMEOUT", "300"))
+TTS_CHUNK_CHARS = int(os.environ.get("VORCH_TTS_CHUNK_CHARS", "220"))
+TTS_CHUNK_GAP = float(os.environ.get("VORCH_TTS_CHUNK_GAP", "0.35"))
 
 # Seeds. 0 is our "pick a random one" sentinel — NOT sent to ComfyUI verbatim
 # (the API has no randomize step, so seed 0 would be deterministic). resolve_seed

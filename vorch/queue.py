@@ -402,7 +402,7 @@ class JobManager:
             old_identity = (scene.identity, scene.identity_asset_id)
             for field in ("description", "keyframe_prompt", "animation_prompt",
                           "keyframe_negative", "animation_negative", "mode", "references",
-                          "edit_workflow", "edit_base"):
+                          "edit_workflow", "edit_base", "narration"):
                 if edit.get(field) is not None:
                     setattr(scene, field, edit[field])
             if edit.get("edit_base") is not None:
@@ -490,6 +490,14 @@ class JobManager:
         return self._after_structural_change(
             job, moved=_moved(before, job), removed=[was], action="deleted", scene_id=removed.id,
             reason=label + (" (files deleted)" if delete_files else ""))
+
+    def speak_scene(self, job_id: str, index: int) -> Job:
+        """Synthesise one scene's line now. Refused while a segment runs: the narration model
+        wants ~5 GB and would be fighting a render for the card."""
+        job = self._editable_job(job_id)
+        o = Orchestrator.from_job(self.store, job)
+        o.speak_scene(job, index)          # KeyError -> 404, ValueError -> 400
+        return job
 
     def set_locked_regions(self, job_id: str, index: int, regions: list[dict]) -> Job:
         """Mark the parts of a scene's frame the animator must not redraw — a brand label,

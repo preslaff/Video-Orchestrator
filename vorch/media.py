@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Sequence
@@ -374,6 +375,138 @@ def total_duration(durations: list[float], cuts: list[Cut], speeds: list[float] 
     return sum(retimed(durations, speeds)) - sum(c.duration for c in cuts if c.transition != "none")
 
 
+def _narration_graph(voices: "list[tuple[Path, float]]", *, first_input: int, bed: str | None,
+                     total: float, duck: float) -> tuple[str, str]:
+    """Lay voice lines over the timeline at their offsets, ducking the clips under them.
+
+    Each line is delayed to the second it belongs at, normalised like every other audio branch,
+    and mixed. ``normalize=0`` throughout: ``amix`` otherwise divides by the number of inputs,
+    which would quietly halve the clips the moment a voice was added.
+
+    With a bed, the voice drives a ``sidechaincompress`` on it — the clips duck while someone is
+    speaking and come back up between lines, which is how a voiceover is actually mixed. The
+    voice is split because it is both the thing being heard and the key that presses the bed down.
+    """
+    parts: list[str] = []
+    labels: list[str] = []
+    for k, (path, offset) in enumerate(voices):
+        idx = first_input + k
+        ms = max(0, int(round(offset * 1000)))
+        delay = f"adelay={ms}|{ms}," if ms else ""
+        parts.append(
+            f"[{idx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,"
+            f"{delay}apad=whole_dur={total:.4f},atrim=duration={total:.4f},asetpts=PTS-STARTPTS[n{k}]"
+        )
+        labels.append(f"[n{k}]")
+    if len(labels) == 1:
+        voice = labels[0]
+    else:
+        voice = "[voice]"
+        parts.append("".join(labels) + f"amix=inputs={len(labels)}:normalize=0:dropout_transition=0{voice}")
+    if bed is None:
+        return ";".join(parts), voice
+    parts.append(f"{voice}asplit=2[vkey][vmix]")
+    parts.append(
+        f"{bed}[vkey]sidechaincompress=threshold=0.03:ratio={max(1.0, duck):g}:"
+        f"attack=20:release=400:makeup=1[ducked]"
+    )
+    parts.append("[ducked][vmix]amix=inputs=2:normalize=0:dropout_transition=0[amixed]")
+    return ";".join(parts), "[amixed]"
+
+
+def concat_audio(pieces: "list[bytes]", dest: str | Path, *, gap: float = 0.35) -> Path:
+    """Join synthesised WAV chunks into one file, with a breath between them.
+
+    A long line is spoken in pieces because the model reads short sentences best; joining them
+    with a little silence is what makes the result sound like one read rather than a splice.
+    The gap matches OmniVoice's own long-form reader.
+    """
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not pieces:
+        raise MediaError("nothing to join")
+    with tempfile.TemporaryDirectory() as tmp:
+        files = []
+        for i, blob in enumerate(pieces):
+            part = Path(tmp) / f"{i:03d}.wav"
+            part.write_bytes(blob)
+            files.append(part)
+        if len(files) == 1:
+            shutil.copyfile(files[0], dest)
+            return dest
+        # One filtergraph: each piece, then silence, concatenated in order.
+        inputs: list[str] = []
+        labels: list[str] = []
+        for i, f in enumerate(files):
+            inputs += ["-i", str(f)]
+            labels.append(f"[{i}:a]")
+        parts = [f"anullsrc=r=24000:cl=mono,atrim=duration={gap:g}[gap]"]
+        chain = "".join(f"{lab}[gap]" if i else lab for i, lab in enumerate(labels))
+        parts.append(f"{chain}concat=n={len(labels) * 2 - 1}:v=0:a=1[out]")
+        cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *inputs,
+               "-filter_complex", ";".join(parts), "-map", "[out]", str(dest)]
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+            tail = getattr(e, "stderr", b"") or b""
+            raise MediaError(f"could not join narration: {tail.decode(errors='replace')[-500:] or e}") from None
+    return dest
+
+
+def audio_seconds(path: str | Path) -> float:
+    """How long an audio file is. ``probe`` refuses one — it requires a video stream."""
+    path = Path(path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"audio not found: {path}")
+    try:
+        out = subprocess.check_output(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=duration", "-show_entries", "format=duration",
+             "-of", "json", str(path)], stderr=subprocess.STDOUT, timeout=60)
+        data = json.loads(out.decode())
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
+        raise MediaError(f"ffprobe failed for {path}: {e}") from e
+    for value in ([s.get("duration") for s in data.get("streams", [])]
+                  + [(data.get("format") or {}).get("duration")]):
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            continue
+        if seconds > 0:
+            return seconds
+    raise MediaError(f"no audio stream in {path}")
+
+
+def item_offsets(durations: list[float], cuts: list[Cut],
+                 speeds: list[float] | None = None) -> list[float]:
+    """When each clip starts in the finished file, in seconds.
+
+    The same arithmetic ``build_filtergraph`` uses for its xfade offsets — a transition overlaps
+    the two clips, so every clip after one starts earlier than the plain sum of lengths. Shared
+    rather than repeated because anything laid over the timeline by time (narration) has to agree
+    with the picture to the frame, and two copies of this sum would eventually disagree.
+    """
+    lengths = retimed(durations, speeds)
+    groups: list[list[int]] = [[0]] if lengths else []
+    for i, c in enumerate(cuts):
+        if c.transition == "none":
+            groups.append([i + 1])
+        else:
+            groups[-1].append(i + 1)
+    offsets = [0.0] * len(lengths)
+    base = 0.0
+    for members in groups:
+        first = members[0]
+        offsets[first] = base
+        elapsed = lengths[first]
+        for idx in members[1:]:
+            at = elapsed - cuts[idx - 1].duration
+            offsets[idx] = base + at
+            elapsed = at + lengths[idx]
+        base += elapsed
+    return offsets
+
+
 def validate_cuts(durations: list[float], cuts: list[Cut], *, fps: float) -> None:
     """Raise ValueError (naming the cut) when a cut cannot be rendered as asked."""
     if not durations:
@@ -562,6 +695,8 @@ def assemble(
     max_mbps: float | None = None,
     grain: float = 0.0,
     trims: list[tuple[float | None, float | None]] | None = None,
+    narration: list[tuple[Path, float]] | None = None,
+    duck: float = 6.0,
 ) -> Path:
     """Join ``clips`` into one h264 mp4 with per-cut xfade transitions.
 
@@ -569,6 +704,10 @@ def assemble(
     of a clip, snapped to that clip's own frame grid; the kept length is then what every other
     calculation sees, so transitions and the total follow from it. Trim first, then retime:
     ``speeds`` apply to what the trim kept.
+
+    ``narration`` lays audio files over the finished timeline — each a ``(path, offset)`` in
+    output seconds, from :func:`item_offsets`. A voice forces an audio track even on silent
+    clips, and ducks the clips under it by ``duck`` (a compression ratio) while it speaks.
 
     ``speeds`` (one per clip, 0.25–4) retime clips; ``smooth`` renders slow-downs
     with motion interpolation (much slower). ``audio=True`` keeps the clips'
@@ -607,11 +746,21 @@ def assemble(
     validate_cuts(rt, cuts, fps=fps)
     graph, out = build_filtergraph(durations, cuts, width=width, height=height, fps=fps,
                                    speeds=speeds, smooth=smooth, grain=grain, spans=spans)
-    with_audio = bool(audio) and any(i.has_audio for i in infos)
-    if with_audio:
+    # Narration forces an audio path even when no clip carries a track — a Wan timeline is
+    # silent, and a voice over it is the whole point.
+    bed = bool(audio) and any(i.has_audio for i in infos)
+    voices = list(narration or [])
+    with_audio = bed or bool(voices)
+    aout = ""
+    if bed:
         agraph, aout = build_audio_filtergraph(durations, cuts, [i.has_audio for i in infos],
                                               speeds=speeds, spans=spans)
         graph = graph + ";" + agraph
+    if voices:
+        total = total_duration(durations, cuts, speeds)
+        vgraph, aout = _narration_graph(voices, first_input=len(paths), bed=aout if bed else None,
+                                        total=total, duck=duck)
+        graph = graph + ";" + vgraph
     if timeout is None:
         smooth_secs = sum(t for t, sp in zip(rt, speeds or []) if smooth and sp < 1.0)
         timeout = config.ASSEMBLE_TIMEOUT + 30 * smooth_secs
@@ -622,6 +771,8 @@ def assemble(
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
     for p in paths:
         cmd += ["-i", str(p)]
+    for voice, _offset in voices:      # after the clips, so no clip's input index moves
+        cmd += ["-i", str(voice)]
     cmd += ["-filter_complex", graph, "-map", out]
     cmd += ["-map", aout, "-c:a", "aac", "-b:a", "192k"] if with_audio else ["-an"]
     if encoder == "h264_nvenc":

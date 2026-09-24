@@ -949,3 +949,88 @@ def test_an_image_is_not_a_clip_and_a_clip_is_not_a_keyframe(wired, tmp_path, mo
         o.install_user_clip(job, job.scenes[0], still.id)
     with pytest.raises(ValueError, match="is a clip"):
         o._install_user_keyframe(job, job.scenes[0], video.id)
+
+
+# --- narration ----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _spoken(monkeypatch, tmp_path):
+    """Stand in for OmniVoice: count how often the server is opened, and what was said."""
+    import contextlib
+
+    from vorch import config, media
+    from vorch.clients import tts
+
+    monkeypatch.setattr(config, "COMFY_OUTPUT", tmp_path / "out")
+    opened, said = [], []
+
+    @contextlib.contextmanager
+    def serving(**kw):
+        opened.append(1)
+        yield {"status": "ok"}
+
+    monkeypatch.setattr(tts, "serving", serving)
+    monkeypatch.setattr(tts, "synth", lambda text, **kw: said.append(text) or b"RIFF")
+    monkeypatch.setattr(media, "concat_audio",
+                        lambda pieces, dest, **kw: Path(dest).write_bytes(b"RIFF") or Path(dest))
+    monkeypatch.setattr(media, "audio_seconds", lambda p: 2.5)
+    return opened, said
+
+
+def test_the_phase_opens_the_server_once_and_speaks_only_what_changed(wired, _spoken):
+    """Loading the model costs about ninety seconds and speaking a line costs one, so opening it
+    per scene would spend the whole job loading."""
+    opened, said = _spoken
+    store, _master, _ = wired
+    o = Orchestrator(store, n_scenes=2, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)                                    # no lines yet: the phase must not run at all
+    assert opened == []
+
+    job.scenes[0].narration = "Открий своя аромат."
+    job.scenes[1].narration = "Цветя, ванилия и амбра."
+    o.run(job)
+    assert opened == [1], "one server for the whole job"
+    assert said == ["Открий своя аромат.", "Цветя, ванилия и амбра."]
+    assert all(s.narration_path and s.narration_seconds == 2.5 for s in job.scenes)
+
+    o.run(job)                                    # nothing changed: nothing is spoken again
+    assert opened == [1]
+
+    job.scenes[1].narration = "Нов аромат от МАХ ПАРИ."
+    assert o._needs_narration(job), "a reworded line is stale"
+    o.run(job)
+    assert opened == [1, 1] and said[-1] == "Нов аромат от МАХ ПАРИ."
+
+
+def test_a_line_that_outruns_its_clip_is_recorded_not_refused(wired, _spoken, monkeypatch):
+    """Overflow is the chosen behaviour — a voiceover often runs over a cut — but it is said out
+    loud in the log rather than discovered in the finished film."""
+    from vorch import media
+
+    opened, _said = _spoken
+    store, _master, _ = wired
+    monkeypatch.setattr(media, "probe",
+                        lambda p: media.MediaInfo(64, 64, 16.0, 1.0, 16, "h264", False))
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)
+    job.scenes[0].narration = "Дълга реплика."
+    o.run(job)
+    spoken = [d for d in store.decisions(job.id) if d.action == "spoken"]
+    assert spoken and "runs into the next scene" in spoken[-1].reason
+    assert job.scenes[0].narration_path, "and it is still spoken"
+
+
+def test_speaking_one_scene_needs_a_line(wired, _spoken):
+    store, _master, _ = wired
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="semi")
+    o.run(job)
+    with pytest.raises(ValueError, match="no line to speak"):
+        o.speak_scene(job, 0)
+    with pytest.raises(KeyError):
+        o.speak_scene(job, 9)
+    job.scenes[0].narration = "Здравей."
+    assert o.speak_scene(job, 0).narration_said == "Здравей."

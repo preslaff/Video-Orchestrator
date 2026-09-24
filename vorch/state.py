@@ -177,6 +177,13 @@ class Scene:
     # be trusted with — a brand label, a monogram, an emblem. They are pasted back from the
     # keyframe onto every rendered frame; see ``media.lock_regions``.
     locked_regions: list[dict] = field(default_factory=list)
+    # Narration: the Bulgarian line, written by hand, and the voice made from it. `narration_said`
+    # is the text that actually produced the wav — when it differs from `narration`, the line has
+    # been reworded and the audio is stale.
+    narration: str = ""
+    narration_path: str | None = None
+    narration_said: str = ""
+    narration_seconds: float = 0.0
 
 
 @dataclass
@@ -390,6 +397,10 @@ def _scene_to_dict(s: Scene) -> dict:
         "regenerations": s.regenerations,
         "writing_prompts": s.writing_prompts,
         "locked_regions": [dict(r) for r in s.locked_regions],
+        "narration": s.narration,
+        "narration_path": s.narration_path,
+        "narration_said": s.narration_said,
+        "narration_seconds": s.narration_seconds,
         "reference_suggestion": (
             {"asset_id": s.reference_suggestion.asset_id, "why": s.reference_suggestion.why,
              "fit": s.reference_suggestion.fit} if s.reference_suggestion else None
@@ -432,6 +443,10 @@ def _scene_from_dict(d: dict) -> Scene:
         regenerations=int(d.get("regenerations", 0) or 0),
         writing_prompts=bool(d.get("writing_prompts", False)),
         locked_regions=[dict(r) for r in d.get("locked_regions", []) or []],
+        narration=d.get("narration", "") or "",
+        narration_path=d.get("narration_path"),
+        narration_said=d.get("narration_said", "") or "",
+        narration_seconds=float(d.get("narration_seconds", 0) or 0),
         reference_suggestion=_suggestion_from_dict(d.get("reference_suggestion")),
     )
 

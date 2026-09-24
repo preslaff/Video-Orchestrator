@@ -64,6 +64,8 @@ def scene_to_public(s: Scene, project_id: str | None = None) -> ScenePublic:
         identity_url=(f"/api/projects/{project_id}/assets/{s.identity_asset_id}/file"
                       if project_id and s.identity_asset_id else None),
         keyframe_url=media_url(s.keyframe_path),
+        narration_url=media_url(s.narration_path),
+        narration_stale=bool(s.narration.strip()) and s.narration.strip() != s.narration_said.strip(),
         video_url=media_url(s.video_path),
         swapped_url=media_url(s.swapped_path),
         keyframe_verdict=verdict_out(s.keyframe_verdict),

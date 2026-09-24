@@ -31,6 +31,7 @@ from . import cancel, config, formats, media, pipeline, profiles, provenance, st
 from . import projects as projects_mod
 from . import scene_assets, versions
 from .clients import gemma as gemma_client
+from .clients import tts
 from .genparams import DEFAULT, GenParams
 from .steps.edit import reference_slots
 from .steps.postprocess import run_chain
@@ -251,6 +252,10 @@ class Orchestrator:
             if self._needs_videos(job):
                 cancel.check()
                 self._phase_videos(job)
+
+        if self._needs_narration(job):
+            cancel.check()
+            self._phase_narration(job)
 
         job.status = JobStatus.DONE
         self.store.save_job(job)
@@ -1068,6 +1073,78 @@ class Orchestrator:
                 continue
             cancel.check()
             self._one_video(job, scene, face_cache=face_cache)
+
+    @staticmethod
+    def _narration_stale(scene: Scene) -> bool:
+        """This scene wants a voice it does not have — no wav yet, the file is gone, or the line
+        has been reworded since it was spoken."""
+        if not scene.narration.strip():
+            return False
+        if not scene.narration_path or not Path(scene.narration_path).is_file():
+            return True
+        return scene.narration.strip() != scene.narration_said.strip()
+
+    def _needs_narration(self, job: Job) -> bool:
+        return any(self._narration_stale(s) for s in job.scenes)
+
+    def _phase_narration(self, job: Job) -> None:
+        """Speak every scene whose line is missing or has changed.
+
+        One server for the whole job: the model takes about a minute and a half to load and a
+        second to speak, so opening it per scene would spend all its time loading. It is also
+        ~5.3 GB on a 16 GB card, so it cannot simply be left running beside ComfyUI — the client
+        frees ComfyUI first and stops the server afterwards (invariant #1, third model).
+        """
+        todo = [s for s in job.scenes if self._narration_stale(s)]
+        if not todo:
+            return
+        self._event(job, "phase", phase="narration", total=len(todo))
+        with tts.serving():
+            for scene in todo:
+                cancel.check()
+                self._event(job, "step", step="narrate", index=scene.index,
+                            detail=scene.narration.strip()[:80])
+                self._speak(job, scene)
+                self.store.save_job(job)      # persist per scene: a long job stays resumable
+
+    def _speak(self, job: Job, scene: Scene) -> None:
+        """Synthesise one scene's line and record how long it came out."""
+        line = scene.narration.strip()
+        pieces = tts.chunk(line)
+        dest = config.COMFY_OUTPUT / f"{output_prefix(job, scene.index, 'narration')}.wav"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        media.concat_audio([tts.synth(p) for p in pieces], dest, gap=config.TTS_CHUNK_GAP)
+
+        scene.narration_path = str(dest)
+        scene.narration_said = line
+        scene.narration_seconds = round(media.audio_seconds(dest), 3)
+        job.export = None
+        clip = None
+        try:
+            clip = media.probe(scene.video_path).frame_duration if scene.video_path else None
+        except (media.MediaError, FileNotFoundError, OSError):
+            pass
+        fit = f"{scene.narration_seconds:.2f}s" + (f" over a {clip:.2f}s clip" if clip else "")
+        self.store.log_decision(Decision(
+            job_id=job.id, scene_index=scene.index, phase="narration", attempt=1, action="spoken",
+            reason=f"{fit}" + (" — runs into the next scene" if clip and scene.narration_seconds > clip else ""),
+        ))
+        self._event(job, "narration", index=scene.index, path=str(dest),
+                    seconds=scene.narration_seconds)
+        log.info("job %s: scene %d narration %s", job.id, scene.index, fit)
+
+    def speak_scene(self, job: Job, index: int) -> Scene:
+        """Re-speak one scene's line now, without a full run — the narration twin of
+        ``animate_scene``."""
+        scene = next((s for s in job.scenes if s.index == index), None)
+        if scene is None:
+            raise KeyError(f"scene {index}")
+        if not scene.narration.strip():
+            raise ValueError(f"scene {index + 1} has no line to speak")
+        with tts.serving():
+            self._speak(job, scene)
+        self.store.save_job(job)
+        return scene
 
     def _one_video(self, job: Job, scene: Scene, *, face_cache: dict | None = None) -> None:
         """Swap, animate and post-process **one** scene, persisting at every step.
