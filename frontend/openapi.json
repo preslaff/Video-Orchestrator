@@ -703,6 +703,58 @@
         }
       }
     },
+    "/api/jobs/{job_id}/scenes/{index}/speak": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Speak Scene",
+        "description": "Speak this scene's line in the cloned voice.\n\nSynchronous and deliberate: it loads a ~5 GB model, so it frees ComfyUI first and releases\nthe card again afterwards. Saving new text does not trigger this — you ask for it.",
+        "operationId": "speak_scene_api_jobs__job_id__scenes__index__speak_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/scenes/{index}/locks": {
       "put": {
         "tags": [
@@ -2866,6 +2918,19 @@
             "title": "Audio",
             "default": false
           },
+          "narration": {
+            "type": "boolean",
+            "title": "Narration",
+            "default": true
+          },
+          "duck": {
+            "type": "number",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Duck",
+            "description": "how hard the clips duck under the voice",
+            "default": 6.0
+          },
           "delivery": {
             "type": "string",
             "title": "Delivery",
@@ -4916,6 +4981,17 @@
               }
             ],
             "title": "Chosen Clip Id"
+          },
+          "narration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Narration"
           }
         },
         "type": "object",
@@ -5305,6 +5381,32 @@
             "type": "array",
             "title": "Locked Regions",
             "default": []
+          },
+          "narration": {
+            "type": "string",
+            "title": "Narration",
+            "default": ""
+          },
+          "narration_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Narration Url"
+          },
+          "narration_seconds": {
+            "type": "number",
+            "title": "Narration Seconds",
+            "default": 0.0
+          },
+          "narration_stale": {
+            "type": "boolean",
+            "title": "Narration Stale",
+            "default": false
           }
         },
         "type": "object",

@@ -271,6 +271,26 @@ export function useSaveCut(id: string) {
   })
 }
 
+/** Speak this scene's line in the cloned voice. Synchronous and slow the first time — it loads a
+ *  ~5 GB model and frees ComfyUI to make room — so it is an explicit action, never automatic. */
+export function useSpeakScene(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ index }: { index: number }) => {
+      const { data, error } = await api.POST('/api/jobs/{job_id}/scenes/{index}/speak', {
+        params: { path: { job_id: id, index } },
+      })
+      if (error) throw error
+      return data
+    },
+    onSuccess: (job) => {
+      if (job) qc.setQueryData(keys.job(id), job)
+      void qc.invalidateQueries({ queryKey: keys.job(id) })
+      void qc.invalidateQueries({ queryKey: keys.decisions(id) })
+    },
+  })
+}
+
 /** Structural storyboard edits: insert a scene, drop one, put them in a new order, or ask
  *  Gemma to (re)write one scene's prompts. Each returns the whole job, so the cache is written
  *  through — the scene list must never lag behind a reorder the user just made. */

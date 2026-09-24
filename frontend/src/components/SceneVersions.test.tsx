@@ -21,7 +21,7 @@ const scene = (extra: Record<string, unknown> = {}) => ({
   swap_verdict: null, raw_video_path: null, post_paths: [], identity: '', identity_asset_id: null,
   identity_url: null, reference_asset_ids: [], keyframe_source: 'generated', keyframe_asset_id: null,
   variants: [variant('k1', '/kf1.png'), variant('k2', '/kf2.png', { active: true, batch: 1 })],
-  clips: [clip('c1'), clip('c2', { active: true, batch: 1 })], locked_regions: [],
+  clips: [clip('c1'), clip('c2', { active: true, batch: 1 })], locked_regions: [], narration: '', narration_url: null, narration_seconds: 0, narration_stale: false,
   ...extra,
 })
 const job = (over: Record<string, unknown> = {}) => ({

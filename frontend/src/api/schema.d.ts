@@ -188,6 +188,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/scenes/{index}/speak": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Speak Scene
+         * @description Speak this scene's line in the cloned voice.
+         *
+         *     Synchronous and deliberate: it loads a ~5 GB model, so it frees ComfyUI first and releases
+         *     the card again afterwards. Saving new text does not trigger this — you ask for it.
+         */
+        post: operations["speak_scene_api_jobs__job_id__scenes__index__speak_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/scenes/{index}/locks": {
         parameters: {
             query?: never;
@@ -924,6 +947,17 @@ export interface components {
              * @default false
              */
             audio: boolean;
+            /**
+             * Narration
+             * @default true
+             */
+            narration: boolean;
+            /**
+             * Duck
+             * @description how hard the clips duck under the voice
+             * @default 6
+             */
+            duck: number;
             /**
              * Delivery
              * @default source
@@ -1826,6 +1860,8 @@ export interface components {
             chosen_variant_id?: string | null;
             /** Chosen Clip Id */
             chosen_clip_id?: string | null;
+            /** Narration */
+            narration?: string | null;
         };
         /** SceneEdits */
         SceneEdits: {
@@ -2026,6 +2062,23 @@ export interface components {
              * @default []
              */
             locked_regions: components["schemas"]["LockedRegion"][];
+            /**
+             * Narration
+             * @default
+             */
+            narration: string;
+            /** Narration Url */
+            narration_url?: string | null;
+            /**
+             * Narration Seconds
+             * @default 0
+             */
+            narration_seconds: number;
+            /**
+             * Narration Stale
+             * @default false
+             */
+            narration_stale: boolean;
         };
         /**
          * SceneRegenerate
@@ -2726,6 +2779,38 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    speak_scene_api_jobs__job_id__scenes__index__speak_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

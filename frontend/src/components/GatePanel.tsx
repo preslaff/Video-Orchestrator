@@ -11,11 +11,11 @@ import { VersionStrip } from '@/components/VersionStrip'
 import { profileSizes } from '@/components/SceneGrid'
 import { isImageAsset, isVideoAsset } from '@/lib/assetFilter'
 import { estimateClip, fmtRange } from '@/lib/render'
-import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneLocks, useSceneStructure, useUpdateScenes } from '@/hooks/useJobs'
+import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneLocks, useSceneStructure, useSpeakScene, useUpdateScenes } from '@/hooks/useJobs'
 import { useUploadAsset, useWorkflows } from '@/hooks/useSetup'
 import { Button, ErrorBox } from '@/components/ui'
 
-type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; edit_workflow: string; edit_base: '' | 'keyframe'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null }
+type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; edit_workflow: string; edit_base: '' | 'keyframe'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null; narration: string }
 
 type PickerKind = 'refs' | 'identity' | 'image' | 'locks' | 'video'
 
@@ -141,6 +141,7 @@ function draftsFrom(job: JobPublic): Record<string, Draft> {
     out[s.id] = {
       description: s.description, keyframe_prompt: s.keyframe_prompt, keyframe_negative: s.keyframe_negative,
       animation_prompt: s.animation_prompt, animation_negative: s.animation_negative,
+      narration: s.narration ?? '',
       mode: s.mode as 't2i' | 'edit', edit_workflow: s.edit_workflow ?? '', edit_base: (s.edit_base ?? '') as '' | 'keyframe',
       references: s.references.join('\n'), reference_asset_ids: [...(s.reference_asset_ids ?? [])],
       identity_asset_id: s.identity_asset_id ?? null,
@@ -217,6 +218,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   const removeVersion = useDeleteVersion(job.id)
   const saveAsset = useSaveSceneAsset(job.id, job.project_id)
   const locks = useSceneLocks(job.id)
+  const speak = useSpeakScene(job.id)
   const structure = useSceneStructure(job.id)
   // The registered edit workflows, so the scene selector needs no hard-coded names.
   const editWorkflows = useWorkflows('edit').data?.workflows ?? []
@@ -229,7 +231,9 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   const { kf, clip } = profileSizes(job)
   // What each of the two render buttons will do, so the gate is never a silent blocker.
   const missingClips = job.scenes.filter((s) => !s.video_path).length
-  const video_ = (job.profile as { video?: { length?: number; workflow?: string } } | null)?.video
+  const video_ = (job.profile as { video?: { length?: number; workflow?: string; fps?: number } } | null)?.video
+  // What a clip runs to, so a line can be shown against it. The profile is the job's own.
+  const clipSecs = video_?.length && video_?.fps ? video_.length / video_.fps : null
   const clipCost = clip && video_?.length
     ? estimateClip({ width: clip[0], height: clip[1], length: video_.length, workflow: video_.workflow })
     : null
@@ -373,6 +377,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
         keyframe_prompt: d.keyframe_prompt,
         keyframe_negative: d.keyframe_negative,
         animation_prompt: video ? d.animation_prompt : null,
+        narration: video ? d.narration : null,
         animation_negative: video ? d.animation_negative : null,
         mode: s.keyframe_path ? null : d.mode,
         edit_workflow: d.edit_workflow,
@@ -636,6 +641,42 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                 )}
                 {video && (
                   <>
+                    <label className="block">
+                      <span className="text-xs text-neutral-500">
+                        narration (Bulgarian) — plain Cyrillic: the voice handles numbers and stress itself
+                      </span>
+                      <textarea value={d.narration} onChange={(e) => set(s.id, { narration: e.target.value })} rows={2}
+                        data-testid={`narration-${s.index}`}
+                        placeholder="Открий своя аромат."
+                        className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" />
+                    </label>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-600">
+                      <button type="button" disabled={busy || speak.isPending || !d.narration.trim()}
+                        data-testid={`speak-${s.index}`}
+                        title="save the line first; speaking loads a ~5 GB model and frees ComfyUI to make room"
+                        onClick={() => speak.mutate({ index: s.index })}
+                        className="rounded border border-neutral-300 bg-white px-2 py-0.5 disabled:opacity-50">
+                        {speak.isPending && speak.variables?.index === s.index ? 'speaking…' : '🔊 Speak'}
+                      </button>
+                      {s.narration_url && (
+                        <>
+                          <audio src={s.narration_url} controls preload="none" className="h-8" data-testid={`narration-audio-${s.index}`} />
+                          <span data-testid={`narration-fit-${s.index}`}>
+                            {s.narration_seconds.toFixed(2)}s
+                            {clipSecs != null && ` over a ${clipSecs.toFixed(2)}s clip`}
+                            {clipSecs != null && s.narration_seconds > clipSecs && ' — runs into the next scene'}
+                          </span>
+                        </>
+                      )}
+                      {s.narration_stale && (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-900" data-testid={`narration-stale-${s.index}`}>
+                          reworded since it was spoken
+                        </span>
+                      )}
+                      {speak.isError && speak.variables?.index === s.index && (
+                        <span className="text-red-700" data-testid={`narration-error-${s.index}`}>{errorMessage(speak.error)}</span>
+                      )}
+                    </div>
                     <label className="block"><span className="text-xs text-neutral-500">animation prompt{s.video_path ? ' (edits apply on re-animate)' : ''}</span>
                       <textarea value={d.animation_prompt} onChange={(e) => set(s.id, { animation_prompt: e.target.value })} rows={2} className="mt-0.5 block w-full rounded border border-neutral-300 px-2 py-1" /></label>
                     <label className="block"><span className="text-xs text-neutral-500">animation negative</span>

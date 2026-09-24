@@ -32,14 +32,14 @@ function clipSize(job: JobPublic): [number, number] | null {
   return v?.width && v.height ? [v.width, v.height] : null
 }
 
-type Draft = { rows: Row[]; cuts: CutDraft[]; fps: number | ''; smooth: boolean; audio: boolean }
+type Draft = { rows: Row[]; cuts: CutDraft[]; fps: number | ''; smooth: boolean; audio: boolean; narration: boolean }
 
 /** Initial editor state from the last assembly spec (if any) or all clips in order. */
 function seedDraft(status: AssemblyStatusT | undefined): Draft {
-  if (!status) return { rows: [], cuts: [], fps: '', smooth: false, audio: false }
+  if (!status) return { rows: [], cuts: [], fps: '', smooth: false, audio: false, narration: true }
   const clips = status.clips
   const known = new Set(clips.map((c) => c.scene_index))
-  const spec = status.record?.spec as { items?: { scene_index: number; source: 'final' | 'raw'; target_seconds?: number | null; clip_id?: string | null; start?: number | null; end?: number | null }[]; cuts?: CutDraft[]; fps?: number | null; smooth?: boolean; audio?: boolean } | undefined
+  const spec = status.record?.spec as { items?: { scene_index: number; source: 'final' | 'raw'; target_seconds?: number | null; clip_id?: string | null; start?: number | null; end?: number | null }[]; cuts?: CutDraft[]; fps?: number | null; smooth?: boolean; audio?: boolean; narration?: boolean } | undefined
   const num = (v: number | null | undefined) => (v != null ? String(v) : null)
   const rows: Row[] = []
   // Every saved item becomes its own row, repeats included — collapsing them by scene used to
@@ -54,7 +54,7 @@ function seedDraft(status: AssemblyStatusT | undefined): Draft {
   for (const c of clips) if (!placed.has(c.scene_index)) rows.push({ uid: seedUid(rows.length), scene_index: c.scene_index, selected: !spec, source: 'final', target: null, clip_id: null, start: null, end: null })
   const n = rows.filter((r) => r.selected).length
   const cuts = defaultCuts(n).map((d, i) => spec?.cuts?.[i] ?? d)
-  return { rows, cuts, fps: spec?.fps ?? '', smooth: !!spec?.smooth, audio: !!spec?.audio }
+  return { rows, cuts, fps: spec?.fps ?? '', smooth: !!spec?.smooth, audio: !!spec?.audio, narration: spec?.narration !== false }
 }
 
 export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; events: JobEvent[]; onStarted?: () => void }) {
@@ -70,6 +70,7 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
   const fps = seeded.fps
   const smooth = seeded.smooth
   const audio = seeded.audio
+  const narration = seeded.narration
   const update = (patch: Partial<Draft>) => setDraft({ ...seeded, ...patch })
   const [encoder, setEncoder] = useState<'libx264' | 'h264_nvenc'>('libx264')
   // What the assembly is mastered as. The clips are rendered small (a 16 GB card animates at
@@ -164,6 +165,8 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
       encoder,
       smooth,
       audio,
+      narration,
+      duck: 6,
       delivery: target?.id ?? 'source',
       grain,
       max_mbps: null,
@@ -385,6 +388,12 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
         <label className="flex items-center gap-1 text-neutral-600" title="keep the clips' own audio (LTX clips carry a track; Wan clips are silent, so this changes nothing for them)">
           <input type="checkbox" aria-label="keep audio" checked={audio} onChange={(e) => update({ audio: e.target.checked })} />
           keep audio
+        </label>
+        <label className="flex items-center gap-1 text-neutral-600"
+          title="lay each scene's spoken line over its clip, ducking the clip audio while it speaks">
+          <input type="checkbox" aria-label="narration" checked={narration}
+            onChange={(e) => update({ narration: e.target.checked })} />
+          narration
         </label>
         <label className="flex items-center gap-1 text-neutral-600">encoder
           <select value={encoder} onChange={(e) => setEncoder(e.target.value as 'libx264' | 'h264_nvenc')} className="rounded border border-neutral-300 bg-white px-2 py-1">

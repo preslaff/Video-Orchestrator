@@ -10,7 +10,7 @@ const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) 
   keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', edit_workflow: '', edit_base: '', edit_base_path: '', references: [],
   keyframe_path: null, keyframe_url: null, keyframe_verdict: null, video_path: null, video_url: null, video_verdict: null,
   swapped_path: null, swapped_url: null, swap_verdict: null, variants: [], raw_video_path: null, post_paths: [],
-  identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], clips: [], locked_regions: [], ...extra,
+  identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], clips: [], locked_regions: [], narration: '', narration_url: null, narration_seconds: 0, narration_stale: false, ...extra,
 })
 const job = {
   id: 'j1', idea: 'ages', style: '', master_face: '/m.png', autonomy: 'semi', n_scenes: 2, seed: 0, max_attempts: 2,
@@ -587,5 +587,50 @@ describe('GatePanel with clips in the project', () => {
     }
     expect(only(withClip)).toBe(true)
     expect(only(assets)).toBe(false)     // images only: nothing to offer
+  })
+})
+
+describe('GatePanel narration', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const spoken = {
+    ...job, face_swap: false, status: 'done', pending_gate: null,
+    profile: { video: { width: 832, height: 480, fps: 16, length: 49 } },
+    scenes: [scene(0, {
+      video_path: '/v0.mp4', video_url: '/media/v0.mp4',
+      narration: 'Открий своя аромат.', narration_url: '/media/n0.wav',
+      narration_seconds: 4.2, narration_stale: false,
+    })],
+  } as unknown as JobPublic
+
+  it('shows the line against the clip it plays over, and warns when it runs long', () => {
+    render(<QueryClientProvider client={new QueryClient()}><GatePanel job={spoken} assets={assets} /></QueryClientProvider>)
+    // 49 frames at 16 fps = 3.06 s, so a 4.2 s line overflows.
+    expect(screen.getByTestId('narration-fit-0')).toHaveTextContent('4.20s over a 3.06s clip')
+    expect(screen.getByTestId('narration-fit-0')).toHaveTextContent('runs into the next scene')
+    expect(screen.getByTestId('narration-audio-0')).toHaveAttribute('src', '/media/n0.wav')
+    expect(screen.queryByTestId('narration-stale-0')).toBeNull()
+  })
+
+  it('marks a reworded line and speaks on request', async () => {
+    const posts: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      posts.push(new URL(raw, 'http://localhost').pathname)
+      return new Response(JSON.stringify(spoken), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const stale = { ...spoken, scenes: [{ ...spoken.scenes[0], narration_stale: true }] } as unknown as JobPublic
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <GatePanel job={stale} assets={assets} /></QueryClientProvider>)
+    expect(screen.getByTestId('narration-stale-0')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByTestId('speak-0'))
+    await waitFor(() => expect(posts.some((u) => u.endsWith('/scenes/0/speak'))).toBe(true))
+  })
+
+  it('will not speak an empty line', () => {
+    const silent = { ...spoken, scenes: [{ ...spoken.scenes[0], narration: '' }] } as unknown as JobPublic
+    render(<QueryClientProvider client={new QueryClient()}><GatePanel job={silent} assets={assets} /></QueryClientProvider>)
+    expect(screen.getByTestId('speak-0')).toBeDisabled()
   })
 })
