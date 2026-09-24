@@ -755,6 +755,68 @@
         }
       }
     },
+    "/api/jobs/{job_id}/scenes/{index}/narration": {
+      "delete": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Remove Narration",
+        "description": "Throw away this scene's spoken take, so its clip is heard as it was recorded.\n\nAssembly uses whichever take exists, not the text, so emptying the words is not enough to\nsilence a voice — this is. ``keep_text`` leaves the line in place to be re-spoken; pass\n``keep_text=false`` to remove the line as well.",
+        "operationId": "remove_narration_api_jobs__job_id__scenes__index__narration_delete",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          },
+          {
+            "name": "keep_text",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Keep Text"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/scenes/{index}/locks": {
       "put": {
         "tags": [
@@ -2673,6 +2735,12 @@
           "has_raw": {
             "type": "boolean",
             "title": "Has Raw",
+            "default": false
+          },
+          "has_audio": {
+            "type": "boolean",
+            "title": "Has Audio",
+            "description": "the clip carries an audio track, so 'keep audio' has something to keep — without it, narration replaces the clip's own sound instead of sitting over it",
             "default": false
           },
           "takes": {

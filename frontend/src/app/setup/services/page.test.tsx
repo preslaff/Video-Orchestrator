@@ -58,13 +58,29 @@ describe('Services panel', () => {
     expect(screen.getByText(/vorch will not touch it/)).toBeInTheDocument()
   })
 
-  it('makes the orphan the loudest thing on the page', async () => {
-    stub()
+  it('makes a leaked phase service the loudest thing on the page', async () => {
+    stub({
+      services: report.services.map((s) =>
+        s.name === 'tts' ? { ...s, lifetime: 'phase' as const, detail: 'pid 251592; LEAKED — a phase-scoped service whose vorch is gone' } : s),
+      problems: ['tts: LEAKED — a phase-scoped service whose vorch is gone'],
+    })
     mount()
     // Named twice on purpose: once in the problems banner, once on its own row.
-    await waitFor(() => expect(screen.getAllByText(/ORPHAN/)).toHaveLength(2))
-    expect(screen.getByText(/keep holding the card until it is stopped/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getAllByText(/LEAKED/)).toHaveLength(2))
+    expect(screen.getByText(/should have been stopped when its phase ended/)).toBeInTheDocument()
     expect(screen.getAllByText('fail')).not.toHaveLength(0)
+  })
+
+  it('treats a warm service left unattended as a warning, not a leak', async () => {
+    // It is still ours and still useful; nothing is left to reap it, which is worth saying once.
+    stub({
+      services: report.services.map((s) => (s.name === 'tts' ? { ...s, status: 'warn' as const } : s)),
+      problems: [],
+    })
+    mount()
+    await waitFor(() => expect(screen.getByText(/nothing is watching it/)).toBeInTheDocument())
+    expect(screen.getByText(/stopping it frees the card/)).toBeInTheDocument()
+    expect(screen.queryByText(/should have been stopped/)).not.toBeInTheDocument()
   })
 
   it('does not present an on-demand service that is down as a fault', async () => {

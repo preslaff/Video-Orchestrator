@@ -289,6 +289,29 @@ async def speak_scene(
     return job_to_public(job, store, manager)
 
 
+@router.delete("/{job_id}/scenes/{index}/narration", response_model=JobPublic)
+async def remove_narration(
+    job_id: str,
+    index: int,
+    keep_text: bool = True,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Throw away this scene's spoken take, so its clip is heard as it was recorded.
+
+    Assembly uses whichever take exists, not the text, so emptying the words is not enough to
+    silence a voice — this is. ``keep_text`` leaves the line in place to be re-spoken; pass
+    ``keep_text=false`` to remove the line as well.
+    """
+    try:
+        job = manager.clear_narration(job_id, index, keep_text=keep_text)
+    except KeyError as e:
+        raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    return job_to_public(job, store, manager)
+
+
 @router.put("/{job_id}/scenes/{index}/locks", response_model=JobPublic)
 async def set_scene_locks(
     job_id: str,

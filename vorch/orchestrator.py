@@ -1147,6 +1147,43 @@ class Orchestrator:
         self.store.save_job(job)
         return scene
 
+    def clear_narration(self, job: Job, index: int, *, keep_text: bool = True) -> Scene:
+        """Throw away a scene's spoken take, so the clip's own audio is heard again.
+
+        Necessary because assembly keys off ``narration_path`` alone, deliberately: a line you have
+        edited but not re-spoken must still be heard as the take that exists. The consequence was
+        that emptying the text left the voice in the mix with no way to get rid of it — and for an
+        imported clip that carries its own audio, no way back to the original.
+
+        ``keep_text`` keeps the words so the line can be re-spoken (it will read as not-yet-spoken);
+        ``keep_text=False`` removes the narration entirely. The wav is deleted: an assembly rendered
+        from it has the audio baked in already, and the path is reused on the next take.
+        """
+        scene = next((s for s in job.scenes if s.index == index), None)
+        if scene is None:
+            raise KeyError(f"scene {index}")
+        had = scene.narration_path
+        if had:
+            try:
+                Path(had).unlink(missing_ok=True)
+            except OSError as e:               # a read-only output dir must not block the edit
+                log.warning("job %s: could not delete %s (%s)", job.id, had, e)
+        scene.narration_path = None
+        scene.narration_said = ""
+        scene.narration_seconds = 0.0
+        if not keep_text:
+            scene.narration = ""
+        if had or not keep_text:
+            job.export = None                  # the deliverable's audio just changed
+            self.store.log_decision(Decision(
+                job_id=job.id, scene_index=index, phase="narration", attempt=1, action="removed",
+                reason=("the spoken take was removed; the clip's own audio is heard again"
+                        if keep_text else "the line and its spoken take were removed"),
+            ))
+            self._event(job, "narration", index=index, path=None, seconds=0.0)
+        self.store.save_job(job)
+        return scene
+
     def _one_video(self, job: Job, scene: Scene, *, face_cache: dict | None = None) -> None:
         """Swap, animate and post-process **one** scene, persisting at every step.
 

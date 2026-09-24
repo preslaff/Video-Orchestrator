@@ -441,6 +441,10 @@ class AssemblyClipOut(BaseModel):
     width: int | None = None
     height: int | None = None
     has_raw: bool = False
+    has_audio: bool = Field(
+        False, description="the clip carries an audio track, so 'keep audio' has something to keep "
+                           "— without it, narration replaces the clip's own sound instead of "
+                           "sitting over it")
     takes: list[AssemblyTakeOut] = []
     error: str | None = None
 

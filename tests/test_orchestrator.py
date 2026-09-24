@@ -1034,3 +1034,48 @@ def test_speaking_one_scene_needs_a_line(wired, _spoken):
         o.speak_scene(job, 9)
     job.scenes[0].narration = "Здравей."
     assert o.speak_scene(job, 0).narration_said == "Здравей."
+
+
+def test_removing_a_take_gives_the_clip_its_own_audio_back(wired, _spoken):
+    """The reported problem: a clip with integrated audio, narrated, and no way back.
+
+    Assembly uses whichever take exists rather than the text — deliberately, so an edited but
+    unspoken line is still heard as the take on disk — which meant emptying the words left the voice
+    playing with nothing that could remove it.
+    """
+    store, _master, _ = wired
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="semi")
+    o.run(job)
+    job.scenes[0].narration = "Здравей."
+    o.speak_scene(job, 0)
+    wav = Path(job.scenes[0].narration_path)
+    assert wav.is_file()
+
+    scene = o.clear_narration(job, 0)
+    assert scene.narration_path is None and scene.narration_said == ""
+    assert scene.narration_seconds == 0.0
+    assert not wav.exists(), "the file goes too; an assembly made from it has the audio baked in"
+    assert scene.narration == "Здравей.", "keep_text leaves the line to be re-spoken"
+    # And it reads as not-yet-spoken, so Speak will make a fresh take.
+    assert Orchestrator._narration_stale(scene) is True
+    o.speak_scene(job, 0)
+    assert Path(job.scenes[0].narration_path).is_file()
+
+    # keep_text=False removes the line as well.
+    o.clear_narration(job, 0, keep_text=False)
+    assert job.scenes[0].narration == "" and job.scenes[0].narration_path is None
+    assert Orchestrator._narration_stale(job.scenes[0]) is False, "no line, nothing to re-speak"
+
+    actions = [d.action for d in store.decisions(job.id) if d.phase == "narration"]
+    assert actions.count("removed") == 2, "removals are logged like every other decision"
+
+
+def test_removing_a_take_that_never_existed_is_not_an_error(wired, _spoken):
+    store, _master, _ = wired
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="semi")
+    o.run(job)
+    assert o.clear_narration(job, 0).narration_path is None
+    with pytest.raises(KeyError):
+        o.clear_narration(job, 9)

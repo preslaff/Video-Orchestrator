@@ -612,6 +612,33 @@ describe('GatePanel narration', () => {
     expect(screen.queryByTestId('narration-stale-0')).toBeNull()
   })
 
+  it('removes a take, so the clip is heard as it was recorded', async () => {
+    // Assembly plays whichever take exists rather than the text, so this is the only way back to a
+    // clip's own audio. The words stay, so the line can be spoken again.
+    const calls: { method: string; path: string; search: string }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const u = new URL(raw, 'http://localhost')
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+      calls.push({ method, path: u.pathname, search: u.search })
+      return new Response(JSON.stringify(spoken), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <GatePanel job={spoken} assets={assets} /></QueryClientProvider>)
+
+    await userEvent.click(screen.getByTestId('narration-remove-0'))
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE')).toBe(true))
+    const del = calls.find((c) => c.method === 'DELETE')!
+    expect(del.path).toBe('/api/jobs/j1/scenes/0/narration')
+    expect(del.search).toContain('keep_text=true')
+  })
+
+  it('offers nothing to remove when no take exists', () => {
+    const unspoken = { ...spoken, scenes: [{ ...spoken.scenes[0], narration_url: null }] } as unknown as JobPublic
+    render(<QueryClientProvider client={new QueryClient()}><GatePanel job={unspoken} assets={assets} /></QueryClientProvider>)
+    expect(screen.queryByTestId('narration-remove-0')).toBeNull()
+  })
+
   it('marks a reworded line and speaks on request', async () => {
     const posts: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

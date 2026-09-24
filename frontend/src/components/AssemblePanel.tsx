@@ -117,6 +117,10 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
     clampCut(cuts[i] ?? defaultCuts(2)[0], durations[i], durations[i + 1], targetFps))
   const total = totalDuration(durations, cutList)
   const anySlow = targets.some((t, i) => t != null && speedFor(sources[i], t) < 1)
+  // Whether there is any audio to keep decides whether 'keep audio' matters at all: with it
+  // off, narration does not sit over the clip's own sound, it replaces it.
+  const withAudio = clips.filter((c) => c.has_audio).length
+  const anyClipAudio = withAudio > 0
   const groups = groupTransitions(status.data?.transitions ?? ['none', 'fade'])
   const active = !!status.data?.active
   const busy = active || run.isPending || job.status === 'running'
@@ -385,9 +389,14 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
           <input type="checkbox" aria-label="smooth slow motion" checked={smooth} onChange={(e) => update({ smooth: e.target.checked })} />
           smooth slow motion{anySlow && !smooth ? <span className="text-xs text-amber-700">(off: frames are repeated)</span> : <span className="text-xs text-neutral-400">(slower render)</span>}
         </label>
-        <label className="flex items-center gap-1 text-neutral-600" title="keep the clips' own audio (LTX clips carry a track; Wan clips are silent, so this changes nothing for them)">
+        <label className="flex items-center gap-1 text-neutral-600" title="keep the clips' own audio. Wan clips are silent, so this changes nothing for them; an imported clip brings its own sound, and turning this off means the narration replaces it rather than sitting over it">
           <input type="checkbox" aria-label="keep audio" checked={audio} onChange={(e) => update({ audio: e.target.checked })} />
           keep audio
+          {anyClipAudio
+            ? (audio
+                ? <span className="text-xs text-neutral-400">({withAudio} of {clips.length} clips have a track)</span>
+                : <span className="text-xs text-amber-700">(off: their own audio is dropped{narration ? ', so only the voice is heard' : ''})</span>)
+            : <span className="text-xs text-neutral-400">(no clip has a track)</span>}
         </label>
         <label className="flex items-center gap-1 text-neutral-600"
           title="lay each scene's spoken line over its clip, ducking the clip audio while it speaks">

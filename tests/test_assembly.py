@@ -473,3 +473,50 @@ def test_a_saved_cut_can_be_cut_again_and_refuses_the_impossible(tmp_path, _real
         assembly.save_cut(job, 0, clip_id="ghost", start=0.0, end=1.0)
     with pytest.raises(KeyError):
         assembly.save_cut(job, 7, start=0.0, end=1.0)
+
+
+# --- narration must not silently replace a clip's own audio -----------------------------
+
+
+def test_audio_defaults_off_for_a_silent_timeline(tmp_path):
+    """Every Wan clip is silent, so keeping audio would only add an empty track."""
+    spec = assembly.default_spec(_job(tmp_path))
+    assert spec.audio is False
+    assert spec.narration is True
+    assert all(c["has_audio"] is False for c in assembly.status(_job(tmp_path))["clips"])
+
+
+def test_audio_defaults_on_when_a_clip_carries_a_track(tmp_path, monkeypatch):
+    """The reported bug: an imported clip brings its own sound, narration was on by default, and
+    `audio` was off — so the voice replaced the original instead of sitting over it."""
+    monkeypatch.setattr(media, "probe",
+                        lambda p: MediaInfo(832, 480, 16.0, 3.0625, 49, "h264", True))
+    job = _job(tmp_path)
+    assert assembly.any_clip_has_audio(job) is True
+    assert assembly.default_spec(job).audio is True
+    assert all(c["has_audio"] is True for c in assembly.status(job)["clips"])
+
+
+def test_an_unreadable_clip_counts_as_silent(tmp_path, monkeypatch):
+    """A guess must not switch audio on by accident."""
+    def boom(p):
+        raise media.MediaError("no such file")
+
+    monkeypatch.setattr(media, "probe", boom)
+    assert assembly.any_clip_has_audio(_job(tmp_path)) is False
+
+
+def test_narration_is_chosen_by_the_take_that_exists_not_the_text(tmp_path):
+    """Deliberate — an edited but unspoken line must still be heard as the take on disk. It is also
+    why removing a take needs its own action: emptying the words cannot silence it."""
+    job = _job(tmp_path, n=2)
+    wav = tmp_path / "s0.wav"
+    wav.write_bytes(b"RIFF")
+    job.scenes[0].narration = ""                  # the words are gone
+    job.scenes[0].narration_path = str(wav)       # the take is not
+    spec = assembly.default_spec(job)
+    voices = assembly._narration_for(job, spec, [3.0625, 3.0625])
+    assert [p for p, _ in voices] == [wav]
+    # Clearing the path is what removes it from the mix.
+    job.scenes[0].narration_path = None
+    assert assembly._narration_for(job, spec, [3.0625, 3.0625]) == []

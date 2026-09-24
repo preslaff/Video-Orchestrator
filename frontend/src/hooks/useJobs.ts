@@ -291,6 +291,30 @@ export function useSpeakScene(id: string) {
   })
 }
 
+/** Throw away a scene's spoken take, so the clip is heard as it was recorded.
+ *
+ *  Needed because assembly uses whichever take exists rather than the text, so clearing the words
+ *  is not enough to silence a voice — and on an imported clip that carries its own audio there was
+ *  otherwise no way back to the original. `keepText` leaves the line to be re-spoken. */
+export function useRemoveNarration(id: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ index, keepText = true }: { index: number; keepText?: boolean }) => {
+      const { data, error } = await api.DELETE('/api/jobs/{job_id}/scenes/{index}/narration', {
+        params: { path: { job_id: id, index }, query: { keep_text: keepText } },
+      })
+      if (error) throw error
+      return data
+    },
+    onSuccess: (job) => {
+      if (job) qc.setQueryData(keys.job(id), job)
+      void qc.invalidateQueries({ queryKey: keys.job(id) })
+      void qc.invalidateQueries({ queryKey: keys.decisions(id) })
+      void qc.invalidateQueries({ queryKey: keys.assembly(id) })
+    },
+  })
+}
+
 /** Structural storyboard edits: insert a scene, drop one, put them in a new order, or ask
  *  Gemma to (re)write one scene's prompts. Each returns the whole job, so the cache is written
  *  through — the scene list must never lag behind a reorder the user just made. */

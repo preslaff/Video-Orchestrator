@@ -471,7 +471,23 @@ The **Assemble** panel joins selected clips of a job into one video:
 - set a **target duration per clip** to change its speed (0.25×–4×); slow motion repeats
   frames or, with **smooth slow motion**, uses motion-compensated interpolation (much slower to
   render);
-- pick a **delivery target** (below), the fps, grain, or the NVENC encoder.
+- pick a **delivery target** (below), the fps, grain, or the NVENC encoder;
+- choose what is heard: **keep audio** (the clips' own tracks) and **narration** (each scene's
+  spoken line). Both together is the normal mix — the voice plays over the clip and the clip
+  ducks under it while it speaks.
+
+**Audio, and how narration sits over it.** `keep audio` defaults to on when any clip in the job
+actually carries a track, and off for an all-Wan timeline, where every clip is silent and keeping
+audio would only add an empty one. That default matters: with `keep audio` **off** and narration
+on, there is no clip track to duck, so the voice is all you hear — which on an imported clip reads
+as narration having *replaced* the original sound. The panel says which it is, and how many clips
+have a track.
+
+A scene's spoken line is picked by **the take on disk, not the text** — an edited but unspoken
+line is still heard as the take that exists. So emptying the words does not silence a voice:
+**Remove voice** (beside the player in the gate panel) throws the take away and gives the clip its
+own audio back, keeping the line so it can be spoken again. Clearing the text does the same.
+`DELETE /api/jobs/{id}/scenes/{i}/narration?keep_text=false` removes the line as well.
 
 ffmpeg renders once (h264) to `assembly_v<N>.mp4` next to the clips,
 with a provenance sidecar. **Every assembly is kept as a version**: play any, *Use for export*

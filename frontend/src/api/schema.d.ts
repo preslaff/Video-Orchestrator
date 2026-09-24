@@ -212,6 +212,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/scenes/{index}/narration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Narration
+         * @description Throw away this scene's spoken take, so its clip is heard as it was recorded.
+         *
+         *     Assembly uses whichever take exists, not the text, so emptying the words is not enough to
+         *     silence a voice — this is. ``keep_text`` leaves the line in place to be re-spoken; pass
+         *     ``keep_text=false`` to remove the line as well.
+         */
+        delete: operations["remove_narration_api_jobs__job_id__scenes__index__narration_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/scenes/{index}/locks": {
         parameters: {
             query?: never;
@@ -825,6 +849,12 @@ export interface components {
              * @default false
              */
             has_raw: boolean;
+            /**
+             * Has Audio
+             * @description the clip carries an audio track, so 'keep audio' has something to keep — without it, narration replaces the clip's own sound instead of sitting over it
+             * @default false
+             */
+            has_audio: boolean;
             /**
              * Takes
              * @default []
@@ -2852,6 +2882,40 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_narration_api_jobs__job_id__scenes__index__narration_delete: {
+        parameters: {
+            query?: {
+                keep_text?: boolean;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+                index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -239,11 +239,31 @@ def clips_of(job: Job) -> list[Scene]:
     return [s for s in sorted(job.scenes, key=lambda x: x.index) if s.video_path]
 
 
+def any_clip_has_audio(job: Job) -> bool:
+    """Does any clip in this job carry an audio track?
+
+    A Wan clip is silent, so keeping audio used to be pointless and the default was off. An
+    imported clip brings its own sound, and with narration on by default the result was that the
+    voice *replaced* it — the mix ducks the clip under the voice, but only when there is a clip
+    track to duck. Unreadable clips count as silent: a guess must not turn audio on by accident.
+    """
+    for s in clips_of(job):
+        try:
+            if media.probe(s.video_path).has_audio:
+                return True
+        except (media.MediaError, FileNotFoundError, OSError):
+            continue
+    return False
+
+
 def default_spec(job: Job) -> AssemblySpec:
     scenes = clips_of(job)
     return AssemblySpec(
         items=[AssemblyItem(s.index) for s in scenes],
         cuts=[Cut(DEFAULT_TRANSITION, DEFAULT_CUT_SECONDS) for _ in scenes[1:]],
+        # On when there is something to keep, so an imported clip's own sound survives narration;
+        # off for an all-Wan timeline, where it would only add a silent track.
+        audio=any_clip_has_audio(job),
     )
 
 
@@ -541,10 +561,12 @@ def clip_infos(job: Job) -> list[dict]:
     for s in clips_of(job):
         row: dict[str, Any] = {"scene_index": s.index, "source": "final", "path": s.video_path,
                                "has_raw": bool(s.raw_video_path and s.raw_video_path != s.video_path),
-                               "duration": None, "fps": None, "width": None, "height": None}
+                               "duration": None, "fps": None, "width": None, "height": None,
+                               "has_audio": False}
         try:
             info = media.probe(s.video_path)
-            row.update(duration=round(info.frame_duration, 3), fps=info.fps, width=info.width, height=info.height)
+            row.update(duration=round(info.frame_duration, 3), fps=info.fps, width=info.width,
+                       height=info.height, has_audio=info.has_audio)
         except (media.MediaError, FileNotFoundError) as e:
             row["error"] = str(e)
         # Every take this scene has rendered, so the timeline can place an older one beside the

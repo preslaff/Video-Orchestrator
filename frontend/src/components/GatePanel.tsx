@@ -11,7 +11,7 @@ import { VersionStrip } from '@/components/VersionStrip'
 import { profileSizes } from '@/components/SceneGrid'
 import { isImageAsset, isVideoAsset } from '@/lib/assetFilter'
 import { estimateClip, fmtRange } from '@/lib/render'
-import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneLocks, useSceneStructure, useSpeakScene, useUpdateScenes } from '@/hooks/useJobs'
+import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneLocks, useSceneStructure, useRemoveNarration, useSpeakScene, useUpdateScenes } from '@/hooks/useJobs'
 import { useUploadAsset, useWorkflows } from '@/hooks/useSetup'
 import { Button, ErrorBox } from '@/components/ui'
 
@@ -219,6 +219,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   const saveAsset = useSaveSceneAsset(job.id, job.project_id)
   const locks = useSceneLocks(job.id)
   const speak = useSpeakScene(job.id)
+  const removeNarration = useRemoveNarration(job.id)
   const structure = useSceneStructure(job.id)
   // The registered edit workflows, so the scene selector needs no hard-coded names.
   const editWorkflows = useWorkflows('edit').data?.workflows ?? []
@@ -681,7 +682,17 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                             {clipSecs != null && ` over a ${clipSecs.toFixed(2)}s clip`}
                             {clipSecs != null && s.narration_seconds > clipSecs && ' — runs into the next scene'}
                           </span>
+                          <button type="button" disabled={busy || removeNarration.isPending}
+                            data-testid={`narration-remove-${s.index}`}
+                            title="throw this take away, so the clip is heard as it was recorded; the line stays, so you can speak it again"
+                            onClick={() => removeNarration.mutate({ index: s.index })}
+                            className="rounded border border-neutral-300 bg-white px-2 py-0.5 disabled:opacity-50">
+                            {removeNarration.isPending && removeNarration.variables?.index === s.index ? 'removing…' : 'Remove voice'}
+                          </button>
                         </>
+                      )}
+                      {removeNarration.isError && removeNarration.variables?.index === s.index && (
+                        <span className="text-red-700" data-testid={`narration-remove-error-${s.index}`}>{errorMessage(removeNarration.error)}</span>
                       )}
                       {s.narration_stale && (
                         <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-900" data-testid={`narration-stale-${s.index}`}>

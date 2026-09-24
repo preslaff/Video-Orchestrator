@@ -460,3 +460,63 @@ def test_edit_base_keeps_the_frame_the_edit_started_from(mgr, tmp_path, monkeypa
     cleared = mgr.update_scenes(job.id, [{"index": 0, "edit_base": ""}])
     assert cleared.scenes[0].edit_base_path == ""
     assert Orchestrator.edit_sources(cleared.scenes[0]) == [str(ref)]
+
+
+# --- removing a spoken take -------------------------------------------------------------
+
+
+def test_emptying_the_line_also_drops_the_take(mgr, tmp_path):
+    """No line means no voice.
+
+    Assembly picks narration by the take on disk, not the words, so leaving the wav behind kept
+    playing a line that had been deleted — and on a clip with its own audio there was no way back.
+    """
+    wav = tmp_path / "s0_narration.wav"
+    wav.write_bytes(b"RIFF")
+    job = _done_video_job(mgr.store, narration="Здравей.", narration_path=str(wav),
+                          narration_said="Здравей.", narration_seconds=2.5)
+
+    job = mgr.update_scenes(job.id, [{"index": 0, "narration": ""}])
+    s = job.scenes[0]
+    assert s.narration == "" and s.narration_path is None
+    assert s.narration_said == "" and s.narration_seconds == 0.0
+    assert not wav.exists()
+    assert job.export is None, "the deliverable's audio changed"
+
+
+def test_rewording_the_line_keeps_the_existing_take(mgr, tmp_path):
+    """Only an *empty* line drops it: a reworded one still has a take, marked stale."""
+    wav = tmp_path / "s0_narration.wav"
+    wav.write_bytes(b"RIFF")
+    job = _done_video_job(mgr.store, narration="Здравей.", narration_path=str(wav),
+                          narration_said="Здравей.", narration_seconds=2.5)
+
+    job = mgr.update_scenes(job.id, [{"index": 0, "narration": "Добър ден."}])
+    s = job.scenes[0]
+    assert s.narration_path == str(wav) and wav.exists()
+    assert s.narration_said == "Здравей.", "which is what marks it reworded-since-spoken"
+
+
+def test_clear_narration_removes_the_take_and_keeps_the_words(mgr, tmp_path):
+    wav = tmp_path / "s0_narration.wav"
+    wav.write_bytes(b"RIFF")
+    job = _done_video_job(mgr.store, narration="Здравей.", narration_path=str(wav),
+                          narration_said="Здравей.", narration_seconds=2.5)
+
+    job = mgr.clear_narration(job.id, 0)
+    s = job.scenes[0]
+    assert s.narration == "Здравей." and s.narration_path is None
+    assert not wav.exists()
+
+    with pytest.raises(KeyError):
+        mgr.clear_narration(job.id, 9)
+
+
+def test_clear_narration_is_refused_while_the_job_is_running(mgr, tmp_path):
+    job = _done_video_job(mgr.store, narration="Здравей.")
+    mgr._active.add(job.id)
+    try:
+        with pytest.raises(RuntimeError, match="pause before editing"):
+            mgr.clear_narration(job.id, 0)
+    finally:
+        mgr._active.discard(job.id)

@@ -395,6 +395,7 @@ class JobManager:
         project = (projects_mod.load(self.store, job.project_id)
                    if job.project_id and any(scene_assets.has_asset_edits(e) for e in edits) else None)
         reopen_keyframes = False
+        drop_narration: list[int] = []
         for edit in edits:
             scene = by_index.get(edit.get("index"))
             if scene is None:
@@ -405,6 +406,11 @@ class JobManager:
                           "edit_workflow", "edit_base", "narration"):
                 if edit.get(field) is not None:
                     setattr(scene, field, edit[field])
+            if edit.get("narration") is not None and not scene.narration.strip():
+                # No line means no voice. Assembly keys off narration_path, so leaving the wav
+                # behind would keep playing a take whose words have been deleted — and on a clip
+                # with its own audio, there would be no way back to the original.
+                drop_narration.append(scene.index)
             if edit.get("edit_base") is not None:
                 scene_assets.resolve_edit_base(scene)
             if scene_assets.has_asset_edits(edit):
@@ -426,6 +432,10 @@ class JobManager:
             if (clip_id := edit.get("chosen_clip_id")) is not None:
                 if versions_mod.select_clip(scene, versions_mod.clip_by(scene, clip_id)):
                     job.export = None
+        if drop_narration:
+            o = Orchestrator.from_job(self.store, job)
+            for index in drop_narration:
+                o.clear_narration(job, index, keep_text=True)   # the text is already empty
         if reopen_keyframes and job.autonomy != "full":
             # The new keyframe must be reviewed before its clip is rendered again.
             self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase=GATE_KEYFRAMES,
@@ -511,6 +521,13 @@ class JobManager:
             o = Orchestrator.from_job(self.store, job)
             # KeyError -> 404, ValueError -> 400, TTSError -> 400 (see api/jobs.py)
             await loop.run_in_executor(None, o.speak_scene, job, index)
+        return job
+
+    def clear_narration(self, job_id: str, index: int, *, keep_text: bool = True) -> Job:
+        """Remove a scene's spoken take, so its clip is heard as it was recorded."""
+        job = self._editable_job(job_id)
+        o = Orchestrator.from_job(self.store, job)
+        o.clear_narration(job, index, keep_text=keep_text)   # KeyError -> 404
         return job
 
     def set_locked_regions(self, job_id: str, index: int, regions: list[dict]) -> Job:
