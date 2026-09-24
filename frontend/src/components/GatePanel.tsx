@@ -396,7 +396,11 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
    *  "no line to speak" for a line plainly on screen. */
   const speakScene = async (index: number, sceneId: string) => {
     if ((drafts[sceneId]?.narration ?? '') !== (job.scenes.find((s) => s.index === index)?.narration ?? '')) {
-      await update.mutateAsync(sceneEdits())
+      try {
+        await update.mutateAsync(sceneEdits())
+      } catch {
+        return      // the save failed and says so in the error box; speaking the OLD line would lie
+      }
     }
     speak.mutate({ index })
   }

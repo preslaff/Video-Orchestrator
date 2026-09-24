@@ -654,6 +654,29 @@ describe('GatePanel narration', () => {
     expect(put).toBeLessThan(spk)      // saved first, then spoken
   })
 
+  it('does not speak the old line when saving the new one fails', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const path = new URL(raw, 'http://localhost').pathname
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+      calls.push(`${method} ${path}`)
+      if (method === 'PUT') return new Response(JSON.stringify({ error: { code: 'conflict', message: 'job is running' } }),
+        { status: 409, headers: { 'content-type': 'application/json' } })
+      return new Response(JSON.stringify(spoken), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const blank = { ...spoken, scenes: [{ ...spoken.scenes[0], narration: '', narration_url: null }] } as unknown as JobPublic
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
+      <GatePanel job={blank} assets={assets} /></QueryClientProvider>)
+
+    await user.type(screen.getByTestId('narration-0'), 'Нова реплика.')
+    await user.click(screen.getByTestId('speak-0'))
+    await waitFor(() => expect(calls.some((c) => c.startsWith('PUT'))).toBe(true))
+    // Speaking anyway would have voiced the PREVIOUS text while the box showed the new one.
+    expect(calls.some((c) => c.endsWith('/speak'))).toBe(false)
+  })
+
   it('will not speak an empty line', () => {
     const silent = { ...spoken, scenes: [{ ...spoken.scenes[0], narration: '' }] } as unknown as JobPublic
     render(<QueryClientProvider client={new QueryClient()}><GatePanel job={silent} assets={assets} /></QueryClientProvider>)
