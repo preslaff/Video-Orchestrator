@@ -62,9 +62,12 @@ services:
     match: {cmdline_contains: ["main.py"], cwd: ~/comfy/ComfyUI}
     health: {probe: http, url: "${VORCH_COMFY_URL}/system_stats", timeout: 5}
     ready_timeout: 300                 # custom nodes import slowly
-    # 222 MiB idle; a loaded Wan 2.2 dual-model wants ~22000 with RAM offload. Evictable WITHOUT
-    # stopping the process, which is why it is freed before anything heavier is stopped.
-    vram: {class: elastic, needs_mb: 22000, holds_mb: 222, free_endpoint: /free}
+    # 222 MiB idle. needs_mb is VRAM that must be FREE ON THE CARD before a heavy render, not the
+    # model's total size: Wan 2.2's dual model is ~22 GB of weights but streams through the card
+    # with RAM offload, so demanding 22000 free would refuse every render on a 16303 MiB GPU.
+    # 12000 is the working figure (VRAM_GUARD_MB's 10000 plus headroom for the vision evaluator).
+    # Evictable WITHOUT stopping the process, which is why it is freed before anything is killed.
+    vram: {class: elastic, needs_mb: 12000, holds_mb: 222, free_endpoint: /free}
     lifetime: long
     adopt: {allowed: true, verify: port}
     log: comfy.log

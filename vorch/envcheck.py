@@ -245,13 +245,27 @@ def _check_tool(name: str) -> CheckResult:
 
 
 def _check_gpu() -> CheckResult:
-    snap = vram.snapshot()
-    if snap is None:
+    """Free VRAM, and — the part that used to be missing — *who* has the rest.
+
+    This row used to say "only N MB free; ComfyUI may still hold models" no matter what was
+    actually holding the card, which was actively misleading once a third model existed: it read as
+    "ComfyUI" while a narration server nobody had stopped held 11 GB and ComfyUI held 222 MB.
+    """
+    info = vram.attribute()
+    if info is None:
         return CheckResult("gpu", "warn", "nvidia-smi unavailable; VRAM cannot be monitored")
-    if snap["free"] < config.VRAM_GUARD_MB:
-        return CheckResult("gpu", "warn", f"only {snap['free']} MB free (< {config.VRAM_GUARD_MB} guard); "
-                           "ComfyUI may still hold models", snap)
-    return CheckResult("gpu", "ok", f"{snap['free']} / {snap['total']} MB free", snap)
+    data = {**{k: info[k] for k in ("used", "free", "total")},
+            "unattributed_mb": info["unattributed_mb"],
+            "holders": [h.to_dict() for h in info["holders"]]}
+    if info["free"] >= config.VRAM_GUARD_MB:
+        return CheckResult("gpu", "ok", f"{info['free']} / {info['total']} MB free", data)
+    who = vram.describe_holders(info["holders"])
+    reclaimable = sum(h.used_mb for h in info["holders"] if h.evictable)
+    tail = (f"{reclaimable} MB of that can be reclaimed before a render"
+            if reclaimable else "none of it can be reclaimed automatically")
+    return CheckResult("gpu", "warn",
+                       f"only {info['free']} MB free (< {config.VRAM_GUARD_MB} guard); "
+                       f"held by {who}; {tail}", data)
 
 
 def _object_info(backend: ComfyBackend, reachable: bool, force: bool) -> dict | None:

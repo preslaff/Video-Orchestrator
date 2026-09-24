@@ -786,6 +786,31 @@ def _cmd_vram(args) -> int:
     else:
         pct = 100 * s["free"] / s["total"] if s["total"] else 0
         print(f"GPU: used={s['used']} free={s['free']} total={s['total']} MB ({pct:.0f}% free)")
+    if args.by_process:
+        # The question the old output could not answer: not how much is gone, but who has it.
+        info = vram.attribute(s)
+        if info is None:
+            print("per-process: unavailable (no nvidia-smi)")
+        elif not info["holders"]:
+            print("per-process: nothing is holding the card")
+        else:
+            print(f"\n{'service':<10} {'pid':>7} {'MB':>7} {'uptime':>8}  state")
+            for h in info["holders"]:
+                state = "elastic/stoppable" if h.evictable else "fixed"
+                if h.service is None:
+                    state = "UNKNOWN — vorch will not touch this"
+                print(f"{h.label:<10} {h.pid:>7} {h.used_mb:>7} {h.uptime_str:>8}  {state}")
+                if h.service is None:
+                    print(f"           {h.cmdline[:78]}")
+            if info["unattributed_mb"]:
+                print(f"{'(driver)':<10} {'-':>7} {info['unattributed_mb']:>7} {'-':>8}  "
+                      "context and overhead")
+        if args.need:
+            adm = vram.admit(args.need)
+            print(f"\nfor a step needing {args.need} MB: {'OK' if adm.ok else 'REFUSED'}")
+            print(f"  {adm.reason}")
+            if adm.evict:
+                print(f"  would free, in order: {' -> '.join(adm.evict)}")
     if args.free:
         after = vram.reclaim()
         print(f"reclaimed — free now: {after if after is not None else 'unknown'} MB")
@@ -919,6 +944,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     vr = sub.add_parser("vram", help="show GPU memory; --free to reclaim ComfyUI VRAM")
     vr.add_argument("--free", action="store_true", help="POST /free and report new headroom")
+    vr.add_argument("--by-process", action="store_true",
+                    help="who holds the card: pid, MB, uptime, and whether it can be freed")
+    vr.add_argument("--need", type=int, default=None, metavar="MB",
+                    help="with --by-process: would a step needing this much be admitted?")
     vr.set_defaults(func=_cmd_vram)
 
     sv = sub.add_parser("serve", help="run the HTTP API + SSE server")

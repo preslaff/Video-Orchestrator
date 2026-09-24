@@ -160,7 +160,77 @@ services:
 > refuse work that would have fit or admit work that OOMs.
 
 
-## 5. How arbitration decides — *planned*
+## 5. How arbitration decides
+
+The question is never "how much VRAM is free" — it is "will this step fit, and if not, who has the
+rest". Ask it directly:
+
+```bash
+python -m vorch vram --by-process --need 12000
+```
+
+```
+GPU: used=13833 free=2001 total=16303 MB (12% free)
+
+service        pid      MB   uptime  state
+tts         251592   11268   11h40m  elastic/stoppable
+gemma         8536    1960   23h00m  fixed
+comfy       409909     222    5h55m  elastic/stoppable
+(driver)         -     383        -  context and overhead
+
+for a step needing 12000 MB: OK
+  needs 12000 MB, 2001 free; freeing comfy, tts releases about 11490 MB
+  would free, in order: comfy -> tts
+```
+
+That is a real reading of this machine, and it is the answer the old `gpu` check could not give: it
+said *"only 2001 MB free; ComfyUI may still hold models"* while ComfyUI held 222 MB and a narration
+server nobody had stopped held 11268.
+
+### The ladder
+
+1. **No `nvidia-smi`** → admitted. There is nothing to measure, so nothing to refuse. (The same
+   stance `reclaim` has always taken.)
+2. **Enough free already** → admitted, nothing to do.
+3. **Enough free once evictable holders are freed** → admitted, with a plan.
+4. **Otherwise** → refused, naming the deficit, who holds what, and the command that would free it.
+
+### Eviction order, and why
+
+Cheapest first, always:
+
+| class | cost to free | how |
+|---|---|---|
+| `elastic` | ~3 s | `POST /free` — ComfyUI drops its models **without stopping** |
+| `exclusive` / `warm` | ~90 s | stop the process; it must be reloaded next time |
+| `resident` | never | a fixed cost, by design |
+
+So ComfyUI is always asked to let go before anything is killed. Freeing 222 MB rarely settles it,
+but it is nearly free to try, and the order means a 90-second reload is only paid when it is
+genuinely required.
+
+**`resident` is not a blocker to remove.** Gemma is the evaluator: stopping it would break every
+verdict. It is reported as *"gemma (pid 8536, 1960 MB, up 23h00m) is a fixed cost and stays"*, and
+you will never see vorch suggest stopping it. Note also that its footprint grows a little with use
+(the KV cache), so the manifest's `holds_mb` is a floor rather than an exact figure.
+
+**A process the manifest cannot name is never touched.** It appears in the table as
+`UNKNOWN — vorch will not touch this`, with its command line so you can decide. Refusing to guess
+is deliberate: the failure mode has to be "refuse", never "kill the wrong thing".
+
+### Reading a refusal
+
+```
+needs 11500 MB, 2001 free; freeing comfy would add about 222 MB; still 9277 MB short;
+held by tts (pid 251592, 11268 MB, up 11h40m);
+gemma (pid 8536, 1960 MB, up 23h00m) is a fixed cost and stays; stop it with: vorch down tts
+```
+
+The arithmetic is meant to add up as you read it: 2001 free plus 222 reclaimable is 2223, against
+11500 needed, which is 9277 short. Anything holding memory that the plan will *not* free is named —
+including a service excluded from eviction because we were about to use it — precisely so the
+numbers reconcile. If they ever do not, the attribution is wrong; see §4 on `match`.
+
 
 ## 6. The warm narration server — *planned*
 

@@ -43,7 +43,10 @@ def test_builtin_vram_figures_are_the_measured_ones():
     specs = services.load("/nonexistent/services.yaml", force=True)
     assert specs["gemma"].vram.holds_mb == 1838, "Gemma costs 1838 MiB even with --n-gpu-layers 0"
     assert specs["tts"].vram.holds_mb == 11268, "OmniVoice is 11268 MiB, not the old ~5.3 GB claim"
-    assert specs["comfy"].vram.needs_mb == 22000
+    # needs_mb is VRAM that must be FREE, not the model's total size: Wan's dual model is ~22 GB of
+    # weights but streams through the card with RAM offload, so 22000 would refuse every render.
+    assert specs["comfy"].vram.needs_mb == 12000
+    assert specs["comfy"].vram.needs_mb < 16303, "a need no 16 GB card can meet refuses all work"
     # The arithmetic that makes narration and a render mutually exclusive on a 16303 MiB card.
     assert specs["tts"].vram.holds_mb + specs["comfy"].vram.needs_mb > 16303
     assert specs["tts"].vram.exclusive and specs["comfy"].vram.elastic
