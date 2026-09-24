@@ -628,6 +628,32 @@ describe('GatePanel narration', () => {
     await waitFor(() => expect(posts.some((u) => u.endsWith('/scenes/0/speak'))).toBe(true))
   })
 
+  it('speaks a line that was typed but not saved', async () => {
+    // The button is enabled on what is in the box, so it must act on what is in the box. It used
+    // to POST straight to /speak, and the server — which reads the SAVED scene — answered
+    // "scene 1 has no line to speak" for a line plainly on screen.
+    const calls: { method: string; path: string }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+      calls.push({ method, path: new URL(raw, 'http://localhost').pathname })
+      return new Response(JSON.stringify(spoken), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    const blank = { ...spoken, scenes: [{ ...spoken.scenes[0], narration: '', narration_url: null }] } as unknown as JobPublic
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <GatePanel job={blank} assets={assets} /></QueryClientProvider>)
+
+    await user.type(screen.getByTestId('narration-0'), 'Открий своя аромат.')
+    await user.click(screen.getByTestId('speak-0'))
+
+    await waitFor(() => expect(calls.some((c) => c.path.endsWith('/speak'))).toBe(true))
+    const put = calls.findIndex((c) => c.method === 'PUT' && c.path.endsWith('/scenes'))
+    const spk = calls.findIndex((c) => c.path.endsWith('/speak'))
+    expect(put).toBeGreaterThanOrEqual(0)
+    expect(put).toBeLessThan(spk)      // saved first, then spoken
+  })
+
   it('will not speak an empty line', () => {
     const silent = { ...spoken, scenes: [{ ...spoken.scenes[0], narration: '' }] } as unknown as JobPublic
     render(<QueryClientProvider client={new QueryClient()}><GatePanel job={silent} assets={assets} /></QueryClientProvider>)

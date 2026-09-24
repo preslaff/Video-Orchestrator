@@ -368,8 +368,8 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
     set(sceneId, { keyframe_prompt: `${d.keyframe_prompt.replace(/[.\s]+$/, '')}. Correction: ${text}` })
   }
 
-  const save = () => {
-    const scenes: SceneEdit[] = job.scenes.map((s) => {
+  const sceneEdits = (): SceneEdit[] =>
+    job.scenes.map((s) => {
       const d = drafts[s.id]
       return {
         index: s.index,
@@ -387,7 +387,18 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
         identity_asset_id: job.face_swap && !s.video_path ? identityEdit(d) : null,
       }
     })
-    update.mutate(scenes)
+  const save = () => update.mutate(sceneEdits())
+
+  /** Speak a scene's line, saving it first if it has been typed but not saved yet.
+   *
+   *  The button is enabled on what is in the box, so it has to act on what is in the box —
+   *  requiring a separate Save first was a trap: the server reads the saved scene and answered
+   *  "no line to speak" for a line plainly on screen. */
+  const speakScene = async (index: number, sceneId: string) => {
+    if ((drafts[sceneId]?.narration ?? '') !== (job.scenes.find((s) => s.index === index)?.narration ?? '')) {
+      await update.mutateAsync(sceneEdits())
+    }
+    speak.mutate({ index })
   }
 
   return (
@@ -653,8 +664,8 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                     <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-600">
                       <button type="button" disabled={busy || speak.isPending || !d.narration.trim()}
                         data-testid={`speak-${s.index}`}
-                        title="save the line first; speaking loads a ~5 GB model and frees ComfyUI to make room"
-                        onClick={() => speak.mutate({ index: s.index })}
+                        title="speaking saves the line first; it loads a ~5 GB model and frees ComfyUI to make room"
+                        onClick={() => { void speakScene(s.index, s.id) }}
                         className="rounded border border-neutral-300 bg-white px-2 py-0.5 disabled:opacity-50">
                         {speak.isPending && speak.variables?.index === s.index ? 'speaking…' : '🔊 Speak'}
                       </button>
