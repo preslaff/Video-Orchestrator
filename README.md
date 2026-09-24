@@ -25,7 +25,7 @@ auditable.
 - [Feature overview](#feature-overview)
 - [Architecture](#architecture)
 - [Install](#install)
-- [Running the services](#running-the-services)
+- [Running the services](#running-the-services) — and [docs/services.md](docs/services.md) for the measured VRAM budget
 - [The web UI](#the-web-ui)
 - [Setup phase](#setup-phase): environment check · projects & assets · output profiles · workflows
 - [Jobs](#jobs): wizard · gates · evaluator · regeneration · stills & variants · edit mode · post-steps
@@ -113,22 +113,43 @@ cd frontend && npm ci
 
 ## Running the services
 
-1. **ComfyUI** on `:8188` with the FLUX.2 Klein, Wan 2.2 (GGUF) and ReActor models.
-2. **Gemma** (llama-server) on `:8080`, on the CPU so it never competes with ComfyUI for VRAM,
-   and **with the vision projector** — without `--mmproj` every verdict is meaningless:
+These are the canonical start commands — `docs/services.md` explains what each service costs
+in VRAM and why the order matters, and points back here rather than repeating them.
+
+1. **ComfyUI** on `:8188` with the FLUX.2 Klein, Wan 2.2 (GGUF) and ReActor models:
    ```bash
-   ./build/bin/llama-server \
+   cd ~/comfy/ComfyUI && ~/WORK/LTX-Colab/venv/bin/comfy launch
+   ```
+2. **Gemma** (llama-server) on `:8080`, on the CPU so it never competes with ComfyUI for GPU
+   *compute*, and **with the vision projector** — without `--mmproj` every verdict is meaningless:
+   ```bash
+   cd ~/WORK/llama.cpp && ./build/bin/llama-server \
      -m ~/models/gemma4/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf \
      --mmproj ~/models/gemma4/mmproj-BF16.gguf \
      --n-gpu-layers 0 --no-mmproj-offload --ctx-size 32768 \
      --host 0.0.0.0 --port 8080
    ```
+   `--n-gpu-layers 0` is not free: it still holds **1838 MiB** for the CUDA context and the
+   projector. Budget it.
 3. **API**: `.venv/bin/python -m vorch serve` → `http://127.0.0.1:8000/api` (docs at `/docs`).
+   Needs PostgreSQL up first.
 4. **UI**: `cd frontend && npm run dev` → `http://localhost:3000` (`make frontend && make start`
-   for a production build).
+   for a production build). Proxies `/api` to the server above, so start that first.
+
+**OmniVoice-BG** (`:8002`, Bulgarian narration) is the exception: vorch starts it itself when you
+ask for narration, because it wants **11268 MiB** and cannot share the card with a video render.
+Do not leave it running — it will block every render until it is stopped. If you do start it by
+hand to audition a voice, pass the reference explicitly, or it will read in its built-in
+announcer's voice instead of yours:
+
+```bash
+cd ~/WORK/OmniVoice && OMNIVOICE_BG_REF_AUDIO=Viktoria/11s.wav \
+  OMNIVOICE_BG_REF_TEXT="$(cat Viktoria/11s.txt)" bash serve_bg.sh
+```
 
 Check everything at once: `python -m vorch setup check --deep` (or *Setup → Environment* in
-the UI).
+the UI). See **[docs/services.md](docs/services.md)** for the measured VRAM budget and what
+happens when it is exceeded.
 
 ## The web UI
 

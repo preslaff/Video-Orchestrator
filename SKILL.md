@@ -23,6 +23,7 @@ description: >-
 - **Gemma оценка на изображение/видео** (vision заявка, structured JSON verdict) → `skills/gemma-evaluate.md`
 - **Gemma текстова генерация** (storyboard, промпти) → `skills/gemma-prompt.md`
 - **VRAM управление** (кой модел зареден, разтоварване, суичване) → `skills/vram-manager.md`
+- **Пускане/спиране на услугите** (кой процес държи картата, измерена VRAM цена, какво vorch съзнателно НЕ управлява) → `docs/services.md`
 - **Поправка на сбъркан кадър** (деформации, дръжки/ръце, разкривен текст — кой инструмент) → `skills/fixing-distortions.md`
 
 ## Архитектурни инварианти (не нарушавай)

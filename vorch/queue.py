@@ -493,7 +493,7 @@ class JobManager:
 
     def speak_scene(self, job_id: str, index: int) -> Job:
         """Synthesise one scene's line now. Refused while a segment runs: the narration model
-        wants ~5 GB and would be fighting a render for the card."""
+        wants 11268 MiB (measured) and would be fighting a render for a 16303 MiB card."""
         job = self._editable_job(job_id)
         o = Orchestrator.from_job(self.store, job)
         o.speak_scene(job, index)          # KeyError -> 404, ValueError -> 400

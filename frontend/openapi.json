@@ -709,7 +709,7 @@
           "jobs"
         ],
         "summary": "Speak Scene",
-        "description": "Speak this scene's line in the cloned voice.\n\nSynchronous and deliberate: it loads a ~5 GB model, so it frees ComfyUI first and releases\nthe card again afterwards. Saving new text does not trigger this — you ask for it.",
+        "description": "Speak this scene's line in the cloned voice.\n\nSynchronous and deliberate: it loads an 11.3 GB model, so it frees ComfyUI first and releases\nthe card again afterwards. Saving new text does not trigger this — you ask for it.",
         "operationId": "speak_scene_api_jobs__job_id__scenes__index__speak_post",
         "parameters": [
           {

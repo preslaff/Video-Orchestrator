@@ -274,7 +274,7 @@ async def speak_scene(
 ) -> JobPublic:
     """Speak this scene's line in the cloned voice.
 
-    Synchronous and deliberate: it loads a ~5 GB model, so it frees ComfyUI first and releases
+    Synchronous and deliberate: it loads an 11.3 GB model, so it frees ComfyUI first and releases
     the card again afterwards. Saving new text does not trigger this — you ask for it.
     """
     try:

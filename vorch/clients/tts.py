@@ -13,9 +13,19 @@ audio). When a word comes out mis-stressed the fix is an override in OmniVoice, 
 
     cd ~/WORK/OmniVoice && ./venv/bin/python bg_stress_add.py парИ
 
-**It is started for a phase, not left running.** The model wants about 5.3 GB, and on a 16 GB
-card that does not fit beside a loaded ComfyUI — it OOMs. ``serving()`` frees ComfyUI, starts the
-server, and stops it again, which is invariant #1 applied to a third model.
+**It is started for a phase, not left running.** The model wants **11268 MiB** (measured
+2026-09-24; this docstring long said ~5.3 GB and was wrong by over 2x). The card is 16303 MiB, so
+it does not fit beside a loaded ComfyUI at all — never mind a Wan render, which wants ~22 GB with
+RAM offload. ``serving()`` frees ComfyUI, starts the server, and stops it again, which is
+invariant #1 applied to a third model.
+
+**Known gap (see docs/services.md).** If a server is already answering on the port, ``serving()``
+adopts it as-is and does *not* stop it afterwards — so one started by hand outlives the phase and
+keeps holding 11 GB. It also cannot tell *which voice* that server was started with: the reference
+arrives only as ``OMNIVOICE_BG_REF_AUDIO`` and ``/health`` does not report it, so an adopted server
+running ``serve_bg.sh``'s default reads every line in a different announcer's voice, silently.
+Until the service manager lands, check by hand:
+``tr '\0' '\n' < /proc/<pid>/environ | grep OMNIVOICE_BG_REF_AUDIO``.
 """
 
 from __future__ import annotations

@@ -46,7 +46,9 @@ GEMMA_URL = os.environ.get("VORCH_GEMMA_URL", "http://localhost:8080")
 COMFY_URL = os.environ.get("VORCH_COMFY_URL", "http://localhost:8188")
 # OmniVoice-BG: Bulgarian narration, cloned from a reference clip. A third local service, spoken
 # to over HTTP exactly like the other two — but unlike them it is started only for the narration
-# phase, because it wants ~5.3 GB and the card is 16 (measured: it OOMs against a loaded ComfyUI).
+# phase, because it wants 11268 MiB of a 16303 MiB card (measured 2026-09; earlier comments said
+# ~5.3 GB and were wrong by over 2x). It cannot coexist with a Wan render at all — see
+# docs/services.md and NOTES.md §4 for the arithmetic.
 TTS_URL = os.environ.get("VORCH_TTS_URL", "http://localhost:8002")
 OMNIVOICE_DIR = Path(os.environ.get("VORCH_OMNIVOICE_DIR", "~/WORK/OmniVoice")).expanduser()
 # The cloned voice: a reference clip and its EXACT transcript. Viktoria/11s is the clean pair —

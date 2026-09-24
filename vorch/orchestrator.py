@@ -1092,8 +1092,9 @@ class Orchestrator:
 
         One server for the whole job: the model takes about a minute and a half to load and a
         second to speak, so opening it per scene would spend all its time loading. It is also
-        ~5.3 GB on a 16 GB card, so it cannot simply be left running beside ComfyUI — the client
-        frees ComfyUI first and stops the server afterwards (invariant #1, third model).
+        11268 MiB of a 16303 MiB card (measured 2026-09), so it cannot be left running beside
+        ComfyUI at all — the client frees ComfyUI first and stops the server afterwards
+        (invariant #1, third model).
         """
         todo = [s for s in job.scenes if self._narration_stale(s)]
         if not todo:

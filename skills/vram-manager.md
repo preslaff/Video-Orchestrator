@@ -6,8 +6,10 @@
 
 - Klein 4B fp8 ~8GB
 - Wan dual-model (High+Low) Q5 ~22GB — влиза само с offload към 64GB RAM
-- Gemma 4 Q4 + mmproj — частичен GPU offload, дели картата
+- Gemma 4 Q4 + mmproj — **измерено 1838 MiB дори с `--n-gpu-layers 0`**
 - ReActor — лек (~2GB)
+- **OmniVoice-BG (narration) — измерено 11268 MiB.** Не се събира с Wan. Виж `NOTES.md` §4
+  за пълната измерена таблица и `docs/services.md` за последствията.
 
 Два тежки модела НЕ се събират едновременно. Gemma (за оценка) и ComfyUI модел
 не могат да са заредени заедно.
@@ -19,15 +21,11 @@
 Gemma тече на CPU (A4B активира само 4B → поносимо), ComfyUI владее GPU цял.
 Нула суичване, нула OOM конфликт.
 
-Старт на Gemma БЕЗ GPU слоеве:
-```bash
-./build/bin/llama-server \
-  -m ~/models/gemma4/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf \
-  --mmproj ~/models/gemma4/mmproj-BF16.gguf \
-  --n-gpu-layers 0 \
-  --ctx-size 16384 \
-  --host 0.0.0.0 --port 8080
-```
+Старт на Gemma БЕЗ GPU слоеве: **командата е в `README.md` → "Running the services"** и
+това е единственото ѝ копие. (Тук имаше вариант с `--ctx-size 16384` — остарял.)
+
+⚠️ `--n-gpu-layers 0` НЕ значи нула VRAM: **измерено 1838 MiB** остават заети от CUDA контекста
+и projector-а. "Gemma на CPU" важи за изчислението, не за паметта.
 Цена: оценката е по-бавна (CPU). Но не е time-critical, и логиката е тривиална —
 двата свята не се бият. ComfyUI работи на пълна VRAM скорост.
 
