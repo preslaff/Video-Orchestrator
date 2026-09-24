@@ -7,6 +7,8 @@ manager. Async is exercised via asyncio.run (no pytest-asyncio dependency).
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 
 import pytest
 
@@ -628,3 +630,87 @@ def test_retry_refuses_a_finished_job(make_store):
             store.close()
 
     asyncio.run(go())
+
+
+# --- narration must not fight a render for the card -------------------------------------
+
+
+def _fake_orch_with_speak(monkeypatch, fn):
+    monkeypatch.setattr(
+        "vorch.orchestrator.Orchestrator.from_job",
+        classmethod(lambda cls, s, j: type("O", (), {"speak_scene": staticmethod(fn)})()))
+
+
+def test_speak_waits_for_the_gpu_lock_instead_of_loading_on_top_of_a_render(make_store, monkeypatch):
+    """The real bug this fixes.
+
+    ``speak_scene``'s only guard used to be ``_editable_job``, which refuses when *this* job is
+    running and says nothing about any other — so a Speak on job B could load an 11268 MiB model on
+    top of job A's Wan render on a 16303 MiB card. Waiting for the lock is the correct behaviour.
+    """
+    order: list[str] = []
+    release = threading.Event()
+
+    class SlowRender:
+        def __init__(self, s, j):
+            self.store, self.emit = s, lambda e: None
+
+        def run(self, job):
+            order.append("render-start")
+            release.wait(5)
+            order.append("render-end")
+            job.status = JobStatus.DONE
+            self.store.save_job(job)
+
+    async def go():
+        store = make_store()
+        rendering, speaking = new_job(idea="render"), new_job(idea="speak")
+        for j in (rendering, speaking):
+            store.save_job(j)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: SlowRender(s, j))
+        _fake_orch_with_speak(monkeypatch, lambda job, index: order.append("speak"))
+
+        mgr._spawn(mgr._execute(rendering, lambda o, j: o.run(j)))
+        while "render-start" not in order:
+            await asyncio.sleep(0.01)
+
+        # A different job entirely, so _editable_job has nothing to say about it.
+        task = asyncio.create_task(mgr.speak_scene(speaking.id, 0))
+        await asyncio.sleep(0.15)
+        waiting = list(order)
+
+        release.set()
+        await task
+        store.close()
+        return waiting, order
+
+    waiting, order = asyncio.run(go())
+    assert waiting == ["render-start"], "the speak must be waiting, not synthesising"
+    assert order == ["render-start", "render-end", "speak"]
+
+
+def test_speak_does_not_block_the_event_loop(make_store, monkeypatch):
+    """A 90 s model load must not stall SSE for every other client."""
+    ticks = 0
+
+    async def go():
+        nonlocal ticks
+        store = make_store()
+        job = new_job(idea="speak")
+        store.save_job(job)
+        mgr = JobManager(store)
+        _fake_orch_with_speak(monkeypatch, lambda j, index: time.sleep(0.3))
+
+        async def heartbeat():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        beat = asyncio.create_task(heartbeat())
+        await mgr.speak_scene(job.id, 0)
+        beat.cancel()
+        store.close()
+
+    asyncio.run(go())
+    assert ticks > 5, f"the loop only ticked {ticks} times; the blocking call was not offloaded"

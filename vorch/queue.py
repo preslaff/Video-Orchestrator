@@ -437,7 +437,11 @@ class JobManager:
     # -- structural edits: add / delete / reorder scenes --
 
     def _editable_job(self, job_id: str) -> Job:
-        """A job nothing is generating right now — structural edits would race its writes."""
+        """A job nothing is generating right now — structural edits would race its writes.
+
+        Note what this is *not*: it guards one job's saves against its own worker thread, and says
+        nothing about the GPU. Anything that needs the card must take ``self._lock`` as well.
+        """
         if job_id in self._active:
             raise RuntimeError(f"job {job_id} is running; pause before editing")
         job = self.store.load_job(job_id)
@@ -491,12 +495,22 @@ class JobManager:
             job, moved=_moved(before, job), removed=[was], action="deleted", scene_id=removed.id,
             reason=label + (" (files deleted)" if delete_files else ""))
 
-    def speak_scene(self, job_id: str, index: int) -> Job:
-        """Synthesise one scene's line now. Refused while a segment runs: the narration model
-        wants 11268 MiB (measured) and would be fighting a render for a 16303 MiB card."""
+    async def speak_scene(self, job_id: str, index: int) -> Job:
+        """Synthesise one scene's line now — under the GPU lock, off the event loop.
+
+        Both of those are corrections. It used to run inline in an ``async def`` route, which meant
+        the whole API and every SSE stream froze for the ~90 s model load; and its only guard was
+        ``_editable_job``, which refuses when *this* job is running and says nothing about any
+        other — so a Speak could load 11268 MiB on top of another job's Wan render on a 16303 MiB
+        card. Taking ``self._lock`` is what actually serialises it against renders; waiting is the
+        correct behaviour, and the arbiter frees the card once we hold it.
+        """
         job = self._editable_job(job_id)
-        o = Orchestrator.from_job(self.store, job)
-        o.speak_scene(job, index)          # KeyError -> 404, ValueError -> 400
+        loop = asyncio.get_running_loop()
+        async with self._lock:
+            o = Orchestrator.from_job(self.store, job)
+            # KeyError -> 404, ValueError -> 400, TTSError -> 400 (see api/jobs.py)
+            await loop.run_in_executor(None, o.speak_scene, job, index)
         return job
 
     def set_locked_regions(self, job_id: str, index: int, regions: list[dict]) -> Job:

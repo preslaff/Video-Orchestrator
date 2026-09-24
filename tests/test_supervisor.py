@@ -89,6 +89,11 @@ def world(tmp_path, monkeypatch):
     })
     monkeypatch.setattr(supervisor, "PROC", proc)
     monkeypatch.setattr(vram, "PROC", proc)
+    # Liveness must come from the same fake world as everything else. Using the real os.kill here
+    # made these tests depend on whatever happened to own those pids on the developer's machine —
+    # they passed only while a real OmniVoice happened to be pid 251592, and broke when it exited.
+    monkeypatch.setattr(supervisor, "_pid_alive",
+                        lambda pid: (proc / str(pid)).is_dir() or pid == os.getpid())
     monkeypatch.setattr(vram, "holders", lambda: [
         vram.Holder(pid=251592, used_mb=11268, service="tts", cmdline="omnivoice.cli.serve",
                     cwd=str(tts_cwd), evictable=True, started_at=time.time() - 41_000),

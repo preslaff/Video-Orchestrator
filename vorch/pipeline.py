@@ -124,6 +124,21 @@ def swap_master_onto(
     return swapped
 
 
+def _animate_need_mb(params: GenParams) -> int:
+    """VRAM that must be free before a local animate, from the manifest's ComfyUI entry.
+
+    Falls back to ``VRAM_GUARD_MB`` when the manifest cannot be read — a broken services file must
+    not stop a render that would have worked.
+    """
+    from . import services
+
+    try:
+        need = services.get("comfy").vram.needs_mb
+    except services.ServiceError:
+        need = 0
+    return need or config.VRAM_GUARD_MB
+
+
 def animate_frame(
     frame_path: Path,
     animation_prompt: str,
@@ -142,9 +157,18 @@ def animate_frame(
     """
     backend = backends.for_workflow(params.animate_workflow)
     frame_name = comfy.upload_image(frame_path, backend=backend)
-    vram.reclaim(backend=backend)  # Klein/ReActor -> Wan boundary: free everything first
     if backend.is_local:
+        # The Klein/ReActor -> Wan boundary, and the heaviest moment in the whole pipeline. Freeing
+        # ComfyUI's models is no longer enough on its own: another process may hold the card (a
+        # narration server, most likely), and the old code would free 222 MB, log the result and
+        # walk into an OOM. ensure_headroom frees what the manifest allows, re-measures, and raises
+        # VramUnavailable naming the holder if it still does not fit.
+        from . import supervisor
+
+        supervisor.ensure_headroom(_animate_need_mb(params))
         vram.log_state("before Wan")
+    else:
+        vram.reclaim(backend=backend)   # remote: a no-op, kept for the log line
     kw = params.animate_kwargs()
     if negative is not None:
         kw["negative"] = negative

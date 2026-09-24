@@ -709,7 +709,7 @@
           "jobs"
         ],
         "summary": "Speak Scene",
-        "description": "Speak this scene's line in the cloned voice.\n\nSynchronous and deliberate: it loads an 11.3 GB model, so it frees ComfyUI first and releases\nthe card again afterwards. Saving new text does not trigger this — you ask for it.",
+        "description": "Speak this scene's line in the cloned voice.\n\nDeliberate, never automatic: saving new text does not trigger it, you ask for it. It loads an\n11.3 GB model, so it waits for the GPU lock and the arbiter frees the card first. If a render\nis in flight this request waits for it rather than fighting it for VRAM.",
         "operationId": "speak_scene_api_jobs__job_id__scenes__index__speak_post",
         "parameters": [
           {

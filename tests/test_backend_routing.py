@@ -165,6 +165,13 @@ def fakes(monkeypatch, tmp_path):
     monkeypatch.setattr(comfy, "output_path", lambda d, backend=None: tmp_path / f"{(backend or backends.local()).name}_{d['filename']}")
     monkeypatch.setattr(vram, "reclaim", lambda *a, backend=None, **k: reclaims.append(backend.name if backend else None))
     monkeypatch.setattr(vram, "log_state", lambda *a, **k: None)
+    # A *local* animate no longer frees unconditionally: it asks the arbiter for headroom, which
+    # frees ComfyUI only when the card is actually short. Record that as the local reclaim, so this
+    # test keeps asserting the thing it is about — that each backend's own GPU is the one managed.
+    from vorch import supervisor
+
+    monkeypatch.setattr(supervisor, "ensure_headroom",
+                        lambda need, **kw: reclaims.append("local"))
     return uploads, reclaims
 
 

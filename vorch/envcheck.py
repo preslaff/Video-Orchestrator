@@ -245,7 +245,7 @@ def _check_tool(name: str) -> CheckResult:
     return CheckResult(name, "warn", f"{name} not on PATH (continuity, export probing and video eval need it)")
 
 
-def _check_gpu() -> CheckResult:
+def _check_gpu(profile: Any | None = None) -> CheckResult:
     """Free VRAM, and — the part that used to be missing — *who* has the rest.
 
     This row used to say "only N MB free; ComfyUI may still hold models" no matter what was
@@ -260,13 +260,50 @@ def _check_gpu() -> CheckResult:
             "holders": [h.to_dict() for h in info["holders"]]}
     if info["free"] >= config.VRAM_GUARD_MB:
         return CheckResult("gpu", "ok", f"{info['free']} / {info['total']} MB free", data)
+
+    # With a profile selected we know what the render will actually want, so the verdict can be a
+    # real one instead of a nag: reclaimable -> warn, genuinely short -> fail. Without a profile
+    # there is no concrete number to judge against, so it stays the advisory it always was.
+    need = _animate_need_mb(profile)
     who = vram.describe_holders(info["holders"])
-    reclaimable = sum(h.used_mb for h in info["holders"] if h.evictable)
-    tail = (f"{reclaimable} MB of that can be reclaimed before a render"
-            if reclaimable else "none of it can be reclaimed automatically")
-    return CheckResult("gpu", "warn",
-                       f"only {info['free']} MB free (< {config.VRAM_GUARD_MB} guard); "
-                       f"held by {who}; {tail}", data)
+    if need is None:
+        reclaimable = sum(h.used_mb for h in info["holders"] if h.evictable)
+        tail = (f"{reclaimable} MB of that can be reclaimed before a render"
+                if reclaimable else "none of it can be reclaimed automatically")
+        return CheckResult("gpu", "warn",
+                           f"only {info['free']} MB free (< {config.VRAM_GUARD_MB} guard); "
+                           f"held by {who}; {tail}", data)
+    adm = vram.admit(need, snap={k: info[k] for k in ("used", "free", "total")})
+    data["admission"] = adm.to_dict()
+    if adm.clear:
+        return CheckResult("gpu", "ok", f"{info['free']} MB free, enough for {need}; held by {who}",
+                           data)
+    if adm.ok:
+        return CheckResult("gpu", "warn",
+                           f"{adm.reason}; that happens automatically before the render", data)
+    return CheckResult("gpu", "fail", adm.reason, data)
+
+
+def _animate_need_mb(profile: Any | None) -> int | None:
+    """VRAM a local render of this profile needs free, or None when we cannot say.
+
+    None whenever the answer would be a guess — no profile, a remote animate backend (its own GPU),
+    or an unreadable manifest — because a `fail` has to rest on a real number.
+    """
+    if profile is None:
+        return None
+    from . import services
+
+    try:
+        name = getattr(profile, "animate_workflow", None) or "animate"
+        if backends.for_workflow(name).remote:
+            return None
+    except Exception:
+        return None
+    try:
+        return services.get("comfy").vram.needs_mb or None
+    except services_mod.ServiceError:
+        return None
 
 
 def _object_info(backend: ComfyBackend, reachable: bool, force: bool) -> dict | None:
@@ -420,7 +457,7 @@ def run_checks(
     checks.append(gemma_res)
     if deep and gemma_res.status == "ok":
         checks.append(_check_gemma_vision())
-    checks += [_check_tool("ffmpeg"), _check_tool("ffprobe"), _check_gpu()]
+    checks += [_check_tool("ffmpeg"), _check_tool("ffprobe"), _check_gpu(profile)]
     checks += _check_services()
 
     infos = {

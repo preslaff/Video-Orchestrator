@@ -274,11 +274,12 @@ async def speak_scene(
 ) -> JobPublic:
     """Speak this scene's line in the cloned voice.
 
-    Synchronous and deliberate: it loads an 11.3 GB model, so it frees ComfyUI first and releases
-    the card again afterwards. Saving new text does not trigger this — you ask for it.
+    Deliberate, never automatic: saving new text does not trigger it, you ask for it. It loads an
+    11.3 GB model, so it waits for the GPU lock and the arbiter frees the card first. If a render
+    is in flight this request waits for it rather than fighting it for VRAM.
     """
     try:
-        job = manager.speak_scene(job_id, index)
+        job = await manager.speak_scene(job_id, index)
     except KeyError as e:
         raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
     except RuntimeError as e:

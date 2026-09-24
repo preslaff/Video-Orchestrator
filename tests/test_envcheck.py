@@ -320,3 +320,54 @@ def test_backends_file_error_is_a_fail_and_local_still_checked(healthy, store, t
     by = _by_name(rep)
     assert by["backends"].status == "fail" and "VORCH_TEST_MISSING_KEY" in by["backends"].detail
     assert by["comfy:local"].status == "ok" and "comfy:m" not in by and not rep.ok
+
+
+# --- the gpu row judges against a real number when it can ------------------------------
+
+
+def _low_vram(monkeypatch, free=2001, holders=None):
+    monkeypatch.setattr(vram, "snapshot", lambda: {"used": 16303 - free, "free": free, "total": 16303})
+    monkeypatch.setattr(vram, "holders", lambda: holders or [])
+    envcheck.clear_cache()
+
+
+def _holder(name, mb, evictable):
+    return vram.Holder(pid=1000 + mb, used_mb=mb, service=name, cmdline=name, cwd=None,
+                       evictable=evictable, started_at=None)
+
+
+def test_gpu_stays_advisory_without_a_profile(healthy, store, monkeypatch):
+    """No profile means no concrete requirement, so a fail would be a guess."""
+    _low_vram(monkeypatch, holders=[_holder("tts", 11268, True)])
+    rep = envcheck.run_checks(store=store, force=True)
+    row = _by_name(rep)["gpu"]
+    assert row.status == "warn" and rep.ok
+    assert "held by tts" in row.detail
+
+
+def test_gpu_warns_when_a_render_needs_freeing_first(healthy, store, monkeypatch):
+    """Reclaimable is not a problem: it happens on its own before the render."""
+    _low_vram(monkeypatch, holders=[_holder("tts", 11268, True), _holder("comfy", 222, True)])
+    rep = envcheck.run_checks(profile=profiles.default_profile(), store=store, force=True)
+    row = _by_name(rep)["gpu"]
+    assert row.status == "warn" and rep.ok, "a submit must not be blocked by something we can fix"
+    assert "automatically before the render" in row.detail
+    assert row.data["admission"]["ok"] is True
+
+
+def test_gpu_fails_when_the_deficit_is_real_and_blocks_submit(healthy, store, monkeypatch):
+    """The case the old warn-only row let through: a job would be admitted and then OOM."""
+    _low_vram(monkeypatch, free=500, holders=[_holder("mystery", 13000, False)])
+    rep = envcheck.run_checks(profile=profiles.default_profile(), store=store, force=True)
+    row = _by_name(rep)["gpu"]
+    assert row.status == "fail" and not rep.ok
+    assert "short" in row.detail
+    with pytest.raises(envcheck.EnvironmentNotReady):
+        envcheck.gate(profiles.default_profile(), store=store)
+
+
+def test_gpu_is_ok_when_it_simply_fits(healthy, store, monkeypatch):
+    _low_vram(monkeypatch, free=13000, holders=[_holder("gemma", 1838, False)])
+    row = _by_name(envcheck.run_checks(profile=profiles.default_profile(), store=store,
+                                      force=True))["gpu"]
+    assert row.status == "ok"
