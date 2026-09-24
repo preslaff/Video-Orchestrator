@@ -123,6 +123,8 @@ class Clip:
     keyframe_path: str | None = None     # the frame it was animated from (a Variant's path)
     prompt: str = ""                     # the animation prompt this clip was rendered with
     negative: str = ""
+    source: str = "generated"      # "generated" | "user" (a video the user brought to the scene)
+    asset_id: str | None = None    # the project asset behind a user clip
     id: str = field(default_factory=new_version_id)
     created_at: str = ""
     batch: int = 0
@@ -310,6 +312,8 @@ def _clip_to_dict(c: Clip) -> dict:
         "keyframe_path": c.keyframe_path,
         "prompt": c.prompt,
         "negative": c.negative,
+        "source": c.source,
+        "asset_id": c.asset_id,
         "id": c.id,
         "created_at": c.created_at,
         "batch": c.batch,
@@ -326,6 +330,8 @@ def _clip_from_dict(d: dict) -> Clip:
         keyframe_path=d.get("keyframe_path"),
         prompt=d.get("prompt", "") or "",
         negative=d.get("negative", "") or "",
+        source=d.get("source", "generated") or "generated",
+        asset_id=d.get("asset_id"),
         id=d.get("id") or new_version_id(),
         created_at=d.get("created_at", "") or "",
         batch=int(d.get("batch", 0) or 0),

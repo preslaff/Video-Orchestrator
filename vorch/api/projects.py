@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Literal
@@ -217,15 +218,30 @@ async def upload_asset(
     asset is queued for background description and gets a suggested label when Gemma is done."""
     if kind not in ASSET_KINDS:
         raise ApiError(422, "validation_error", f"kind must be one of {ASSET_KINDS}")
-    data = await file.read()
-    if not data:
-        raise ApiError(400, "bad_request", "empty upload")
-    with projects.editing(store, project_id) as p:
-        if p is None:
-            raise ApiError(404, "not_found", f"no such project {project_id!r}")
-        a = projects.add_asset(p, data, kind=kind, name=file.filename or "asset", label=label)
-        _save(store, p)
-    if describer is not None and describer.auto and not a.label:
+    # Clips are far larger than stills, so the upload goes to a temp file and is hashed by
+    # streaming rather than living in memory as bytes and again as a digest input.
+    tmp = Path(tempfile.gettempdir()) / f"vorch-upload-{uuid.uuid4().hex}{Path(file.filename or '').suffix}"
+    size = 0
+    try:
+        with open(tmp, "wb") as out:
+            while chunk := await file.read(1 << 20):
+                size += len(chunk)
+                out.write(chunk)
+        if not size:
+            raise ApiError(400, "bad_request", "empty upload")
+        with projects.editing(store, project_id) as p:
+            if p is None:
+                raise ApiError(404, "not_found", f"no such project {project_id!r}")
+            try:
+                a = projects.add_asset(p, tmp, kind=kind, name=file.filename or "asset", label=label)
+            except ValueError as e:                       # kind does not match the file
+                raise ApiError(400, "bad_request", str(e)) from None
+            _save(store, p)
+    finally:
+        tmp.unlink(missing_ok=True)
+    # A video is described from three sampled frames, which costs about three times an image on
+    # the serial CPU worker — so it waits to be asked for, via the describe button.
+    if describer is not None and describer.auto and not a.label and a.kind != "video":
         describer.enqueue(p.id, [a.id])
     return asset_out(p, a, describer)
 
@@ -269,6 +285,21 @@ async def asset_file(project_id: str, asset_id: str, store: Store = Depends(get_
 _IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}
 
 
+def _poster(path: str) -> str:
+    """The frame a thumbnail should be made from.
+
+    An image is itself. A clip is sampled a little way in: ``downscale`` would otherwise take
+    frame one, which on generated footage is very often black or the start of a fade.
+    """
+    if Path(path).suffix.lower() not in media.VIDEO_EXTS:
+        return path
+    try:
+        frames = media.sample_frames(path, 3)
+    except (media.MediaError, FileNotFoundError, OSError):
+        return path
+    return str(frames[1]) if len(frames) > 1 else (str(frames[0]) if frames else path)
+
+
 @router.get("/{project_id}/assets/{asset_id}/thumb")
 def asset_thumb(project_id: str, asset_id: str, store: Store = Depends(get_store)):
     """A small cached JPEG of the asset for pickers and grids (320 px long side).
@@ -288,7 +319,7 @@ def asset_thumb(project_id: str, asset_id: str, store: Store = Depends(get_store
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_name(f".{dest.stem}.{uuid.uuid4().hex}.jpg")
         try:
-            out = media.downscale(a.path, max_side=projects.THUMB_SIDE, dest=tmp)
+            out = media.downscale(_poster(a.path), max_side=projects.THUMB_SIDE, dest=tmp)
             if out == tmp:
                 os.replace(tmp, dest)
         except (media.MediaError, OSError):
@@ -297,12 +328,16 @@ def asset_thumb(project_id: str, asset_id: str, store: Store = Depends(get_store
             tmp.unlink(missing_ok=True)
     if dest.is_file():
         return FileResponse(dest, media_type="image/jpeg", headers=_IMMUTABLE)
+    # Falling through serves the asset itself, which is right for an image too small to shrink
+    # and very wrong for a clip: it would stream the whole file under an immutable cache.
+    if Path(a.path).suffix.lower() in media.VIDEO_EXTS:
+        raise ApiError(404, "not_found", "no thumbnail for this clip")
     return FileResponse(a.path, filename=a.name, headers=_IMMUTABLE)
 
 
 class AssetPatch(BaseModel):
     label: str | None = None
-    kind: Literal["master_face", "reference", "product", "logo", "other"] | None = None
+    kind: Literal["master_face", "reference", "product", "logo", "other", "video"] | None = None
 
     @model_validator(mode="after")
     def _something(self) -> "AssetPatch":

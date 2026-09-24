@@ -106,6 +106,11 @@ _KIND_FOCUS = {
         "This is a logo or mark. Describe its shapes, colours and any wordmark, and transcribe the text exactly."
     ),
 }
+_KIND_FOCUS["video"] = (
+    "This is a video clip, shown to you as frames sampled in order. Describe what HAPPENS: the "
+    "action or movement, who or what performs it, and how the camera moves. Say it once, for the "
+    "clip as a whole — not frame by frame."
+)
 _KIND_FOCUS["other"] = _KIND_FOCUS["reference"]
 
 

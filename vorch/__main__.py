@@ -904,11 +904,11 @@ def build_parser() -> argparse.ArgumentParser:
     pas = prs.add_parser("add-asset")
     pas.add_argument("slug")
     pas.add_argument("path")
-    pas.add_argument("--kind", default="master_face", choices=["master_face", "reference", "product", "logo", "other"])
+    pas.add_argument("--kind", default="master_face", choices=["master_face", "reference", "product", "logo", "other", "video"])
     pas.add_argument("--label", default=None)
     pla = prs.add_parser("label-assets", help="describe assets with Gemma and propose labels for review")
     pla.add_argument("slug")
-    pla.add_argument("--kind", default=None, choices=["master_face", "reference", "product", "logo", "other"])
+    pla.add_argument("--kind", default=None, choices=["master_face", "reference", "product", "logo", "other", "video"])
     pla.add_argument("--hint", default=None,
                      help="what this collection is, and the tag vocabulary to use (steers `tags`); "
                           "defaults to the project's describe hint")
@@ -920,7 +920,7 @@ def build_parser() -> argparse.ArgumentParser:
     psk = prs.add_parser("set-kind", help="change what an asset is used as; a suggested label is rebuilt")
     psk.add_argument("slug")
     psk.add_argument("asset_id")
-    psk.add_argument("kind", choices=["master_face", "reference", "product", "logo", "other"])
+    psk.add_argument("kind", choices=["master_face", "reference", "product", "logo", "other", "video"])
     psh = prs.add_parser("show")
     psh.add_argument("slug")
     pr.set_defaults(func=_cmd_project)

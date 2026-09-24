@@ -194,3 +194,17 @@ def test_find_asset_by_sha256_matches_the_bytes_already_in_the_project(tmp_path,
     assert projects.file_sha256(src) == a.sha256
     assert projects.find_asset_by_sha256(p, a.sha256) is a
     assert projects.find_asset_by_sha256(p, "0" * 64) is None
+
+
+def test_the_kind_must_match_the_file(tmp_path, monkeypatch):
+    """A clip uploaded as a reference would be handed to image workflows and silently reduced to
+    one frame; an image filed as a clip would break every video path. Refuse both at the door."""
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    p = projects.new_project("Stock")
+    clip = projects.add_asset(p, b"\x00\x00\x00\x18ftypmp42", kind="video", name="drone.mp4")
+    assert clip.kind == "video" and clip.path.endswith(".mp4")
+
+    with pytest.raises(ValueError, match="upload it as kind 'video'"):
+        projects.add_asset(p, b"v", kind="reference", name="stock.mov")
+    with pytest.raises(ValueError, match="needs a video file"):
+        projects.add_asset(p, b"i", kind="video", name="photo.jpg")

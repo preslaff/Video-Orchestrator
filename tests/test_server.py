@@ -1158,3 +1158,34 @@ def test_animate_assets_job_refuses_a_face_swap_and_an_unknown_asset(client, tmp
     body["keyframe_asset_ids"] = [asset.id]
     ok = client.post("/api/jobs", json=body)
     assert ok.status_code == 200 and ok.json()["project_id"] == p.id
+
+
+def test_a_clip_thumbnail_is_a_poster_frame_never_the_clip(client, tmp_path):
+    """`downscale` returns the source untouched when it is already small, and the route then
+    serves it — which for a clip means streaming the whole file under an immutable cache."""
+    import shutil
+    import subprocess
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        import pytest as _pytest
+        _pytest.skip("ffmpeg not installed")
+    from vorch import projects
+
+    p = projects.new_project("Stock")
+    big = tmp_path / "big.mp4"
+    small = tmp_path / "small.mp4"
+    for path, size in ((big, "640x480"), (small, "160x120")):
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        f"testsrc=size={size}:rate=8:duration=1", "-pix_fmt", "yuv420p", str(path)], check=True)
+    a = projects.add_asset(p, big, kind="video", name="big.mp4")
+    b = projects.add_asset(p, small, kind="video", name="small.mp4")
+    projects.save(client.store, p)
+
+    r = client.get(f"/api/projects/{p.id}/assets/{a.id}/thumb")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert r.content[:3] == b"\xff\xd8\xff" and len(r.content) < 200_000
+
+    # Already smaller than a thumbnail: there is nothing to serve, and the clip is not it.
+    r2 = client.get(f"/api/projects/{p.id}/assets/{b.id}/thumb")
+    assert r2.status_code in (200, 404)
+    if r2.status_code == 200:
+        assert r2.headers["content-type"] == "image/jpeg", "never the video itself"

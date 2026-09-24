@@ -540,3 +540,52 @@ describe('GatePanel per-scene edit workflow', () => {
     expect(screen.queryByTestId('edit-workflow-0')).toBeNull()
   })
 })
+
+describe('GatePanel with clips in the project', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const withClip = [...assets, asset('stock', 'video', 'drone over the coast', { name: 'stock.mp4' })]
+  const j = {
+    ...job, face_swap: false, status: 'done', pending_gate: null,
+    scenes: [scene(0, { keyframe_path: '/k0.png', keyframe_url: '/media/k0.png' })],
+  } as unknown as JobPublic
+
+  it('offers a clip as a scene s video and never as an image', async () => {
+    const posts: { url: string; body: Record<string, unknown> }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const body = init?.body ? JSON.parse(String(init.body)) : input instanceof Request ? await input.json() : {}
+      posts.push({ url: new URL(raw, 'http://localhost').pathname, body })
+      return new Response(JSON.stringify(j), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    vi.stubGlobal('confirm', () => true)
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <GatePanel job={j} assets={withClip} /></QueryClientProvider>)
+
+    // The clip is not an image: it must not be offered where a keyframe is expected.
+    await user.click(screen.getByTestId('use-image-0'))
+    expect(screen.queryByTestId('keyframe-image-0-stock')).toBeNull()
+    expect(screen.getByTestId('keyframe-image-0-room')).toBeInTheDocument()
+    await user.click(screen.getByTestId('use-image-0'))
+
+    await user.click(screen.getByTestId('use-video-0'))
+    await user.click(screen.getByTestId('scene-video-0-stock'))
+    await waitFor(() => expect(posts.some((p) => p.url.endsWith('/scenes/0/regenerate'))).toBe(true))
+    expect(posts.find((p) => p.url.endsWith('/scenes/0/regenerate'))!.body)
+      .toMatchObject({ what: 'video', clip_asset_id: 'stock' })
+  })
+
+  it('offers the control only when the project actually has a clip', () => {
+    const only = (as: AssetOut[]) => {
+      const { unmount } = render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <GatePanel job={j} assets={as} /></QueryClientProvider>)
+      const there = !!screen.queryByTestId('use-video-0')
+      unmount()
+      return there
+    }
+    expect(only(withClip)).toBe(true)
+    expect(only(assets)).toBe(false)     // images only: nothing to offer
+  })
+})

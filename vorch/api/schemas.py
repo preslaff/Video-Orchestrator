@@ -109,6 +109,9 @@ class SceneRegenerate(BaseModel):
     apply_suggestion: bool = False   # append the evaluator's last fix suggestion to the keyframe prompt
     # Use this project asset as the keyframe instead of generating one (what="keyframe").
     keyframe_asset_id: str | None = None
+    # Use this project VIDEO as the scene's clip instead of animating one (what="video"): it is
+    # conformed to the job's size and fps, and the scene's keyframe becomes its first frame.
+    clip_asset_id: str | None = None
 
 
 # --- responses ---------------------------------------------------------------

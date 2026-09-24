@@ -882,3 +882,70 @@ def test_an_unknown_asset_stops_the_job_before_it_renders(wired, tmp_path, monke
                        keyframe_asset_ids=["ghost"])
     with pytest.raises(ValueError, match="unknown project asset"):
         o.run(job)
+
+
+# --- an outside clip as a scene's video ---------------------------------------------------
+
+
+def _video_project(store, tmp_path, monkeypatch, *, secs=3, size="320x240", rate=30):
+    """A project holding one real clip, at a format deliberately unlike the job's."""
+    import shutil
+    import subprocess
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        pytest.skip("ffmpeg not installed")
+    from vorch import config, projects
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    monkeypatch.setattr(config, "COMFY_OUTPUT", tmp_path / "out")
+    src = tmp_path / "stock.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    f"testsrc=size={size}:rate={rate}:duration={secs}", "-pix_fmt", "yuv420p", str(src)], check=True)
+    p = projects.new_project("Stock")
+    asset = projects.add_asset(p, src, kind="video", name="stock.mp4")
+    projects.save(store, p)
+    return p, asset
+
+
+def test_an_outside_clip_becomes_a_scene_s_video_in_the_job_s_format(wired, tmp_path, monkeypatch):
+    """The point of the whole feature: a clip made elsewhere joins a timeline beside a rendered
+    scene, which means it has to arrive at the job's own size and rate."""
+    from vorch import media
+    from vorch.genparams import GenParams
+    from vorch.state import SceneStatus
+
+    store, _master, calls = wired
+    project, asset = _video_project(store, tmp_path, monkeypatch)
+    params = GenParams(aspect="16:9", keyframe_size=(832, 480), wan_size=(832, 480), fps=16,
+                       face_swap=False, evaluate=False)
+    o = Orchestrator(store, params=params, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full", project_id=project.id)
+    o.run(job)
+    scene = job.scenes[0]
+    before = calls["animate"]
+
+    o.reopen_scene(job, 0, what="video", edits={"clip_asset_id": asset.id})
+
+    info = media.probe(scene.video_path)
+    assert (info.width, info.height) == (832, 480), "conformed to the job's size"
+    assert info.fps == pytest.approx(16, abs=0.1), "and to its rate"
+    assert scene.status is SceneStatus.COMPLETE and calls["animate"] == before, "nothing re-rendered"
+    clip = next(c for c in scene.clips if c.video_path == scene.video_path)
+    assert (clip.source, clip.asset_id) == ("user", asset.id)
+    # A poster, so the gate and the export behave like any other scene.
+    assert scene.keyframe_path and Path(scene.keyframe_path).is_file()
+    assert any(v.source == "user" and v.path == scene.keyframe_path for v in scene.variants)
+
+
+def test_an_image_is_not_a_clip_and_a_clip_is_not_a_keyframe(wired, tmp_path, monkeypatch):
+    from vorch import projects
+    store, _master, _ = wired
+    project, video = _video_project(store, tmp_path, monkeypatch)
+    still = projects.add_asset(project, b"\xff\xd8\xff", kind="reference", name="photo.jpg")
+    projects.save(store, project)
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="semi", project_id=project.id)
+    o.run(job)
+
+    with pytest.raises(ValueError, match="not a clip"):
+        o.install_user_clip(job, job.scenes[0], still.id)
+    with pytest.raises(ValueError, match="is a clip"):
+        o._install_user_keyframe(job, job.scenes[0], video.id)

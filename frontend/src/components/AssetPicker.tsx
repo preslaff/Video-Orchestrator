@@ -132,7 +132,7 @@ export function AssetPicker({
           {shown.map((a, i) => tile(a, i, shown))}
           {onUpload && (
             <label className={`flex aspect-square cursor-pointer flex-col items-center justify-center rounded border border-dashed text-xs ${disabled || uploading ? 'border-neutral-200 text-neutral-400' : 'border-neutral-400 text-neutral-600 hover:border-neutral-700'}`}
-              title="add an image from your computer to the project">
+              title="add a file from your computer to the project">
               <span className="text-lg leading-none">+</span>
               {uploading ? 'Uploading…' : 'Upload…'}
               <input type="file" accept="image/*" className="sr-only" disabled={disabled || uploading} data-testid={sid('upload')}

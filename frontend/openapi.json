@@ -3225,7 +3225,8 @@
                   "reference",
                   "product",
                   "logo",
-                  "other"
+                  "other",
+                  "video"
                 ]
               },
               {
@@ -5474,6 +5475,17 @@
               }
             ],
             "title": "Keyframe Asset Id"
+          },
+          "clip_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clip Asset Id"
           }
         },
         "type": "object",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterAssets, matchesQuery, topTags } from './assetFilter'
+import { filterAssets, matchesQuery, topTags, isImageAsset, isVideoAsset } from './assetFilter'
 import type { AssetOut } from '@/api/types'
 
 const a = (id: string, extra: Partial<AssetOut>): AssetOut => ({
@@ -28,4 +28,13 @@ describe('asset search', () => {
   it('ranks tags by how many assets carry them, dropping one-offs', () => {
     expect(topTags([plaque, lamp, tower, a('t2', { note_tags: ['lighthouse'] })])).toEqual(['interior', 'lighthouse'])
   })
+})
+
+it('separates clips from images, by allow-list not deny-list', () => {
+  // The old rule was `kind !== 'master_face'`, which offered anything new everywhere.
+  const img = { kind: 'reference' }
+  const face = { kind: 'master_face' }
+  const clip = { kind: 'video' }
+  expect([img, face, clip].filter(isImageAsset).map((x) => x.kind)).toEqual(['reference', 'master_face'])
+  expect([img, face, clip].filter(isVideoAsset).map((x) => x.kind)).toEqual(['video'])
 })

@@ -207,3 +207,28 @@ def test_describe_endpoint_picks_unlabelled_by_default_and_suggestions_with_forc
     r = client.post(f"/api/projects/{pid}/assets/describe", json={"asset_ids": [auto.id, human.id], "force": True})
     assert r.json() == {"queued": 1}  # the human label is never redone
     assert client.post(f"/api/projects/{pid}/assets/describe", json={"asset_ids": ["nope"]}).status_code == 404
+
+
+def test_a_video_upload_waits_to_be_asked(make_store, tmp_path, monkeypatch):
+    """Three sampled frames cost about three times an image on the one serial CPU worker, so a
+    clip is not captioned the moment it lands — the describe button still works."""
+    from fastapi.testclient import TestClient
+
+    from vorch.api import create_app
+    from vorch.describer import AssetDescriber
+    from vorch.queue import JobManager
+
+    monkeypatch.setattr(config, "PROJECTS_ROOT", tmp_path / "projects")
+    store = make_store()
+    p = projects.new_project("Stock")
+    projects.save(store, p)
+    describer = AssetDescriber(store, describe=lambda *a, **k: None, auto=True)
+    app = create_app(store=store, manager=JobManager(store, auto_export=False), describer=describer)
+    with TestClient(app) as c:
+        img = c.post(f"/api/projects/{p.id}/assets",
+                     files={"file": ("a.jpg", b"\xff\xd8\xff", "image/jpeg")}, data={"kind": "reference"})
+        vid = c.post(f"/api/projects/{p.id}/assets",
+                     files={"file": ("b.mp4", b"\x00\x00\x00\x18ftypmp42", "video/mp4")}, data={"kind": "video"})
+    assert img.status_code == 201 and vid.status_code == 201
+    assert img.json()["describe_state"] == "queued"
+    assert vid.json()["describe_state"] == "", "a clip is not queued on upload"

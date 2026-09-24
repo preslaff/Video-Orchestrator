@@ -7,10 +7,10 @@ import { errorMessage } from '@/api/client'
 import { useDeleteAsset, useDeleteProject, useDescribeAssets, useProfiles, useProject, useUpdateAsset, useUpdateProject, useUploadAsset } from '@/hooks/useSetup'
 import { useJobs } from '@/hooks/useJobs'
 import { Button, Card, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '@/components/ui'
-import { filterAssets } from '@/lib/assetFilter'
+import { filterAssets, isVideoAsset } from '@/lib/assetFilter'
 import { Zoomable } from '@/components/Lightbox'
 
-const KINDS = ['master_face', 'reference', 'product', 'logo', 'other'] as const
+const KINDS = ['master_face', 'reference', 'product', 'logo', 'other', 'video'] as const
 type Kind = (typeof KINDS)[number]
 const PAGE = 48
 
@@ -29,6 +29,14 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
   const [kind, setKind] = useState<string>('master_face')
   const [label, setLabel] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  /** The server refuses a clip filed as an image and vice versa, so choose the kind from the
+   *  file rather than letting someone discover the rule through an error. */
+  const chooseFile = (f: File | null) => {
+    setFile(f)
+    if (!f) return
+    const isVideo = f.type.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(f.name)
+    setKind(isVideo ? 'video' : (kind === 'video' ? 'reference' : kind))
+  }
   const [query, setQuery] = useState('')
   const [unreviewed, setUnreviewed] = useState(false)
   const [limit, setLimit] = useState(PAGE)
@@ -67,7 +75,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
         </Card>
         <Card title={`Assets (${p.assets.length})`}>
           <form className="mb-3 grid gap-2 rounded border border-neutral-200 p-2 sm:grid-cols-[1fr_auto_auto_auto]" onSubmit={(e) => { e.preventDefault(); if (file) upload.mutate({ file, kind, label }, { onSuccess: () => { setFile(null); setLabel('') } }) }}>
-            <input type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-sm" />
+            <input type="file" accept="image/*,video/*" onChange={(e) => chooseFile(e.target.files?.[0] ?? null)} className="text-sm" />
             <select value={kind} onChange={(e) => setKind(e.target.value)} className="rounded border border-neutral-300 bg-white px-2 py-1 text-sm">{KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</select>
             <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label" className="rounded border border-neutral-300 px-2 py-1 text-sm" />
             <Button type="submit" variant="primary" disabled={!file || upload.isPending}>{upload.isPending ? 'Uploading…' : 'Upload'}</Button>
@@ -98,10 +106,16 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
             {visible.slice(0, limit).map((a, i) => (
               <div key={a.id} className="rounded border border-neutral-200 p-1">
                 {/* click: the original, large; ← / → through every asset the filter shows */}
-                <Zoomable items={visible.map((x) => ({ url: x.url, caption: [x.label || x.name, x.note_caption].filter(Boolean).join(' — ') }))}
-                  index={i} className="w-full" testId={`asset-zoom-${a.id}`}>
+                <Zoomable items={visible.map((x) => ({ url: x.url, video: isVideoAsset(x), caption: [x.label || x.name, x.note_caption].filter(Boolean).join(' — ') }))}
+                  index={i} className="relative block w-full" testId={`asset-zoom-${a.id}`}>
+                  {/* A clip shows its poster frame; the lightbox opens it as a player. A <video>
+                      cannot live here — the tile is a button. */}
                   {/* eslint-disable-next-line @next/next/no-img-element -- served by FastAPI */}
                   <img src={a.thumb_url || a.url} alt={a.name} loading="lazy" className="aspect-square w-full rounded object-cover" />
+                  {isVideoAsset(a) && (
+                    <span data-testid={`asset-clip-${a.id}`}
+                      className="absolute bottom-1 left-1 rounded bg-black/70 px-1 text-[10px] text-white">▶ clip</span>
+                  )}
                 </Zoomable>
                 <div className="mt-1 flex items-center justify-between gap-1 text-xs">
                   <span className="min-w-0">

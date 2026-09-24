@@ -247,7 +247,7 @@ export function useUploadAsset(projectId: string) {
   })
 }
 
-type AssetKind = 'master_face' | 'reference' | 'product' | 'logo' | 'other'
+type AssetKind = 'master_face' | 'reference' | 'product' | 'logo' | 'other' | 'video'
 
 /** Change an asset's label (it becomes a person's) and/or its kind (a suggested label is rebuilt). */
 export function useUpdateAsset(projectId: string) {

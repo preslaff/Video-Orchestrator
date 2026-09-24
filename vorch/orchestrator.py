@@ -29,7 +29,7 @@ import requests
 
 from . import cancel, config, formats, media, pipeline, profiles, provenance, storyboard
 from . import projects as projects_mod
-from . import scene_assets
+from . import scene_assets, versions
 from .clients import gemma as gemma_client
 from .genparams import DEFAULT, GenParams
 from .steps.edit import reference_slots
@@ -295,6 +295,7 @@ class Orchestrator:
             project = projects_mod.load(self.store, job.project_id) if job.project_id else None
             asset_changes = scene_assets.apply_asset_edits(scene, edits or {}, project)
         user_asset = (edits or {}).get("keyframe_asset_id") if what == "keyframe" else None
+        user_clip = (edits or {}).get("clip_asset_id") if what == "video" else None
         applied = ""
         if what == "keyframe" and edits and edits.get("apply_suggestion"):
             fix = self.last_fix_suggestion(job, scene)
@@ -329,6 +330,12 @@ class Orchestrator:
         if what == "video":
             scene.swapped_path = None   # the swap is part of the video phase: redo it with the current identity
             scene.swap_verdict = None
+            if user_clip:
+                # An outside clip replaces the render outright: nothing to animate afterwards.
+                scene.regenerations += 1
+                self.install_user_clip(job, scene, user_clip)
+                self.store.save_job(job)
+                return scene
         scene.video_path = None      # the clip projection; scene.clips keeps every rendered clip
         scene.raw_video_path = None
         scene.video_verdict = None
@@ -380,6 +387,9 @@ class Orchestrator:
         asset = project.asset(asset_id) if project is not None else None
         if asset is None:
             raise ValueError(f"unknown project asset {asset_id!r}")
+        if asset.kind == "video":
+            # fit_image would happily write frame one and call it a keyframe. Say so instead.
+            raise ValueError(f"{asset.label or asset.name} is a clip: use it as the scene's video, not its keyframe")
         dest = config.COMFY_OUTPUT / f"{output_prefix(job, scene.index, 'keyframe')}_user_{scene.regenerations + 1}.png"
         dest.parent.mkdir(parents=True, exist_ok=True)
         path = media.fit_image(asset.path, *self.install_size(), dest)
@@ -388,6 +398,58 @@ class Orchestrator:
                                   {"job_id": job.id, "scene": scene.index, "kind": "user_keyframe"})
         log.info("job %s: scene %d keyframe <- %s", job.id, scene.index, asset.label or asset.name)
         return path, asset
+
+    def install_user_clip(self, job: Job, scene: Scene, asset_id: str) -> Clip:
+        """Make a project video this scene's clip, conformed to the job's format.
+
+        The mirror of ``_install_user_keyframe``. An outside clip arrives at whatever size and
+        rate it was made at, so it is run through ``media.assemble`` — whose per-input
+        normalisation already scales, pads and resamples — and comes out as the job's own format,
+        able to sit in a timeline beside a rendered scene.
+
+        The scene also gets a keyframe from the clip's first frame, so the gate has a poster, the
+        export has its ``sNN_keyframe.png`` and nothing downstream has to learn that some scenes
+        have no generated frame.
+        """
+        project = projects_mod.load(self.store, job.project_id) if job.project_id else None
+        asset = project.asset(asset_id) if project is not None else None
+        if asset is None:
+            raise ValueError(f"unknown project asset {asset_id!r}")
+        if asset.kind != "video":
+            raise ValueError(f"{asset.label or asset.name} is not a clip: pick a video asset")
+        if not Path(asset.path).is_file():
+            raise ValueError(f"{asset.label or asset.name}: the file is missing on disk")
+
+        dest = config.COMFY_OUTPUT / f"{output_prefix(job, scene.index, 'clip')}_user_{scene.regenerations + 1}.mp4"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        width, height = self.params.wan_size
+        media.assemble([Path(asset.path)], [], dest, fps=self.params.fps, size=(width, height), audio=True)
+        provenance.write_manifest(dest, "user_clip", {"asset_id": asset_id, "source": asset.path,
+                                                      "fps": self.params.fps, "size": [width, height]},
+                                  {"job_id": job.id, "scene": scene.index, "kind": "user_clip"})
+
+        # A poster for the gate: the first frame of what will actually play.
+        frames = media.sample_frames(dest, 1, dest_dir=dest.parent)
+        if frames:
+            kf = dest.with_name(f"{dest.stem}_frame.png")
+            media.fit_image(frames[0], *self.install_size(), kf)
+            frames[0].unlink(missing_ok=True)
+            scene.variants.append(Variant(path=str(kf), source="user", asset_id=asset_id,
+                                          created_at=_now(), batch=scene.regenerations))
+            scene.keyframe_path = str(kf)
+
+        clip = Clip(video_path=str(dest), source="user", asset_id=asset_id, created_at=_now(),
+                    batch=scene.regenerations, keyframe_path=scene.keyframe_path)
+        scene.clips.append(clip)
+        versions.select_clip(scene, clip)
+        scene.status = SceneStatus.COMPLETE      # there is nothing left to render for this scene
+        job.export = None
+        self.store.log_decision(Decision(
+            job_id=job.id, scene_index=scene.index, phase="video", attempt=1, action="user_clip",
+            reason=f"clip: {asset.label or asset.name}",
+        ))
+        log.info("job %s: scene %d clip <- %s", job.id, scene.index, asset.label or asset.name)
+        return clip
 
     def last_fix_suggestion(self, job: Job, scene: Scene) -> str:
         """The evaluator's most recent fix suggestion for a scene: the stored verdict,

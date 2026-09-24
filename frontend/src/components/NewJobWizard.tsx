@@ -11,6 +11,7 @@ import { EnvSummary } from '@/components/EnvSummary'
 import { ZoomButton, Zoomable } from '@/components/Lightbox'
 import { Button, Card, ErrorBox } from '@/components/ui'
 import { ASPECTS, SIZE_MULTIPLE, clipSeconds, clipSize, snapLength, snapSize, stillSize, type Aspect } from '@/lib/wan'
+import { isImageAsset } from '@/lib/assetFilter'
 import { estimateClip, fmtDuration, fmtRange, vramWarning } from '@/lib/render'
 
 const STEPS = ['Project', 'Profile', 'Brief', 'Review'] as const
@@ -142,7 +143,9 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
 
   const masterAsset = project.data?.assets.find((a) => a.kind === 'master_face')
   const swapOn = faceSwap === 'on' || (faceSwap === 'profile' && !!profile?.face_swap?.enabled)
-  const refAssets = project.data?.assets.filter((a) => a.kind !== 'master_face') ?? []
+  // Animating a clip is meaningless, and a clip in the reference grid would render as a
+  // broken image: this picker is images only.
+  const refAssets = project.data?.assets.filter((a) => a.kind !== 'master_face' && isImageAsset(a)) ?? []
 
   // Which of the picked images would lose pixels to the still's centre crop.
   const picked = animateIds.map((id) => refAssets.find((a) => a.id === id)).filter(Boolean) as typeof refAssets

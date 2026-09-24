@@ -29,3 +29,20 @@ export function topTags(assets: AssetOut[], n = 8): string[] {
     .slice(0, n)
     .map(([t]) => t)
 }
+
+
+/**
+ * Is this asset an image?
+ *
+ * Every picker that feeds an image-only path — references, the keyframe replacement, "Animate my
+ * images" — used to say `kind !== 'master_face'`, which is a deny-list: the day a kind that is
+ * not an image appeared, it was offered everywhere. This is the allow-list.
+ */
+export function isImageAsset(a: { kind: string }): boolean {
+  return a.kind !== 'video'
+}
+
+/** Is this asset a clip? */
+export function isVideoAsset(a: { kind: string }): boolean {
+  return a.kind === 'video'
+}

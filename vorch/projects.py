@@ -22,10 +22,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from . import config
+from . import config, media
 
-AssetKind = Literal["master_face", "reference", "product", "logo", "other"]
-ASSET_KINDS = ("master_face", "reference", "product", "logo", "other")
+# "video" is an asset that IS a clip — stock footage, a logo sting, a driving video for motion
+# transfer. Note the collision with `Job.kind == "video"`, which means something else entirely
+# (a job that produces clips, as opposed to stills).
+#
+# It is a kind rather than a flag on an image asset for one reason: every filter that offers
+# assets to an image-only path is an allow-list of the four kinds below (orchestrator's
+# storyboard catalogue, queue's per-scene prompts), so a new kind is excluded from all of them
+# without an edit. A `media: video` on `kind: reference` would pass every one of them.
+AssetKind = Literal["master_face", "reference", "product", "logo", "other", "video"]
+ASSET_KINDS = ("master_face", "reference", "product", "logo", "other", "video")
+IMAGE_KINDS = ("master_face", "reference", "product", "logo", "other")
 
 _CYRILLIC = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ж": "zh", "з": "z", "и": "i",
@@ -220,6 +229,11 @@ def add_asset(
         raise ValueError(f"asset kind must be one of {ASSET_KINDS}, got {kind!r}")
     safe = slugify(Path(name).stem, max_len=40) or "asset"
     suffix = Path(name).suffix.lower()
+    is_video = suffix in media.VIDEO_EXTS
+    if is_video and kind != "video":
+        raise ValueError(f"{name} is a video: upload it as kind 'video', not {kind!r}")
+    if kind == "video" and not is_video:
+        raise ValueError(f"kind 'video' needs a video file ({', '.join(media.VIDEO_EXTS)}), got {name!r}")
     aid = uuid.uuid4().hex[:12]
     dest_dir = project_dir(project) / "assets"
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -231,7 +245,7 @@ def add_asset(
         if not src.is_file():
             raise FileNotFoundError(f"asset source not found: {src}")
         shutil.copy2(src, dest)
-    digest = hashlib.sha256(dest.read_bytes()).hexdigest()
+    digest = file_sha256(dest)
     # A label given at upload was written by a person: the describer must not replace it.
     asset = Asset(id=aid, kind=kind, name=Path(name).name, path=str(dest), label=label.strip(),
                   sha256=digest, created_at=_now(), label_source="human" if label.strip() else "")

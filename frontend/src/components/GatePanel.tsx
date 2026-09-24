@@ -9,6 +9,7 @@ import { MediaThumb } from '@/components/MediaThumb'
 import { LockRegions } from '@/components/LockRegions'
 import { VersionStrip } from '@/components/VersionStrip'
 import { profileSizes } from '@/components/SceneGrid'
+import { isImageAsset, isVideoAsset } from '@/lib/assetFilter'
 import { estimateClip, fmtRange } from '@/lib/render'
 import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneLocks, useSceneStructure, useUpdateScenes } from '@/hooks/useJobs'
 import { useUploadAsset, useWorkflows } from '@/hooks/useSetup'
@@ -16,7 +17,7 @@ import { Button, ErrorBox } from '@/components/ui'
 
 type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; edit_workflow: string; edit_base: '' | 'keyframe'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null }
 
-type PickerKind = 'refs' | 'identity' | 'image' | 'locks'
+type PickerKind = 'refs' | 'identity' | 'image' | 'locks' | 'video'
 
 /** Above this many scenes the rows start collapsed (a 3-scene job stays as it was). */
 const AUTO_COLLAPSE_ABOVE = 6
@@ -239,7 +240,8 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   const busy = update.isPending || approve.isPending || regen.isPending || upload.isPending || removeVersion.isPending || saveAsset.isPending
   const slots = job.edit_reference_slots ?? 0
   const faces = assets.filter((a) => a.kind === 'master_face')
-  const refAssets = assets.filter((a) => a.kind !== 'master_face')
+  const refAssets = assets.filter((a) => a.kind !== 'master_face' && isImageAsset(a))
+  const videoAssets = assets.filter(isVideoAsset)
   /** identity edits (asset id, '' = none) only when the project has faces; else leave untouched */
   const identityEdit = (d: Draft): string | null => (faces.length ? (d.identity_asset_id ?? '') : null)
   // A job in a project picks references as assets (and can upload new ones); otherwise as file paths.
@@ -333,6 +335,15 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
     setOpenPicker(null)
     regen.mutate({ index, body: { what: 'keyframe', keyframe_asset_id: assetId, apply_suggestion: false } },
       { onSuccess: () => onStarted?.() })
+  }
+
+  const chooseVideo = (index: number, assetId: string) => {
+    const a = assets.find((x) => x.id === assetId)
+    const label = a ? (a.label || a.name) : 'the clip'
+    if (!confirm(`Use “${label}” as the clip of scene ${index + 1}?\n\nIt is conformed to the job's `
+      + `size and fps, and this scene's keyframe becomes its first frame. Any rendered clip stays in the history.`)) return
+    setOpenPicker(null)
+    regen.mutate({ index, body: { what: 'video', clip_asset_id: assetId, apply_suggestion: false } }, { onSuccess: () => onStarted?.() })
   }
 
   /** Evaluator fix suggestions for a scene: every logged retry + the stored verdict, newest first. */
@@ -686,6 +697,16 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                           {s.video_path ? 'Re-animate this scene' : 'Animate this scene'}
                         </Button>
                       )}
+                      {job.project_id && videoAssets.length > 0 && (
+                        // A clip made elsewhere becomes this scene's video, conformed to the
+                        // job's size and fps. Nothing downstream can tell the difference.
+                        <button type="button" disabled={busy} data-testid={`use-video-${s.index}`}
+                          className="text-xs text-neutral-700 underline-offset-2 hover:underline disabled:opacity-50"
+                          title="use a video from the project as this scene's clip, instead of animating one"
+                          onClick={() => togglePicker(s.index, 'video')}>
+                          {isOpen(s.index, 'video') ? 'Cancel' : 'Use my video…'}
+                        </button>
+                      )}
                       {s.keyframe_url && (
                         // A label the animator redraws comes back as a smear: mark it once and
                         // those pixels are taken from the keyframe instead. No re-render needed.
@@ -715,6 +736,16 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                   </div>
                 )}
               </div>
+              {isOpen(s.index, 'video') && (
+                <div>
+                  <span className="text-xs text-neutral-500">
+                    pick a clip from the project — it becomes this scene&apos;s video, conformed to the job&apos;s
+                    size and fps (nothing is generated, nothing is evaluated)
+                  </span>
+                  <AssetPicker assets={videoAssets} selected={[]} disabled={busy} testId={`scene-video-${s.index}`}
+                    onChange={(ids) => ids[0] && chooseVideo(s.index, ids[0])} />
+                </div>
+              )}
               {/* Full width: marking a label wants the frame as large as the row allows. */}
               {isOpen(s.index, 'locks') && s.keyframe_url && (
                 <LockRegions url={s.swapped_url ?? s.keyframe_url} regions={s.locked_regions ?? []}
@@ -727,7 +758,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
               {isOpen(s.index, 'image') && (
                 <div>
                   <span className="text-xs text-neutral-500">pick a project image or upload one — it replaces the keyframe (not generated, not evaluated)</span>
-                  <AssetPicker assets={assets} selected={[]} disabled={busy} testId={`keyframe-image-${s.index}`}
+                  <AssetPicker assets={assets.filter(isImageAsset)} selected={[]} disabled={busy} testId={`keyframe-image-${s.index}`}
                     onChange={(ids) => ids[0] && chooseImage(s.index, ids[0])}
                     onUpload={(f) => uploadThen(f, (id) => chooseImage(s.index, id))} uploading={upload.isPending} />
                 </div>

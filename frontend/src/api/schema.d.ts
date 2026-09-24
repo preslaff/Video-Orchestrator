@@ -1115,7 +1115,7 @@ export interface components {
             /** Label */
             label?: string | null;
             /** Kind */
-            kind?: ("master_face" | "reference" | "product" | "logo" | "other") | null;
+            kind?: ("master_face" | "reference" | "product" | "logo" | "other" | "video") | null;
         };
         /** Body_upload_asset_api_projects__project_id__assets_post */
         Body_upload_asset_api_projects__project_id__assets_post: {
@@ -2068,6 +2068,8 @@ export interface components {
             apply_suggestion: boolean;
             /** Keyframe Asset Id */
             keyframe_asset_id?: string | null;
+            /** Clip Asset Id */
+            clip_asset_id?: string | null;
         };
         /** StillsSettings */
         StillsSettings: {
