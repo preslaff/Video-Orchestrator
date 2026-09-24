@@ -139,6 +139,13 @@ VRAM_SETTLE_SEC = float(os.environ.get("VORCH_VRAM_SETTLE_SEC", "3"))
 # (`vorch db init` creates it). Tests use VORCH_TEST_DATABASE_URL (tests/conftest.py).
 DATABASE_URL = os.environ.get("VORCH_DATABASE_URL", "postgresql:///vorch")
 
+# Service manifest: what must be running, what it costs the card, and who may start it.
+# Built-in defaults in vorch/services_builtin/services.yaml; this file overrides them per
+# service, key by key. Missing file = built-ins only. See docs/services.md.
+SERVICES_FILE = Path(os.environ.get("VORCH_SERVICES_FILE", "~/vorch/services.yaml")).expanduser()
+# Where `vorch serve` answers, for the manifest's own health probe of the API.
+API_URL = os.environ.get("VORCH_API_URL", "http://127.0.0.1:8000")
+
 # --- Runtime state and logs ---------------------------------------------------
 # Pidfiles for supervised services (so an orphan survives a hard kill and can be found again)
 # and per-service log files. Both live under ~/vorch/, beside backends.yaml and vorch.env.

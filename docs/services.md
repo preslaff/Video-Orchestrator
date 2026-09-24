@@ -67,7 +67,98 @@ these in a terminal.
 
 ## 3. Reading the Services panel — *planned*
 
-## 4. The manifest — *planned*
+## 4. The manifest
+
+The list of services is data, not code: `vorch/services_builtin/services.yaml` ships the defaults
+and `~/vorch/services.yaml` (`VORCH_SERVICES_FILE`) overrides them. Read what vorch currently
+believes with:
+
+```bash
+python -m vorch services list          # human, with the command for each service
+python -m vorch services list --json   # resolved argv, env, matchers, health URLs
+```
+
+**Overrides merge, they do not replace.** A user entry is merged over the built-in one key by key,
+one nested mapping deep, so changing one field never means restating an entry:
+
+```yaml
+# ~/vorch/services.yaml — everything else about tts keeps its built-in value
+services:
+  tts:
+    idle_timeout: 120          # stop the narration server after 2 minutes idle, not 10
+```
+
+Two conveniences in values:
+
+- **`${VORCH_X}`** resolves from the environment and falls back to `config.X`. So the manifest
+  follows whatever you already set in `~/vorch/vorch.env` and holds no second copy of a URL. A
+  name without the `VORCH_` prefix resolves from the environment only, and an unresolvable one is
+  an error naming the variable.
+- **`@file:PATH`** inlines a file's stripped contents, resolved relative to the service's `cwd`.
+  Used for OmniVoice's reference transcript, which has to be passed verbatim. It is read late, so
+  a missing file is a clear start-time error rather than an import-time crash.
+
+### The fields that carry weight
+
+| field | values | what it decides |
+|---|---|---|
+| `manage` | `never` · `adopt` · `full` | `never` = probe and print `hint` (postgres). `adopt` = report, never spawn (the UI). `full` = vorch may start and stop it. |
+| `vram.class` | `none` · `resident` · `elastic` · `exclusive` | `resident` is a fixed tax that is never evictable (gemma). `elastic` can be freed *without stopping the process*, via `free_endpoint` (comfy's `/free`). `exclusive` means its presence forbids any other heavy step (tts). |
+| `vram.holds_mb` | a **measured** number | What it actually costs at rest. The manifest is where measurements live, which is why the docstrings no longer carry them. |
+| `vram.needs_mb` | a number | What it wants when fully loaded — what admission is checked against. |
+| `lifetime` | `long` · `warm` · `phase` | `warm` is kept alive for `idle_timeout` and then reaped, but only ever a server vorch itself started. `warm` without an `idle_timeout` is rejected, because that is just "left running" — the bug, not the feature. |
+| `adopt.verify` | `port` · `argv` · `env` | How hard we check that a running instance is the one we wanted. `env` reads `/proc/<pid>/environ`. |
+| `adopt.on_unverified` | `warn` · `refuse` · `adopt` | What to do when identity cannot be read. Defaults to `warn` so a hand-started server is never blocked by our inability to inspect it. |
+| `evict_adopted` | bool | May the arbiter stop this when it was started outside vorch? `false` makes it refuse the render instead and tell you which command frees the card. |
+| `match` | `cmdline_contains`, `cwd` | How to recognise the process. |
+
+### Why `match` exists, and when you need it
+
+A launcher usually does not survive its own launch. `serve_bg.sh` **execs** into
+`python -m omnivoice.cli.serve`; `comfy launch` **forks** `python main.py` and that *grandchild*
+is what holds the VRAM; `npm run dev` becomes `next-server`. In every one of those cases nothing
+of the original `argv` is left in the process that is actually running, so the derived fallback
+(the executable's own name plus the `cwd`) cannot find it and the built-ins pin `match:`
+explicitly. Gemma is a subtler case: its `argv` ends in `--port 8080`, so a naive "last token"
+needle would be `8080`.
+
+**If a service is running but vorch reports it as down, `match` is the field to look at.** Compare
+what the manifest expects against reality:
+
+```bash
+python -m vorch services list --json | grep -A3 '"match"'
+tr '\0' ' ' < /proc/<pid>/cmdline; readlink /proc/<pid>/cwd
+```
+
+### Worked example: a second voice
+
+Point `tts` at a different reference clip and transcript. Because `${VORCH_*}` falls back to
+config, the tidiest way is `~/vorch/vorch.env`:
+
+```bash
+# ~/vorch/vorch.env
+VORCH_TTS_REF_AUDIO=Georgi/14s.wav
+VORCH_TTS_REF_TEXT_FILE=Georgi/14s.txt
+```
+
+Nothing in `services.yaml` needs to change, and `vorch services list` will show the new values —
+which is also how you confirm the transcript was found before a run depends on it.
+
+To move ComfyUI to another checkout, override the paths instead:
+
+```yaml
+services:
+  comfy:
+    cwd: ~/comfy/ComfyUI-test
+    argv: [~/comfy/ComfyUI-test/venv/bin/python, main.py, --port, "8188"]
+    match: {cmdline_contains: ["main.py"], cwd: ~/comfy/ComfyUI-test}
+```
+
+> **The numbers in this file are measurements.** If you change a model, a quantisation or a
+> resolution, re-measure with `nvidia-smi --query-compute-apps=pid,used_memory --format=csv` and
+> update `holds_mb` / `needs_mb`. Do not guess — a wrong figure here makes the arbiter either
+> refuse work that would have fit or admit work that OOMs.
+
 
 ## 5. How arbitration decides — *planned*
 

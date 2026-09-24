@@ -92,6 +92,10 @@ async def effective_config(store: Store = Depends(get_store)) -> dict:
         "backends_file": str(config.BACKENDS_FILE),
         "backends": known,  # never carries auth headers
         "backends_error": backends_error,
+        "tts_url": config.TTS_URL,
+        "services_file": str(config.SERVICES_FILE),
+        "run_dir": str(config.RUN_DIR),
+        "log_dir": str(config.LOG_DIR),
         "started_at": datetime.fromtimestamp(_STARTED_AT, timezone.utc).isoformat(),
         "code_changed_since_start": _code_changed_since_start(),
     }

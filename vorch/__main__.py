@@ -661,6 +661,50 @@ def _cmd_assemble(args) -> int:
         store.close()
 
 
+def _cmd_services(args) -> int:
+    """The manifest as parsed, with the command you could run by hand."""
+    from . import services
+
+    specs = services.load(force=True)
+    if args.services_command == "list":
+        if args.json:
+            json.dump({"services_file": str(config.SERVICES_FILE),
+                       "order": services.order(specs),
+                       "services": [s.to_dict(resolve=True) for s in specs.values()]},
+                      sys.stdout, indent=2, ensure_ascii=False)
+            sys.stdout.write("\n")
+            return 0
+        print(f"manifest: {services.BUILTIN_FILE}")
+        print(f"user overrides: {config.SERVICES_FILE}"
+              f"{'' if config.SERVICES_FILE.is_file() else '  (absent — built-ins only)'}")
+        print(f"start order: {' -> '.join(services.order(specs))}\n")
+        for name in services.order(specs):
+            s = specs[name]
+            where = "builtin" if s.builtin else "overridden"
+            vram = f"{s.vram.holds_mb} MB" if s.vram.holds_mb else "-"
+            needs = f", wants {s.vram.needs_mb}" if s.vram.needs_mb else ""
+            print(f"{name:<9} {s.manage:<6} {s.lifetime:<6} vram {s.vram.kind:<9} "
+                  f"{vram:>9}{needs}  [{where}]")
+            print(f"          {s.description}")
+            if s.manage == "full":
+                # Printed so it can be copied: hand-starting stays a first-class way to work.
+                print(f"          run: cd {s.cwd_path} && {' '.join(s.argv_expanded())}")
+                try:
+                    for k, v in s.env_resolved().items():
+                        shown = v if len(v) <= 60 else v[:57] + "..."
+                        print(f"          env: {k}={shown}")
+                except services.ServiceError as e:
+                    print(f"          env: UNRESOLVED — {e}")
+            elif s.hint:
+                print(f"          hint: {s.hint}")
+            if url := s.health_url():
+                print(f"          health: GET {url}")
+            elif target := s.health_target():
+                print(f"          health: connect {target}")
+        return 0
+    raise ValueError(f"unknown services command {args.services_command!r}")
+
+
 def _cmd_registry(args) -> int:
     import yaml
 
@@ -974,6 +1018,12 @@ def build_parser() -> argparse.ArgumentParser:
     ra.add_argument("--out", default=None, help="directory (default: VORCH_USER_WORKFLOW_DIR)")
     ra.add_argument("--force", action="store_true")
     rg.set_defaults(func=_cmd_registry)
+
+    sv2 = sub.add_parser("services", help="the service manifest: which processes vorch depends on")
+    sv2s = sv2.add_subparsers(dest="services_command", required=True)
+    sl = sv2s.add_parser("list", help="every service, its measured VRAM cost and its start command")
+    sl.add_argument("--json", action="store_true", help="machine-readable, with resolved argv/env")
+    sv2.set_defaults(func=_cmd_services)
 
     dbp = sub.add_parser("db", help="database: init | status | import-sqlite <file>")
     dbs = dbp.add_subparsers(dest="db_command", required=True)

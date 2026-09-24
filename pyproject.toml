@@ -44,4 +44,4 @@ build-backend = "setuptools.build_meta"
 include = ["vorch*"]
 
 [tool.setuptools.package-data]
-vorch = ["migrations/*.sql", "profiles_builtin/*.yaml"]
+vorch = ["migrations/*.sql", "profiles_builtin/*.yaml", "services_builtin/*.yaml"]

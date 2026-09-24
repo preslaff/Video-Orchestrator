@@ -1,0 +1,124 @@
+# Built-in service manifest. Override per service by name in ~/vorch/services.yaml
+# (VORCH_SERVICES_FILE) — a user entry is merged over the built-in one key by key, so changing
+# one path does not mean copying the whole entry.
+#
+# ${VORCH_X} resolves from the environment, falling back to config.X, so these entries follow
+# whatever VORCH_* you already set in ~/vorch/vorch.env. @file:PATH inlines a file's stripped
+# contents, resolved relative to the service's cwd.
+#
+# vram.holds_mb values are MEASURED on this machine (2026-09-24, RTX 5070 Ti, 16303 MiB total),
+# not estimated. Re-measure when you change a model; do not guess. See docs/services.md.
+version: 1
+
+services:
+
+  postgres:
+    description: PostgreSQL — every job, decision, profile and project
+    # Already a systemd unit, and `vorch db init` creates a database inside a running server,
+    # not the server itself. vorch reports it and prints the hint; it never spawns it.
+    manage: never
+    health: {probe: dsn, target: "${VORCH_DATABASE_URL}", timeout: 3}
+    vram: {class: none}
+    lifetime: long
+    hint: "sudo systemctl start postgresql   # then: python -m vorch db init"
+
+  gemma:
+    description: Gemma 4 26B via llama-server — storyboards, prompts, every vision verdict
+    manage: full
+    cwd: ~/WORK/llama.cpp
+    argv:
+      - ./build/bin/llama-server
+      - -m
+      - ~/models/gemma4/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf
+      - --mmproj                       # without this every verdict is meaningless (invariant #5)
+      - ~/models/gemma4/mmproj-BF16.gguf
+      - --n-gpu-layers
+      - "0"
+      - --no-mmproj-offload
+      - --ctx-size
+      - "32768"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    match: {cmdline_contains: ["llama-server"], cwd: ~/WORK/llama.cpp}
+    health: {probe: http, url: "${VORCH_GEMMA_URL}/v1/models", timeout: 3}
+    ready_timeout: 240                 # warm page cache ~30 s, cold from disk ~3 min
+    # `--n-gpu-layers 0` does NOT mean zero VRAM: measured 1838 MiB of CUDA context and projector
+    # scratch. "Gemma on CPU" is true of compute, not memory. A fixed tax, never evictable.
+    vram: {class: resident, holds_mb: 1838}
+    lifetime: long
+    adopt: {allowed: true, verify: argv}
+    log: gemma.log
+
+  comfy:
+    description: ComfyUI — FLUX.2 Klein, Wan 2.2 (GGUF), ReActor
+    manage: full
+    cwd: ~/comfy/ComfyUI
+    argv: [~/WORK/LTX-Colab/venv/bin/comfy, launch]
+    # `comfy launch` does not exec: it forks `python main.py` as a child, and THAT grandchild is
+    # the process holding the VRAM. Without this, per-process attribution would blame the wrong
+    # pid and `/free` would appear to do nothing.
+    match: {cmdline_contains: ["main.py"], cwd: ~/comfy/ComfyUI}
+    health: {probe: http, url: "${VORCH_COMFY_URL}/system_stats", timeout: 5}
+    ready_timeout: 300                 # custom nodes import slowly
+    # 222 MiB idle; a loaded Wan 2.2 dual-model wants ~22000 with RAM offload. Evictable WITHOUT
+    # stopping the process, which is why it is freed before anything heavier is stopped.
+    vram: {class: elastic, needs_mb: 22000, holds_mb: 222, free_endpoint: /free}
+    lifetime: long
+    adopt: {allowed: true, verify: port}
+    log: comfy.log
+
+  tts:
+    description: OmniVoice-BG — Bulgarian narration in a cloned voice
+    manage: full
+    cwd: ~/WORK/OmniVoice
+    argv: [bash, serve_bg.sh]
+    # The voice arrives ONLY as these env vars, and /health does not report it back. Leave them
+    # out and serve_bg.sh reads in its built-in announcer's voice instead of yours.
+    env:
+      OMNIVOICE_BG_REF_AUDIO: "${VORCH_TTS_REF_AUDIO}"
+      OMNIVOICE_BG_REF_TEXT: "@file:${VORCH_TTS_REF_TEXT_FILE}"
+    match: {cmdline_contains: ["omnivoice.cli.serve"], cwd: ~/WORK/OmniVoice}
+    health: {probe: http, url: "${VORCH_TTS_URL}/health", timeout: 2}
+    ready_timeout: 300                 # ~90 s to load in practice
+    # MEASURED 11268 MiB. Not 3 GB, not the 5.3 GB the docstrings used to claim. On a 16303 MiB
+    # card this cannot coexist with a Wan render at all — hence `exclusive`.
+    vram: {class: exclusive, needs_mb: 11500, holds_mb: 11268}
+    # Warm, not phase: rewording one line and pressing Speak again must not cost another 90 s.
+    # Reaped after idle_timeout, but only ever a server vorch itself started.
+    lifetime: warm
+    idle_timeout: 600
+    # verify: env reads /proc/<pid>/environ and compares the voice. A positively different voice
+    # is a failure; merely unreadable is a warning, so a hand-started server is never blocked.
+    adopt: {allowed: true, verify: env, on_unverified: warn}
+    evict_adopted: true                # false -> refuse the render instead of stopping it
+    log: tts.log
+
+  api:
+    description: vorch serve — the HTTP API and SSE stream the UI talks to
+    manage: full
+    cwd: .
+    argv: [.venv/bin/python, -m, vorch, serve]
+    match: {cmdline_contains: ["vorch serve"]}
+    health: {probe: http, url: "${VORCH_API_URL}/api/setup/config", timeout: 3}
+    ready_timeout: 60
+    depends_on: [postgres]             # it opens a connection pool at startup
+    vram: {class: none}
+    lifetime: long
+    adopt: {allowed: true, verify: port}
+    log: api.log
+
+  ui:
+    description: Next.js control panel
+    # Node toolchain with hot reload and no stake in the GPU: reported, never spawned.
+    manage: adopt
+    cwd: ./frontend
+    argv: [npm, run, dev]
+    # `npm run dev` becomes `next-server`; nothing of the original command survives.
+    match: {cmdline_contains: ["next-server"]}
+    health: {probe: http, url: "${VORCH_UI_URL}", timeout: 3}
+    depends_on: [api]                  # it proxies /api to the server above
+    vram: {class: none}
+    lifetime: long
+    hint: "cd frontend && npm run dev"
