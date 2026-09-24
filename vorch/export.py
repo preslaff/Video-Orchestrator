@@ -8,6 +8,7 @@ Layout::
         storyboard.md              per scene: description, prompts, verdicts
         s01_keyframe.png           s01_keyframe_v2.png ... (stills variants)
         s01_swapped.png            (when the master face was imposed)
+        s01_narration.wav          (when the scene has a spoken line)
         s01_clip.mp4               (video jobs; the final post-processed clip)
         s01_clip_raw.mp4           (only when post-steps changed the clip)
         assembly.mp4               (optional: selected clips joined with xfade transitions)
@@ -88,6 +89,8 @@ def plan(job: Job) -> list[tuple[str, str | None]]:
                 items.append((f"s{n:02d}_keyframe{_ext(s.keyframe_path, '.png')}", s.keyframe_path))
             if s.swapped_path:
                 items.append((f"s{n:02d}_swapped{_ext(s.swapped_path, '.png')}", s.swapped_path))
+        if s.narration_path:
+            items.append((f"s{n:02d}_narration{_ext(s.narration_path, '.wav')}", s.narration_path))
         if s.video_path:
             items.append((f"s{n:02d}_clip{_ext(s.video_path, '.mp4')}", s.video_path))
             if s.raw_video_path and s.raw_video_path != s.video_path:
@@ -235,7 +238,7 @@ def build_readme(job: Job, manifest: dict, files: list[str]) -> str:
         "before adding to the timeline."
         + (f" assembly.mp4 is mastered at {asm.get('width')}x{asm.get('height')} @ {asm.get('fps'):g} fps."
            if asm.get("ok") and asm.get("width") else ""),
-        "Audio, titles and colour are done in the NLE; assembly.mp4 (when present) is a ready cut with",
+        "Titles and colour are done in the NLE; assembly.mp4 (when present) is a ready cut with",
         "the chosen transitions. Regenerate a scene or re-assemble from the job page if needed.",
         "manifest.json / provenance/ hold the prompts + seeds that made every file.",
     ]

@@ -177,3 +177,24 @@ def test_manifest_records_per_scene_identity(store, tmp_path, monkeypatch):
     readme = (tmp_path / "export" / "ages" / f"{job.id[:8]}_a-life" / "README.txt").read_text()
     assert "01. child  — identity: Maria, age 8" in readme and "02. no one\n" in readme
     assert rec.ok
+
+
+def test_a_spoken_line_is_exported_beside_its_clip(tmp_path, monkeypatch):
+    """The narration is a deliverable in its own right: an editor may want to re-time it, or use
+    the voice over a different cut than the one vorch assembled."""
+    from vorch import config, export
+    from vorch.state import Scene, new_job
+
+    monkeypatch.setattr(config, "EXPORT_ROOT", tmp_path / "export")
+    wav, clip = tmp_path / "n.wav", tmp_path / "c.mp4"
+    wav.write_bytes(b"RIFF")
+    clip.write_bytes(b"v")
+    job = new_job(idea="ad", kind="video")
+    job.scenes = [Scene(index=0, video_path=str(clip), narration="Открий своя аромат.",
+                        narration_path=str(wav), narration_said="Открий своя аромат.")]
+    names = [name for name, _src in export.plan(job)]
+    assert "s01_narration.wav" in names
+    assert names.index("s01_narration.wav") < names.index("s01_clip.mp4"), "beside its clip"
+
+    job.scenes[0].narration_path = None
+    assert not [n for n in (name for name, _ in export.plan(job)) if "narration" in n]
