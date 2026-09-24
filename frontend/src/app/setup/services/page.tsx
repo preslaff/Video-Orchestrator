@@ -70,7 +70,11 @@ function Row({ s, onLogs }: { s: ServiceState; onLogs: () => void }) {
       <td className="py-1.5 pr-3 whitespace-nowrap text-neutral-600">{duration(s.uptime_sec)}</td>
       <td className="py-1.5 text-neutral-700">
         {s.detail || s.description}
-        {s.orphan && <p className="mt-0.5 text-xs text-red-700">Left behind by a vorch that is gone. It will keep holding the card until it is stopped.</p>}
+        {s.orphan && (s.lifetime === 'phase'
+          ? <p className="mt-0.5 text-xs text-red-700">Leaked: this should have been stopped when its phase ended.</p>
+          : s.vram_mb
+            ? <p className="mt-0.5 text-xs text-amber-800">vorch started this and the process that did has exited, so nothing is watching it. It is still yours — stopping it frees the card, and any render will evict it first.</p>
+            : null)}
         {s.identity === 'mismatch' && <p className="mt-0.5 text-xs text-red-700">This is not the instance the manifest describes — results from it would be wrong.</p>}
         <button type="button" onClick={onLogs} className="mt-0.5 text-xs text-sky-700 underline">log</button>
       </td>

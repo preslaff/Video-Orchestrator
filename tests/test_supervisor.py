@@ -156,13 +156,32 @@ def test_a_hand_started_server_is_adopted_not_a_fault(world):
     assert "started outside vorch" in s.detail
 
 
-def test_an_orphan_is_a_failure_naming_what_it_holds(world):
-    """SIGKILL cannot be caught, so the pidfile is the only record of what the crash left behind."""
+def test_a_warm_service_outliving_its_starter_is_ours_and_not_a_failure(world):
+    """`vorch up` exits the moment it finishes, so nearly everything it starts outlives it.
+
+    Treating that as an orphan made a freshly started service report FAIL one second later. What the
+    pidfile actually establishes is ownership; the starter being gone only means nothing is watching.
+    """
     write_record("tts", pid=251592, owner_pid=dead_pid())
     s = supervisor.resolve("tts")
-    assert s.orphan and s.adopted and s.status == "fail"
+    assert s.orphan, "the fact is recorded"
+    assert not s.adopted, "a pidfile means it is ours, whoever is still alive"
+    assert s.identity == "ours"
+    assert s.status == "warn", "holding the card unwatched is worth saying, not a failure"
     assert s.vram_mb == 11268
-    assert "ORPHAN" in s.detail
+    assert "has since exited" in s.detail and "nothing is watching it" in s.detail
+
+
+def test_a_leaked_phase_service_is_a_failure(world, tmp_path):
+    """A phase-scoped service should have been stopped when its phase ended."""
+    manifest = _yaml.safe_load(config.SERVICES_FILE.read_text(encoding="utf-8"))
+    manifest["services"]["tts"]["lifetime"] = "phase"
+    manifest["services"]["tts"].pop("idle_timeout", None)
+    config.SERVICES_FILE.write_text(_yaml.safe_dump(manifest), encoding="utf-8")
+    services.reset_cache()
+    write_record("tts", pid=251592, owner_pid=dead_pid())
+    s = supervisor.resolve("tts")
+    assert s.status == "fail" and "LEAKED" in s.detail
 
 
 def test_a_stale_pidfile_is_discarded_rather_than_believed(world):
@@ -291,7 +310,12 @@ def test_orphans_lists_only_what_an_earlier_vorch_left(world):
     assert [s.name for s in supervisor.orphans()] == ["tts"]
 
 
-def test_summary_carries_the_gpu_table_and_the_problems(world):
+def test_summary_carries_the_gpu_table_and_the_problems(world, tmp_path):
+    manifest = _yaml.safe_load(config.SERVICES_FILE.read_text(encoding="utf-8"))
+    manifest["services"]["tts"]["lifetime"] = "phase"
+    manifest["services"]["tts"].pop("idle_timeout", None)
+    config.SERVICES_FILE.write_text(_yaml.safe_dump(manifest), encoding="utf-8")
+    services.reset_cache()
     write_record("tts", pid=251592, owner_pid=dead_pid())
     out = supervisor.summary()
     assert out["orphans"] == ["tts"]

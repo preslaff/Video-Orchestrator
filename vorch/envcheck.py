@@ -395,11 +395,12 @@ def _check_services() -> list[CheckResult]:
     for s in table:
         name = f"service:{s.name}"
         data = s.to_dict()
-        if s.orphan:
+        if s.orphan and s.spec.lifetime == "phase":
             held = f", holding {s.vram_mb} MB" if s.vram_mb else ""
             out.append(CheckResult(name, "fail",
-                                   f"orphan from a vorch that is gone (pid {s.pid}{held}) — "
-                                   f"release it with: vorch down {s.name}", data))
+                                   f"leaked: a phase-scoped service whose vorch is gone "
+                                   f"(pid {s.pid}{held}) — release it with: vorch down {s.name}",
+                                   data))
         elif s.identity == "mismatch":
             out.append(CheckResult(name, "fail", f"wrong instance: {s.identity_detail}", data))
         elif not s.running and s.spec.lifetime in ("warm", "phase"):

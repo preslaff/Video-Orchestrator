@@ -85,8 +85,10 @@ services:
     match: {cmdline_contains: ["omnivoice.cli.serve"], cwd: ~/WORK/OmniVoice}
     health: {probe: http, url: "${VORCH_TTS_URL}/health", timeout: 2}
     ready_timeout: 300                 # ~90 s to load in practice
-    # MEASURED 11268 MiB. Not 3 GB, not the 5.3 GB the docstrings used to claim. On a 16303 MiB
-    # card this cannot coexist with a Wan render at all — hence `exclusive`.
+    # MEASURED, and it grows: 5726 MiB on a freshly started server, 11268 MiB on one that had been
+    # up ~11 hours and spoken many lines (allocator growth and fragmentation). Both figures here are
+    # the WORST case on purpose — an arbiter that under-reserves admits work that then OOMs. Either
+    # way it cannot coexist with a Wan render on a 16303 MiB card, hence `exclusive`.
     vram: {class: exclusive, needs_mb: 11500, holds_mb: 11268}
     # Warm, not phase: rewording one line and pressing Speak again must not cost another 90 s.
     # Reaped after idle_timeout, but only ever a server vorch itself started.

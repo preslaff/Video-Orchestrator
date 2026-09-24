@@ -144,7 +144,7 @@ them by hand whenever you prefer.
    for a production build). Proxies `/api` to the server above, so start that first.
 
 **OmniVoice-BG** (`:8002`, Bulgarian narration) is the exception: vorch starts it itself when you
-ask for narration, because it wants **11268 MiB** and cannot share the card with a video render.
+ask for narration, because it wants **5.7–11.3 GB** (measured; it grows over a session) and cannot share the card with a video render.
 Do not leave it running — it will block every render until it is stopped. If you do start it by
 hand to audition a voice, pass the reference explicitly, or it will read in its built-in
 announcer's voice instead of yours:

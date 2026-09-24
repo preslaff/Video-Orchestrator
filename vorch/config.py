@@ -46,9 +46,9 @@ GEMMA_URL = os.environ.get("VORCH_GEMMA_URL", "http://localhost:8080")
 COMFY_URL = os.environ.get("VORCH_COMFY_URL", "http://localhost:8188")
 # OmniVoice-BG: Bulgarian narration, cloned from a reference clip. A third local service, spoken
 # to over HTTP exactly like the other two — but unlike them it is started only for the narration
-# phase, because it wants 11268 MiB of a 16303 MiB card (measured 2026-09; earlier comments said
-# ~5.3 GB and were wrong by over 2x). It cannot coexist with a Wan render at all — see
-# docs/services.md and NOTES.md §4 for the arithmetic.
+# phase, because it wants 5726 MiB freshly started and 11268 MiB after a long session (measured
+# 2026-09; earlier comments claimed ~5.3 GB and were wrong by over 2x). Either way it cannot
+# coexist with a render — see docs/services.md and NOTES.md §4 for the arithmetic.
 TTS_URL = os.environ.get("VORCH_TTS_URL", "http://localhost:8002")
 OMNIVOICE_DIR = Path(os.environ.get("VORCH_OMNIVOICE_DIR", "~/WORK/OmniVoice")).expanduser()
 # The cloned voice: a reference clip and its EXACT transcript. Viktoria/11s is the clean pair —
@@ -134,6 +134,9 @@ def derive_seed(base: int, *, scene: int = 0, variant: int = 0, attempt: int = 1
 # Reclaim ComfyUI VRAM before a heavy step if free falls below the guard.
 VRAM_GUARD_MB = int(os.environ.get("VORCH_VRAM_GUARD_MB", "10000"))
 VRAM_SETTLE_SEC = float(os.environ.get("VORCH_VRAM_SETTLE_SEC", "3"))
+# How long to wait for the driver to hand back a stopped process's VRAM. A process exits before
+# its allocation is reclaimed, and nvidia-smi keeps listing the pid until it is.
+VRAM_RELEASE_TIMEOUT = float(os.environ.get("VORCH_VRAM_RELEASE_TIMEOUT", "20"))
 
 # Job state + decision log: PostgreSQL. Default = local socket, peer auth, db "vorch"
 # (`vorch db init` creates it). Tests use VORCH_TEST_DATABASE_URL (tests/conftest.py).

@@ -254,8 +254,9 @@ def check_identity(spec: ServiceSpec, pid: int, record: Record | None) -> tuple[
     ``ours`` we started it · ``verified`` it is demonstrably right · ``mismatch`` it is
     demonstrably wrong · ``unverified`` we could not tell · ``n/a`` nothing to check.
     """
-    if record is not None and record.pid == pid and record.owner_alive:
-        return "ours", "started by this vorch"
+    if record is not None and record.pid == pid:
+        return "ours", ("started by this vorch" if record.owner_alive
+                        else "started by vorch (that process has since exited)")
     verify = spec.adopt.verify
     if verify == "port":
         return "n/a", "adopted on the strength of its port alone (adopt.verify: port)"
@@ -331,8 +332,12 @@ class ServiceState:
         """``ok`` · ``warn`` · ``fail`` · ``down`` — the same vocabulary as the env report."""
         if self.identity == "mismatch":
             return "fail"
-        if self.orphan:
+        if self.orphan and self.spec.lifetime == "phase":
+            # It should have been stopped when its phase ended, so it has genuinely leaked.
             return "fail"
+        if self.orphan and self.vram_mb:
+            # Ours, but nothing is watching it any more: not broken, yet holding the card.
+            return "warn"
         if not self.running:
             # Not running is the *correct* state for something started on demand.
             return "down"
@@ -398,8 +403,11 @@ def resolve(spec: ServiceSpec | str, *, do_probe: bool = True,
     if running and pid is not None:
         identity, identity_detail = check_identity(spec, pid, record)
 
+    # "Ours" is decided by the pidfile, not by whether the process that wrote it is still alive:
+    # `vorch up` exits the moment it finishes, so a long-lived or warm service it started outlives
+    # it by design. `orphan` records that fact; it does not by itself mean anything is wrong.
     orphan = bool(record is not None and not record.owner_alive and _pid_alive(record.pid))
-    adopted = bool(running and (record is None or orphan))
+    adopted = bool(running and record is None)
 
     used = None
     if pid is not None:
@@ -436,8 +444,11 @@ def _describe(s: ServiceState, health_detail: str) -> str:
         bits.append(f"up {vram._duration(s.uptime_sec)}")
     if s.vram_mb:
         bits.append(f"{s.vram_mb} MB VRAM")
-    if s.orphan:
-        bits.append("ORPHAN — the vorch that started it is gone")
+    if s.orphan and spec.lifetime == "phase":
+        bits.append("LEAKED — a phase-scoped service whose vorch is gone")
+    elif s.orphan:
+        bits.append("started by vorch, whose process has since exited"
+                    + ("; nothing is watching it" if s.vram_mb else ""))
     elif s.adopted:
         bits.append("started outside vorch")
     if s.identity == "mismatch":
@@ -718,7 +729,9 @@ def stop(name: str | ServiceSpec, *, force: bool = False, timeout: float = 30.0)
         clear_record(spec.name)
         return
     pid = state.pid
-    ours = state.record is not None and not state.orphan
+    # A pidfile is what makes it ours, whether or not the vorch that wrote it is still alive —
+    # `vorch up` exits immediately, so almost everything it starts outlives it.
+    ours = state.record is not None
 
     if not ours and not force:
         who = "an orphan from an earlier vorch" if state.orphan else "started outside vorch"
@@ -734,6 +747,7 @@ def stop(name: str | ServiceSpec, *, force: bool = False, timeout: float = 30.0)
     log.info("supervisor: stopping %s (pid %d%s)%s", spec.name, pid,
              ", process group" if use_group else "",
              " — started outside vorch" if not ours else "")
+    freed_before = vram.gpu_free_mb() if spec.vram.holds_mb else None
     _signal(pid, signal.SIGTERM, group=use_group)
     if not _wait_gone(pid, proc, timeout):
         log.warning("supervisor: %s did not exit in %.0fs; killing it", spec.name, timeout)
@@ -741,8 +755,16 @@ def stop(name: str | ServiceSpec, *, force: bool = False, timeout: float = 30.0)
         _wait_gone(pid, proc, 5.0)
     _OURS.pop(spec.name, None)
     clear_record(spec.name)
+    # Report what was actually freed, not what the manifest predicts: holds_mb is a worst case, and
+    # printing it as though it were a measurement was simply untrue (it claimed 11268 MB for a
+    # server that held 5726). Measured after the driver has let go, so it can legitimately be 0.
+    freed = None
+    if spec.vram.holds_mb and (before_free := freed_before) is not None:
+        _wait_vram_released(pid, timeout=config.VRAM_RELEASE_TIMEOUT)
+        if (after_free := vram.gpu_free_mb()) is not None:
+            freed = max(0, after_free - before_free)
     log.info("supervisor: %s stopped%s", spec.name,
-             f", {spec.vram.holds_mb} MB released" if spec.vram.holds_mb else "")
+             f", {freed} MB released" if freed else "")
 
 
 def _is_zombie(pid: int) -> bool:
@@ -791,6 +813,24 @@ def _signal(pid: int, sig: int, *, group: bool) -> None:
 # --- VRAM headroom --------------------------------------------------------------------
 
 
+def _wait_vram_released(pid: int, timeout: float | None = None) -> bool:
+    """Wait until the driver stops attributing memory to ``pid``. True if it let go.
+
+    A process exits before its GPU allocation is reclaimed, so ``nvidia-smi --query-compute-apps``
+    keeps listing it briefly. Anything that measures free VRAM right after a stop has to wait for
+    this, or it will conclude that stopping the service did nothing.
+    """
+    limit = config.VRAM_RELEASE_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + limit
+    while True:
+        if not any(p == pid for p, _ in vram.compute_apps()):
+            return True
+        if time.monotonic() >= deadline:
+            log.warning("vram: pid %d still holds GPU memory %gs after stopping it", pid, limit)
+            return False
+        time.sleep(0.25)
+
+
 def ensure_headroom(need_mb: int, *, exclude: list[str] | None = None,
                     settle: float | None = None) -> vram.Admission:
     """Make room for a step that needs ``need_mb``, or raise.
@@ -835,7 +875,13 @@ def ensure_headroom(need_mb: int, *, exclude: list[str] | None = None,
         # Say out loud that we are stopping something a person may have started.
         log.info("vram: stopping %s%s to make room", svc,
                  f" (started outside vorch, pid {state.pid})" if adopted else "")
+        pid = state.pid
         stop(spec, force=True)
+        # The process exits before the driver releases its allocation, so nvidia-smi keeps listing
+        # the pid for a moment. Re-measuring immediately made the arbiter refuse a step it had just
+        # made room for — measured: it reported 4434 MB short having freed 11268.
+        if pid is not None:
+            _wait_vram_released(pid)
 
     after = vram.admit(need_mb, exclude=skip)
     if not after.clear:
@@ -895,8 +941,8 @@ def reap_idle() -> list[str]:
         if spec.lifetime != "warm" or not spec.idle_timeout:
             continue
         state = resolve(spec, do_probe=False)
-        if not state.running or state.record is None or state.orphan:
-            continue
+        if not state.running or state.record is None:
+            continue          # no pidfile = someone else's, however long it sits there
         idle = state.idle_sec
         if idle is not None and idle >= spec.idle_timeout:
             log.info("supervisor: %s idle for %s; stopping it to release %d MB",

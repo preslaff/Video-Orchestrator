@@ -13,9 +13,9 @@ audio). When a word comes out mis-stressed the fix is an override in OmniVoice, 
 
     cd ~/WORK/OmniVoice && ./venv/bin/python bg_stress_add.py парИ
 
-**It is not left running.** The model wants **11268 MiB** (measured 2026-09-24; this docstring
-long said ~5.3 GB and was wrong by over 2x). The card is 16303 MiB, so it does not fit beside a
-loaded ComfyUI at all — never mind a Wan render. Its lifetime is therefore managed rather than
+**It is not left running.** The model wants **5726 MiB freshly started, growing to 11268 MiB over a
+long session** (measured 2026-09-24; this docstring long claimed ~5.3 GB and was wrong by over 2x).
+The card is 16303 MiB, so it does not fit beside a loaded ComfyUI — never mind a render. Its lifetime is therefore managed rather than
 assumed: :func:`serving` hands off to ``supervisor.phase("tts")``, which frees the card first,
 verifies that a server already running is reading *our* cloned voice rather than ``serve_bg.sh``'s
 default announcer (the voice arrives only as ``OMNIVOICE_BG_REF_AUDIO`` and ``/health`` never

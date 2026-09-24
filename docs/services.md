@@ -16,7 +16,7 @@ longer than it looks, and the 16 GB card means two of them cannot be resident at
 | **postgres** | 5432 | all job state, decisions, profiles, projects | systemd, once | — |
 | **gemma** (llama-server) | 8080 | storyboards, prompts, and every vision verdict | you | **1838 MiB** |
 | **comfy** (ComfyUI) | 8188 | every image and video actually generated | you | **222 idle**, ~22000 with Wan loaded |
-| **tts** (OmniVoice-BG) | 8002 | Bulgarian narration in the cloned voice | vorch, for narration | **11268 MiB** |
+| **tts** (OmniVoice-BG) | 8002 | Bulgarian narration in the cloned voice | vorch, on demand | **5726 MiB fresh → 11268 after a long session** |
 | **api** (`vorch serve`) | 8000 | the HTTP API + SSE the UI talks to | you | — |
 | **ui** (Next.js) | 3000 | the control panel | you | — |
 
@@ -24,9 +24,9 @@ The card is **16303 MiB total**. Two numbers in that table decide the whole arch
 
 ```
   gemma      1838   resident, and yes — that is WITH --n-gpu-layers 0
-+ tts       11268
++ tts       11268   worst case measured; 5726 on a freshly started server
 + comfy       222   idle
-= 13328        →   2975 MiB left, and Wan 2.2 wants ~22000 with RAM offload
+= 13328        →   2975 MiB left, and a local render needs ~12000 free
 ```
 
 **OmniVoice and a video render do not fit on this card together.** Not "tightly" — not at all.
@@ -38,9 +38,11 @@ Two facts worth having in writing, because both contradict what the docs used to
 - **`--n-gpu-layers 0` is not free.** Gemma pinned to the CPU still holds 1838 MiB of the card
   for its CUDA context and projector scratch. Invariant #1's "Gemma on CPU so ComfyUI owns the
   GPU" is true about *compute*, not about memory. Budget the 1.8 GB.
-- **OmniVoice wants 11268 MiB, not ~5.3 GB.** The 5.3 GB figure that appeared in
-  `clients/tts.py`, `config.py`, `orchestrator.py` and `queue.py` was wrong by more than 2×.
-  It is why "it fits beside a loaded ComfyUI" read as merely tight rather than impossible.
+- **OmniVoice wants far more than the ~5.3 GB the code used to claim, and it grows.** Measured
+  5726 MiB on a freshly started server and 11268 MiB on one that had been up eleven hours and
+  spoken many lines — allocator growth and fragmentation. The manifest carries the **worst case**
+  deliberately: an arbiter that under-reserves admits work that then runs out of memory. Either
+  figure is enough to make "it fits beside a loaded ComfyUI" untrue.
 
 ### Starting them by hand
 
@@ -345,7 +347,7 @@ numbers reconcile. If they ever do not, the attribution is wrong; see §4 on `ma
 
 ## 6. The warm narration server
 
-OmniVoice takes about 90 seconds to load and holds 11268 MiB. Both numbers matter, and they pull in
+OmniVoice takes up to about 90 seconds to load (8 s with a warm page cache) and holds between 5.7 and 11.3 GB. Both numbers matter, and they pull in
 opposite directions: writing narration means pressing Speak, listening, rewording, pressing Speak
 again — and paying 90 seconds each time would make that unusable. Leaving it running, on the other
 hand, means no render can start.
