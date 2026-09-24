@@ -154,6 +154,8 @@ LOG_DIR = Path(os.environ.get("VORCH_LOG_DIR", "~/vorch/logs")).expanduser()
 # Rotation, applied to vorch's own log by logsetup and to each service's log at start.
 LOG_MAX_BYTES = int(os.environ.get("VORCH_LOG_MAX_BYTES", str(8 * 1024 * 1024)))
 LOG_BACKUPS = int(os.environ.get("VORCH_LOG_BACKUPS", "5"))
+# How often `vorch serve` looks for a warm service that has gone idle (see supervisor.reap_idle).
+REAP_INTERVAL_SEC = float(os.environ.get("VORCH_REAP_INTERVAL_SEC", "60"))
 
 # Setup phase: where projects keep their assets and where finished jobs are exported.
 PROJECTS_ROOT = Path(os.environ.get("VORCH_PROJECTS_ROOT", "~/vorch/projects")).expanduser()

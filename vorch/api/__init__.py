@@ -8,7 +8,9 @@ Handlers reach the Store / JobManager through ``app.state`` (see ``deps.py``).
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -56,6 +58,38 @@ def openapi_schema() -> dict:
     return app.openapi()
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Reap warm services this process started, on a timer and again on the way out.
+
+    The reaper is what keeps ``lifetime: warm`` honest: the narration server stays up while you are
+    writing lines, and gives the card back on its own once you stop. Only ever a server *vorch*
+    started — one launched by hand is its owner's to close.
+    """
+    from .. import supervisor
+
+    supervisor.install_exit_handlers()
+
+    async def reaper() -> None:
+        while True:
+            await asyncio.sleep(config.REAP_INTERVAL_SEC)
+            try:
+                await asyncio.to_thread(supervisor.reap_idle)
+            except Exception:                       # a housekeeping task must never die
+                log.exception("idle reaper failed")
+
+    task = asyncio.create_task(reaper())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await asyncio.to_thread(supervisor._stop_ours)
+
+
 def create_app(
     store: Store | None = None,
     manager: JobManager | None = None,
@@ -77,7 +111,7 @@ def create_app(
         from ..envcheck import gate
 
         manager = JobManager(store, env_check=lambda profile, project: gate(profile, project, store=store))
-    app = FastAPI(title="Video Orchestrator")
+    app = FastAPI(title="Video Orchestrator", lifespan=_lifespan)
     install_cors(app)
     install_error_handlers(app)
     if describer is None:

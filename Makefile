@@ -20,9 +20,13 @@ api-types:
 frontend:
 	cd frontend && $(NPM) ci && $(NPM) run build
 
+# Bring the world up (adopts anything already running), then print the one thing it cannot
+# start for you. `vorch status` afterwards says who holds the GPU.
 dev:
-	@echo "terminal 1:  $(PY) -m vorch serve"
-	@echo "terminal 2:  cd frontend && npm run dev     ->  http://localhost:3000"
+	$(PY) -m vorch up
+	@echo
+	@echo "UI (the one part vorch cannot start for itself):"
+	@echo "    cd frontend && npm run dev     ->  http://localhost:3000"
 
 start:
 	cd frontend && $(NPM) run start

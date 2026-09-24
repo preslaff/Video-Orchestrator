@@ -1,10 +1,9 @@
 # The services vorch depends on — what they cost and who starts them
 
-> **Status (2026-09-24):** sections 1–2 and 9 describe how things work **today**, with every
-> service started by hand. The remaining sections (`vorch up`, the manifest, arbitration, the
-> Services panel, diagnosis by symptom, logs) arrive with the service-manager stages and are
-> marked *planned* below. Nothing here is aspirational: the VRAM figures are measured, not
-> estimated.
+> **Status (2026-09-24):** complete for the local machine. `vorch up` / `down` / `status` / `logs`
+> work, VRAM is arbitrated per process, and the narration server's identity is verified rather than
+> assumed. Starting and stopping services over HTTP is not exposed yet — the Services panel is
+> read-only on purpose. Every VRAM figure here is measured, not estimated.
 
 vorch is a deterministic Python core that drives other people's servers over HTTP. It does not
 contain a model. That makes the list of things that must be running before it can do anything
@@ -45,25 +44,99 @@ Two facts worth having in writing, because both contradict what the docs used to
 
 ### Starting them by hand
 
-This is the normal way to work today, and it stays supported forever — see §9. The commands
-live in **[README.md → Running the services](../README.md#running-the-services)**, which is the
-one canonical copy. If you find a fourth copy of the llama-server line somewhere, it is stale;
-delete it and point at the README.
+Supported permanently — see §2a and §9. You never have to remember the commands: the manifest
+holds them, and `python -m vorch services list` prints the exact `cd … && …` for each service.
+That is the one canonical copy; if you find another, it is stale.
 
 The only ordering that actually matters: **postgres before `vorch serve`** (it opens a pool at
 startup), and **`vorch serve` before the UI** (the UI proxies `/api` to it). Gemma and ComfyUI can
 come up in any order, at any time — vorch discovers them per request, and `vorch setup check`
 tells you which are missing.
 
-## 2. Daily use — *planned*
+## 2. Daily use
 
-`vorch up` / `down` / `status` / `logs`. Until that lands, use `python -m vorch setup check
---deep`, which probes every service and prints one row each.
+```bash
+python -m vorch up                     # or: make dev
+cd frontend && npm run dev             # the one part vorch cannot start for itself
+```
 
-## 2a. Starting services by hand — *planned section, permanent guarantee*
+A healthy bring-up on a cold machine:
 
-See §9. The short version: nothing vorch gains will take away your ability to launch any of
-these in a terminal.
+```
+[hint] postgres  sudo systemctl start postgresql   # then: python -m vorch db init
+[start] gemma    pid 5120, ready in 34s, 1838 MB  -> /home/you/vorch/logs/gemma.log
+[start] comfy    pid 5204, ready in 51s, 222 MB   -> /home/you/vorch/logs/comfy.log
+[skip] tts       warm; started on demand
+[start] api      pid 5290, ready in 4s            -> /home/you/vorch/logs/api.log
+[hint] ui        cd frontend && npm run dev
+
+5 of 6 services up — 14243/16303 MB free
+```
+
+| tag | meaning |
+|---|---|
+| `[start]` | vorch started it and waited for its health probe to answer |
+| `[ ok ]` | already running — **adopted, not restarted** |
+| `[skip]` | on-demand (`warm`/`phase`): started when something needs it, not here |
+| `[hint]` | not vorch's to start; the command to run yourself is printed |
+| `[FAIL]` | it would not start, or an orphan is in the way. Exit code 1 |
+
+`vorch up` deliberately does **not** start the narration server: it wants 11.3 GB and would block
+every render. Name it explicitly (`vorch up tts`) to audition a voice, and it will warn you.
+
+Other things worth knowing:
+
+```bash
+python -m vorch up --dry-run           # what it would do, and the exact command for each service
+python -m vorch up --reclaim-orphans   # also clear out what a killed vorch left behind
+python -m vorch status                 # who is up, who is ours, who holds the GPU
+python -m vorch down                   # stop what vorch started (not what you did)
+python -m vorch down --phase-only      # just the on-demand ones — frees the card, keeps the rest
+```
+
+`vorch down` at the end of a session matters mainly for the narration server: 11.3 GB is most of
+the card, and `--phase-only` releases it without disturbing Gemma or ComfyUI.
+
+When something feels wrong, `vorch status` first. It exits 1 if anything is a genuine failure, so
+it also works in a script.
+
+## 2a. Starting services by hand
+
+Fully supported, permanently. `vorch up` is a convenience, not a gate.
+
+**Get the command.** The manifest knows it, so you never have to remember it or hunt through docs:
+
+```bash
+python -m vorch services list          # includes `run: cd <dir> && <command>` for each service
+```
+
+That is also why there is now only one copy of each start command in the repo: the manifest is the
+source, and the docs point at it.
+
+**vorch adapts to what you have already started.** Every service that answers is adopted and
+reported `[ ok ]` — never restarted, never "corrected". `vorch up` on a fully hand-started machine
+starts nothing and exits 0. Mixing is the normal case: run ComfyUI yourself in a terminal where you
+can watch it, and let vorch handle the rest.
+
+**It will not stop what it did not start.** `vorch down` skips anything without a vorch pidfile and
+says so; `--force` overrides it if you mean it. The one exception is an **orphan** — a service vorch
+itself started whose vorch is gone — which is ours by definition and needs no `--force`.
+
+**Make it permanent.** To keep launching something yourself for good, demote it in
+`~/vorch/services.yaml`:
+
+```yaml
+services:
+  comfy:
+    manage: adopt      # vorch monitors it and never spawns or stops it
+```
+
+Setting *every* service to `adopt` is a legitimate configuration: it gives exactly the old
+behaviour, plus real diagnostics.
+
+**One caveat, and it is a real one.** If you start the narration server by hand, pass the voice
+explicitly — see §1. `serve_bg.sh`'s built-in default is a different announcer, and vorch will now
+tell you (`WRONG INSTANCE`) instead of letting eight scenes come out in the wrong voice.
 
 ## 3. Reading the Services panel
 
@@ -270,7 +343,42 @@ including a service excluded from eviction because we were about to use it — p
 numbers reconcile. If they ever do not, the attribution is wrong; see §4 on `match`.
 
 
-## 6. The warm narration server — *planned*
+## 6. The warm narration server
+
+OmniVoice takes about 90 seconds to load and holds 11268 MiB. Both numbers matter, and they pull in
+opposite directions: writing narration means pressing Speak, listening, rewording, pressing Speak
+again — and paying 90 seconds each time would make that unusable. Leaving it running, on the other
+hand, means no render can start.
+
+So its lifetime is `warm`:
+
+```
+16:39  speak s7  ->  server started (91s), then 2.3s to speak
+16:40  speak s7  ->  2.1s          (warm — already up)
+16:42  speak s6  ->  2.0s          (warm)
+16:52  idle 10m  ->  stopped, 11268 MB released
+```
+
+- The **first** Speak starts it, having first made room on the card.
+- Later ones adopt it, and each stamps `last_used_at` in its pidfile.
+- After `idle_timeout` (10 minutes by default) the reaper in `vorch serve` stops it, and the card
+  comes back on its own. You may well see that happen while you are not looking — that is correct.
+- Anything that needs the card takes it away sooner: submit a video job and the arbiter stops it
+  before Wan loads, saying so in the log.
+- **A server you started by hand is never reaped.** The idle timeout only applies to one vorch
+  started itself; yours is yours to close.
+
+Tune it, or turn it off, per taste:
+
+```yaml
+services:
+  tts:
+    idle_timeout: 120      # release the card sooner
+    lifetime: phase        # or: stop it immediately after every use, as the old code claimed to
+```
+
+A line already spoken keeps whatever voice it was spoken in — the wav is on disk. Changing the
+reference affects the *next* synthesis, so re-speak the scenes you care about.
 
 ## 7. Diagnosis by symptom
 

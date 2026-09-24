@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 from . import config, formats, logsetup, provenance
@@ -661,6 +662,89 @@ def _cmd_assemble(args) -> int:
         store.close()
 
 
+def _cmd_up(args) -> int:
+    """Bring the world up in dependency order. Additive: adopts whatever is already running."""
+    from . import services, supervisor, vram
+
+    specs = services.load(force=True)
+    if args.dry_run:
+        print(f"start order: {' -> '.join(services.order(specs, args.names or None))}")
+        for name in services.order(specs, args.names or None):
+            s = specs[name]
+            state = supervisor.resolve(s)
+            if state.running:
+                verdict = "already running — would adopt it"
+            elif s.manage != "full":
+                verdict = f"not vorch's to start ({s.manage}) — {s.hint or 'start it yourself'}"
+            elif s.lifetime in ("warm", "phase") and name not in (args.names or ()):
+                verdict = f"{s.lifetime}; started on demand, not here"
+            else:
+                verdict = f"would start: cd {s.cwd_path} && {' '.join(s.argv_expanded())}"
+            print(f"  {name:<9} {verdict}")
+        return 0
+
+    failed: list[str] = []
+    running: list[str] = []
+    for name in services.order(specs, args.names or None):
+        spec = specs[name]
+        before = supervisor.resolve(spec)
+        if before.orphan and not args.reclaim_orphans:
+            print(f"[FAIL] {name:<9} orphan from an earlier vorch (pid {before.pid}"
+                  f"{f', {before.vram_mb} MB' if before.vram_mb else ''}) — "
+                  f"rerun with --reclaim-orphans, or `vorch down {name} --force`")
+            failed.append(name)
+            continue
+        if before.running and not before.orphan:
+            extra = "adopted, started outside vorch" if before.adopted else "already running"
+            print(f"[ ok ] {name:<9} {extra}"
+                  f"{f'; {before.identity_detail}' if before.identity == 'verified' else ''}")
+            running.append(name)
+            continue
+        if spec.manage != "full":
+            print(f"[hint] {name:<9} {spec.hint or 'start it yourself'}")
+            continue
+        if spec.lifetime in ("warm", "phase") and name not in (args.names or ()):
+            print(f"[skip] {name:<9} {spec.lifetime}; started on demand")
+            continue
+        t0 = time.monotonic()
+        try:
+            state = supervisor.up([name], wait=not args.no_wait,
+                                  reclaim_orphans=args.reclaim_orphans)[-1]
+        except (supervisor.SupervisorError, services.ServiceError, vram.VramUnavailable) as e:
+            print(f"[FAIL] {name:<9} {e}")
+            failed.append(name)
+            continue
+        took = f"{time.monotonic() - t0:.0f}s"
+        held = f", {state.vram_mb} MB" if state.vram_mb else ""
+        print(f"[start] {name:<8} pid {state.pid}, ready in {took}{held}  -> {spec.log_path}")
+        running.append(name)
+
+    summary = f"{len(running)} of {len(services.order(specs, args.names or None))} services up"
+    if (gpu := vram.snapshot()) is not None:
+        summary += f" — {gpu['free']}/{gpu['total']} MB free"
+    print("\n" + summary)
+    return 1 if failed else 0
+
+
+def _cmd_down(args) -> int:
+    from . import services, supervisor, vram
+
+    before = vram.gpu_free_mb()
+    try:
+        stopped = supervisor.down(args.names or None, phase_only=args.phase_only, force=args.force)
+    except services.ServiceError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if not stopped:
+        print("nothing stopped (vorch only stops what it started; --force overrides)")
+        return 0
+    print(f"stopped: {', '.join(stopped)}")
+    after = vram.gpu_free_mb()
+    if before is not None and after is not None and after > before:
+        print(f"VRAM freed: {before} -> {after} MB")
+    return 0
+
+
 def _cmd_status(args) -> int:
     """Every service, whether it is up, whether it is ours, and who holds the card."""
     from . import supervisor, vram
@@ -1077,6 +1161,21 @@ def build_parser() -> argparse.ArgumentParser:
     ra.add_argument("--out", default=None, help="directory (default: VORCH_USER_WORKFLOW_DIR)")
     ra.add_argument("--force", action="store_true")
     rg.set_defaults(func=_cmd_registry)
+
+    upp = sub.add_parser("up", help="start the services, in dependency order (adopts what is running)")
+    upp.add_argument("names", nargs="*", help="only these (dependencies are pulled in)")
+    upp.add_argument("--no-wait", action="store_true", help="do not wait for health probes")
+    upp.add_argument("--dry-run", action="store_true", help="print what would happen")
+    upp.add_argument("--reclaim-orphans", action="store_true",
+                     help="stop services left behind by a vorch that was killed")
+    upp.set_defaults(func=_cmd_up)
+
+    dwn = sub.add_parser("down", help="stop the services vorch started")
+    dwn.add_argument("names", nargs="*")
+    dwn.add_argument("--phase-only", action="store_true", help="only the on-demand ones (e.g. tts)")
+    dwn.add_argument("--force", action="store_true",
+                     help="also stop services started outside vorch")
+    dwn.set_defaults(func=_cmd_down)
 
     st = sub.add_parser("status", help="which services are up, which are ours, and who holds the GPU")
     st.add_argument("--json", action="store_true")

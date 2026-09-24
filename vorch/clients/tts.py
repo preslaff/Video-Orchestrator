@@ -13,30 +13,23 @@ audio). When a word comes out mis-stressed the fix is an override in OmniVoice, 
 
     cd ~/WORK/OmniVoice && ./venv/bin/python bg_stress_add.py парИ
 
-**It is started for a phase, not left running.** The model wants **11268 MiB** (measured
-2026-09-24; this docstring long said ~5.3 GB and was wrong by over 2x). The card is 16303 MiB, so
-it does not fit beside a loaded ComfyUI at all — never mind a Wan render, which wants ~22 GB with
-RAM offload. ``serving()`` frees ComfyUI, starts the server, and stops it again, which is
-invariant #1 applied to a third model.
+**It is not left running.** The model wants **11268 MiB** (measured 2026-09-24; this docstring
+long said ~5.3 GB and was wrong by over 2x). The card is 16303 MiB, so it does not fit beside a
+loaded ComfyUI at all — never mind a Wan render. Its lifetime is therefore managed rather than
+assumed: :func:`serving` hands off to ``supervisor.phase("tts")``, which frees the card first,
+verifies that a server already running is reading *our* cloned voice rather than ``serve_bg.sh``'s
+default announcer (the voice arrives only as ``OMNIVOICE_BG_REF_AUDIO`` and ``/health`` never
+reports it back), and leaves it **warm** afterwards so re-speaking a reworded line costs seconds.
+An idle timeout and any step that needs the card both take it away again. See ``docs/services.md``.
 
-**Known gap (see docs/services.md).** If a server is already answering on the port, ``serving()``
-adopts it as-is and does *not* stop it afterwards — so one started by hand outlives the phase and
-keeps holding 11 GB. It also cannot tell *which voice* that server was started with: the reference
-arrives only as ``OMNIVOICE_BG_REF_AUDIO`` and ``/health`` does not report it, so an adopted server
-running ``serve_bg.sh``'s default reads every line in a different announcer's voice, silently.
-Until the service manager lands, check by hand:
-``tr '\0' '\n' < /proc/<pid>/environ | grep OMNIVOICE_BG_REF_AUDIO``.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-import subprocess
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
 
 import requests
 
@@ -112,70 +105,21 @@ def chunk(text: str, limit: int | None = None) -> list[str]:
     return out or ([text.strip()] if text.strip() else [])
 
 
-def _free_comfy() -> None:
-    """Ask ComfyUI to drop its models, so the narration model has somewhere to live."""
-    try:
-        requests.post(f"{config.COMFY_URL.rstrip('/')}/free",
-                      json={"unload_models": True, "free_memory": True}, timeout=30)
-    except requests.RequestException as e:      # not running, or busy: not fatal by itself
-        log.info("could not free ComfyUI before narration (%s)", e)
-
-
 @contextmanager
 def serving(*, free_comfy: bool = True) -> Iterator[dict]:
-    """Run the narration server for the duration of the block.
+    """Run the narration server for the duration of the block, and yield its ``/health``.
 
-    Yields its ``/health``. If one is already running it is used as it is and left alone —
-    which is what happens when a person started it by hand to audition a voice.
+    A thin wrapper over :func:`vorch.supervisor.phase`, so there is exactly one lifecycle path in
+    the codebase. Everything interesting happens there: adopt an instance that is already up,
+    verify it is reading *our* cloned voice, make room on the card first, start it with its output
+    captured and wait for readiness, and leave it warm afterwards so re-speaking a reworded line
+    costs seconds instead of another 90 s load.
     """
-    try:
-        info = health(timeout=2.0)
-        log.info("narration: using the server already running at %s", config.TTS_URL)
-        yield info
-        return
-    except TTSError:
-        pass
+    if not free_comfy:
+        # This never really made sense as a caller's choice, and makes none now: how much has to be
+        # free, and what should give it up, is decided centrally from the manifest.
+        log.info("narration: free_comfy=False is ignored; VRAM headroom is arbitrated centrally")
+    from .. import supervisor
 
-    script = config.OMNIVOICE_DIR / "serve_bg.sh"
-    if not script.is_file():
-        raise TTSError(f"OmniVoice not found at {config.OMNIVOICE_DIR} (no serve_bg.sh)")
-    ref_text_file = config.OMNIVOICE_DIR / config.TTS_REF_TEXT_FILE
-    if not ref_text_file.is_file():
-        raise TTSError(f"the voice's transcript is missing: {ref_text_file}")
-
-    if free_comfy:
-        _free_comfy()
-    env = {"OMNIVOICE_BG_REF_AUDIO": config.TTS_REF_AUDIO,
-           "OMNIVOICE_BG_REF_TEXT": ref_text_file.read_text(encoding="utf-8").strip()}
-    log.info("narration: starting OmniVoice with %s", config.TTS_REF_AUDIO)
-    proc = subprocess.Popen(["bash", str(script)], cwd=str(config.OMNIVOICE_DIR),
-                            env={**_environ(), **env},
-                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    try:
-        deadline = time.monotonic() + config.TTS_START_TIMEOUT
-        while True:
-            if proc.poll() is not None:
-                err = (proc.stderr.read() if proc.stderr else b"").decode(errors="replace")[-1500:]
-                raise TTSError(f"OmniVoice exited while starting: {err.strip() or 'no output'}")
-            try:
-                info = health(timeout=2.0)
-                break
-            except TTSError:
-                if time.monotonic() > deadline:
-                    raise TTSError(f"OmniVoice did not answer within {config.TTS_START_TIMEOUT:g}s") from None
-                time.sleep(2.0)
-        log.info("narration: ready (%s)", info.get("accent_frontend", "?"))
-        yield info
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        log.info("narration: server stopped, VRAM released")
-
-
-def _environ() -> dict:
-    import os
-
-    return dict(os.environ)
+    with supervisor.phase("tts") as svc:
+        yield svc.health or health(timeout=2.0)

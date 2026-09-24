@@ -113,8 +113,15 @@ cd frontend && npm ci
 
 ## Running the services
 
-These are the canonical start commands — `docs/services.md` explains what each service costs
-in VRAM and why the order matters, and points back here rather than repeating them.
+```bash
+python -m vorch up      # starts them in order, adopts whatever is already running
+python -m vorch status  # who is up, whose they are, and who holds the GPU
+```
+
+`vorch up` never restarts something you started yourself, and `vorch down` never stops it — see
+[docs/services.md](docs/services.md) for the whole picture, including the measured VRAM budget.
+The commands below are what it runs, and `python -m vorch services list` prints them for you; run
+them by hand whenever you prefer.
 
 1. **ComfyUI** on `:8188` with the FLUX.2 Klein, Wan 2.2 (GGUF) and ReActor models:
    ```bash

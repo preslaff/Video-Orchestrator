@@ -33,11 +33,18 @@ the VRAM arbitration that goes with them, come next.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
+import signal
+import subprocess
+import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -502,6 +509,513 @@ def summary(table: list[ServiceState] | None = None) -> dict:
 
 __all__ = [
     "Identity", "Record", "ServiceState", "SupervisorError",
-    "check_identity", "find_pids", "orphans", "probe", "read_record", "resolve",
-    "states", "summary", "tail",
+    "check_identity", "down", "ensure_headroom", "find_pids", "install_exit_handlers",
+    "orphans", "phase", "probe", "read_record", "reap_idle", "resolve", "rotate_log",
+    "start", "states", "stop", "summary", "tail", "touch_record", "up", "write_record",
 ]
+
+
+# --- writing pidfiles -----------------------------------------------------------------
+
+
+def write_record(spec: ServiceSpec, pid: int, *, started_at: float | None = None,
+                 last_used_at: float | None = None) -> Record:
+    """Record that we started this, so a later vorch can tell an orphan from a stranger."""
+    try:
+        identity = spec.identity()
+    except ServiceError:
+        identity = {}
+    rec = Record(
+        name=spec.name, pid=pid, started_at=started_at or time.time(),
+        argv=tuple(spec.argv_expanded()), cwd=str(spec.cwd_path), lifetime=spec.lifetime,
+        owner_pid=os.getpid(), last_used_at=last_used_at or time.time(),
+        identity=identity, log=str(spec.log_path), health_url=spec.health_url(),
+    )
+    config.RUN_DIR.mkdir(parents=True, exist_ok=True)
+    path = config.RUN_DIR / f"{spec.name}.json"
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(rec.to_dict(), indent=2), encoding="utf-8")
+    os.replace(tmp, path)                 # atomic: a reader never sees half a file
+    return rec
+
+
+def touch_record(name: str) -> None:
+    """Mark a service as used just now — what the idle reaper measures against."""
+    rec = read_record(name)
+    if rec is None:
+        return
+    path = config.RUN_DIR / f"{name}.json"
+    try:
+        data = rec.to_dict() | {"last_used_at": time.time()}
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as e:
+        log.debug("supervisor: could not touch %s (%s)", path, e)
+
+
+def clear_record(name: str) -> None:
+    (config.RUN_DIR / f"{name}.json").unlink(missing_ok=True)
+
+
+# --- log files ------------------------------------------------------------------------
+
+
+def rotate_log(path: Path, *, max_bytes: int | None = None, backups: int | None = None) -> None:
+    """Shift the log aside if it has grown too big.
+
+    Done at start rather than continuously: a running child holds the file descriptor, and nothing
+    outside that process can rotate an fd it does not own. The cost is that a long-lived, chatty
+    service is unbounded until it is restarted — documented rather than pretended away.
+    """
+    limit = config.LOG_MAX_BYTES if max_bytes is None else max_bytes
+    keep = config.LOG_BACKUPS if backups is None else backups
+    try:
+        if not path.is_file() or path.stat().st_size < limit:
+            return
+        for i in range(keep - 1, 0, -1):
+            older = path.with_name(f"{path.name}.{i}")
+            if older.is_file():
+                older.replace(path.with_name(f"{path.name}.{i + 1}"))
+        path.replace(path.with_name(f"{path.name}.1"))
+    except OSError as e:
+        log.warning("supervisor: could not rotate %s (%s)", path, e)
+
+
+def _open_log(spec: ServiceSpec, argv: list[str], env: dict[str, str]):
+    """Append-mode fd for the child, with a header saying exactly what is being started.
+
+    The header is what makes a past run answerable: which command, from which directory, and — for
+    the narration server — which cloned voice. Weeks later that is the only record.
+    """
+    path = spec.log_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rotate_log(path)
+    fh = open(path, "ab", buffering=0)
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    ident = spec.identity() if spec.env else {}
+    header = [f"\n=== vorch start {spec.name} {stamp} (owner pid {os.getpid()}) ===",
+              f"    cwd:  {spec.cwd_path}",
+              f"    argv: {' '.join(argv)}"]
+    for key in sorted(env):
+        shown = ident.get(key, env[key])
+        header.append(f"    env:  {key}={shown if len(shown) <= 120 else shown[:117] + '...'}")
+    fh.write(("\n".join(header) + "\n").encode("utf-8"))
+    return fh
+
+
+# --- starting -------------------------------------------------------------------------
+
+
+def start(name: str | ServiceSpec, *, wait: bool = True, timeout: float | None = None,
+          free_vram: bool = True) -> ServiceState:
+    """Start a service and wait until its health probe answers.
+
+    Adopts instead of starting when something already answers — never restarts, never "corrects"
+    a running instance, because it may well be one a person started deliberately.
+    """
+    spec = services.get(name) if isinstance(name, str) else name
+    if spec.manage != "full":
+        raise SupervisorError(
+            f"{spec.name} is not vorch's to start (manage: {spec.manage})"
+            + (f" — {spec.hint}" if spec.hint else ""))
+
+    state = resolve(spec)
+    if state.running:
+        if state.identity == "mismatch":
+            raise SupervisorError(
+                f"{spec.name} is already running, but it is the wrong instance: "
+                f"{state.identity_detail}. Stop it first (vorch down {spec.name} --force).")
+        if state.identity == "unverified" and spec.adopt.on_unverified == "refuse":
+            raise SupervisorError(
+                f"{spec.name} is already running and its identity cannot be verified "
+                f"({state.identity_detail}); the manifest says to refuse rather than guess.")
+        log.info("supervisor: %s is already running (%s); adopting it", spec.name, state.detail)
+        return state
+
+    if free_vram and spec.vram.needs_mb:
+        ensure_headroom(spec.vram.needs_mb, exclude=[spec.name])
+
+    argv = spec.argv_expanded()
+    env = spec.env_resolved()          # ServiceError here means a missing @file: — a real problem
+    fh = _open_log(spec, argv, env)
+    log.info("supervisor: starting %s — %s (log: %s)", spec.name, " ".join(argv), spec.log_path)
+    try:
+        proc = subprocess.Popen(
+            argv, cwd=str(spec.cwd_path), env={**os.environ, **env},
+            stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            # Its own session, so a Ctrl-C in the terminal that ran `vorch up` does not scatter
+            # into the services, and so we can later signal the whole group safely.
+            start_new_session=True, close_fds=True,
+        )
+    except OSError as e:
+        fh.close()
+        raise SupervisorError(f"cannot start {spec.name}: {e}") from None
+    finally:
+        fh.close()                     # the child holds its own dup of the fd
+
+    _OURS[spec.name] = proc
+    record = write_record(spec, proc.pid)
+    if not wait:
+        return resolve(spec)
+
+    deadline = time.monotonic() + (spec.ready_timeout if timeout is None else timeout)
+    while True:
+        if proc.poll() is not None:
+            clear_record(spec.name)
+            _OURS.pop(spec.name, None)
+            raise SupervisorError(
+                f"{spec.name} exited while starting (code {proc.returncode}). "
+                f"Last lines of {spec.log_path}:\n{_indent(tail(spec.name, 20))}")
+        healthy, _, detail = probe(spec)
+        if healthy is True:
+            break
+        if healthy is None:                 # nothing to probe: being alive is all we can ask
+            time.sleep(1.0)
+            break
+        if time.monotonic() > deadline:
+            raise SupervisorError(
+                f"{spec.name} did not answer within {spec.ready_timeout:g}s ({detail}). "
+                f"It is still running as pid {proc.pid}; last lines of {spec.log_path}:\n"
+                f"{_indent(tail(spec.name, 20))}")
+        time.sleep(2.0)
+
+    state = resolve(spec)
+    log.info("supervisor: %s ready — %s", spec.name, state.detail)
+    if state.identity == "mismatch":
+        log.error("supervisor: %s started but reports the wrong identity: %s",
+                  spec.name, state.identity_detail)
+    touch_record(spec.name)
+    return state
+
+
+def _indent(text: str, prefix: str = "    ") -> str:
+    return "\n".join(prefix + line for line in text.splitlines())
+
+
+#: Handles for services this process started, so we can reap them on exit.
+_OURS: dict[str, subprocess.Popen] = {}
+
+
+# --- stopping -------------------------------------------------------------------------
+
+
+def stop(name: str | ServiceSpec, *, force: bool = False, timeout: float = 30.0) -> None:
+    """Stop a service. Refuses to touch one vorch did not start, unless ``force``.
+
+    Two safety rails that matter more than convenience:
+
+    * a pid is only ever signalled when a pidfile names it or the manifest's ``match`` recognises
+      it — vorch must never kill a process it cannot name;
+    * the *process group* is signalled only for our own children, whose session we created. An
+      adopted process may share a group with a person's shell, so it gets a signal to the pid
+      alone.
+    """
+    spec = services.get(name) if isinstance(name, str) else name
+    state = resolve(spec, do_probe=False)
+    if not state.running or state.pid is None:
+        log.info("supervisor: %s is not running", spec.name)
+        clear_record(spec.name)
+        return
+    pid = state.pid
+    ours = state.record is not None and not state.orphan
+
+    if not ours and not force:
+        who = "an orphan from an earlier vorch" if state.orphan else "started outside vorch"
+        raise SupervisorError(
+            f"{spec.name} (pid {pid}) was {who}; vorch will not stop what it did not start. "
+            f"Use --force if you mean it.")
+    if state.record is None and not _matches(spec, pid):
+        raise SupervisorError(
+            f"refusing to signal pid {pid}: nothing identifies it as {spec.name}")
+
+    proc = _OURS.get(spec.name)
+    use_group = proc is not None and proc.pid == pid
+    log.info("supervisor: stopping %s (pid %d%s)%s", spec.name, pid,
+             ", process group" if use_group else "",
+             " — started outside vorch" if not ours else "")
+    _signal(pid, signal.SIGTERM, group=use_group)
+    if not _wait_gone(pid, proc, timeout):
+        log.warning("supervisor: %s did not exit in %.0fs; killing it", spec.name, timeout)
+        _signal(pid, signal.SIGKILL, group=use_group)
+        _wait_gone(pid, proc, 5.0)
+    _OURS.pop(spec.name, None)
+    clear_record(spec.name)
+    log.info("supervisor: %s stopped%s", spec.name,
+             f", {spec.vram.holds_mb} MB released" if spec.vram.holds_mb else "")
+
+
+def _is_zombie(pid: int) -> bool:
+    """Dead but not yet reaped. ``kill(pid, 0)`` still succeeds on one, so it must be asked for."""
+    try:
+        raw = (PROC / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+        return raw[raw.rindex(")") + 1:].split()[0] == "Z"
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def _wait_gone(pid: int, proc: subprocess.Popen | None, timeout: float) -> bool:
+    """Wait for a process to actually be gone. True if it went, False on timeout.
+
+    Our own child must be *reaped*, not merely signalled: a SIGTERMed child sits as a zombie until
+    its parent collects it, and ``os.kill(pid, 0)`` happily succeeds on a zombie — so polling
+    liveness alone waits out the whole timeout on a process that died immediately. ``Popen.poll``
+    reaps. For a process we do not own, its real parent will reap it, so a zombie counts as gone.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if proc is not None:
+            if proc.poll() is not None:
+                return True
+        elif not _pid_alive(pid) or _is_zombie(pid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _signal(pid: int, sig: int, *, group: bool) -> None:
+    try:
+        if group:
+            os.killpg(os.getpgid(pid), sig)
+        else:
+            os.kill(pid, sig)
+    except ProcessLookupError:
+        pass
+    except PermissionError as e:
+        raise SupervisorError(f"not allowed to signal pid {pid}: {e}") from None
+    except OSError as e:
+        raise SupervisorError(f"could not signal pid {pid}: {e}") from None
+
+
+# --- VRAM headroom --------------------------------------------------------------------
+
+
+def ensure_headroom(need_mb: int, *, exclude: list[str] | None = None,
+                    settle: float | None = None) -> vram.Admission:
+    """Make room for a step that needs ``need_mb``, or raise.
+
+    The acting half of the arbiter: ``vram.admit`` decides, this carries the decision out —
+    ComfyUI's ``/free`` first because it costs seconds, then stopping a warm or phase-scoped
+    service, which costs a reload. Re-measures afterwards and refuses rather than hoping.
+    """
+    skip = list(exclude or ())
+    adm = vram.admit(need_mb, exclude=skip)
+    if adm.clear:
+        log.debug("vram: %s", adm.reason)
+        return adm
+    if not adm.ok:
+        log.error("vram: %s", adm.reason)
+        raise vram.VramUnavailable(adm)
+
+    log.info("vram: %s", adm.reason)
+    specs = services.load()
+    for svc in adm.evict:
+        spec = specs.get(svc)
+        if spec is None:
+            continue
+        if spec.vram.elastic:
+            from .clients import comfy
+
+            log.info("vram: asking %s to drop its models (%s)", svc, spec.vram.free_endpoint)
+            comfy.free()
+            time.sleep(config.VRAM_SETTLE_SEC if settle is None else settle)
+            continue
+        state = resolve(spec, do_probe=False)
+        if not state.running:
+            continue
+        adopted = state.adopted
+        if adopted and not spec.evict_adopted:
+            raise vram.VramUnavailable(vram.Admission(
+                ok=False, need_mb=need_mb, free_mb=adm.free_mb, deficit_mb=adm.deficit_mb,
+                blockers=adm.blockers,
+                reason=(f"{svc} holds the card and was started outside vorch, and its manifest "
+                        f"says not to evict it (evict_adopted: false) — stop it yourself with: "
+                        f"vorch down {svc}")))
+        # Say out loud that we are stopping something a person may have started.
+        log.info("vram: stopping %s%s to make room", svc,
+                 f" (started outside vorch, pid {state.pid})" if adopted else "")
+        stop(spec, force=True)
+
+    after = vram.admit(need_mb, exclude=skip)
+    if not after.clear:
+        log.error("vram: freeing did not help — %s", after.reason)
+        raise vram.VramUnavailable(after)
+    log.info("vram: %d MB free; admitted", after.free_mb or 0)
+    return after
+
+
+# --- phases ---------------------------------------------------------------------------
+
+
+@contextmanager
+def phase(name: str, *, need_mb: int | None = None) -> Iterator[ServiceState]:
+    """Run a block with ``name`` available, and leave the card in a sane state afterwards.
+
+    A ``warm`` service is *left running* on the way out, with its last-use time stamped: rewording
+    a line and pressing Speak again must not pay another model load. The idle reaper takes it away
+    later, and ``ensure_headroom`` takes it away sooner if something needs the card. A ``phase``
+    service is stopped immediately. A service someone started by hand is never stopped here at all.
+    """
+    spec = services.get(name)
+    started_by_us = False
+    state = resolve(spec)
+    if not state.running:
+        state = start(spec, timeout=None)
+        started_by_us = True
+    else:
+        if state.identity == "mismatch":
+            raise SupervisorError(
+                f"{spec.name} is running the wrong instance: {state.identity_detail}. "
+                f"Stop it (vorch down {spec.name} --force) and let vorch start it.")
+        if state.identity == "unverified" and spec.adopt.on_unverified == "refuse":
+            raise SupervisorError(
+                f"{spec.name} is running but cannot be verified ({state.identity_detail}); "
+                "the manifest says to refuse rather than guess.")
+        if need_mb:
+            ensure_headroom(need_mb, exclude=[spec.name])
+    try:
+        yield state
+    finally:
+        touch_record(spec.name)
+        if spec.lifetime == "phase" and started_by_us:
+            stop(spec)
+        elif spec.lifetime == "warm":
+            log.info("supervisor: leaving %s warm (idle timeout %gs)",
+                     spec.name, spec.idle_timeout or 0)
+
+
+def reap_idle() -> list[str]:
+    """Stop ``warm`` services **we started** that have been unused for their idle timeout.
+
+    Only ever ours: a server someone launched by hand is theirs to close, however long it sits.
+    """
+    stopped: list[str] = []
+    for spec in services.load().values():
+        if spec.lifetime != "warm" or not spec.idle_timeout:
+            continue
+        state = resolve(spec, do_probe=False)
+        if not state.running or state.record is None or state.orphan:
+            continue
+        idle = state.idle_sec
+        if idle is not None and idle >= spec.idle_timeout:
+            log.info("supervisor: %s idle for %s; stopping it to release %d MB",
+                     spec.name, vram._duration(idle), spec.vram.holds_mb)
+            try:
+                stop(spec)
+                stopped.append(spec.name)
+            except SupervisorError as e:
+                log.warning("supervisor: could not reap %s (%s)", spec.name, e)
+    return stopped
+
+
+# --- bring-up and teardown ------------------------------------------------------------
+
+
+def up(names: list[str] | None = None, *, wait: bool = True,
+       reclaim_orphans: bool = False) -> list[ServiceState]:
+    """Bring the world up in dependency order. Additive: adopts what is already running.
+
+    ``warm`` and ``phase`` services are skipped unless named explicitly — they exist to be started
+    on demand, and starting the narration server here would block every render.
+    """
+    specs = services.load()
+    explicit = set(names or ())
+    out: list[ServiceState] = []
+    for name in services.order(specs, names):
+        spec = specs[name]
+        state = resolve(spec)
+        if state.orphan and reclaim_orphans:
+            log.info("supervisor: reclaiming orphaned %s", name)
+            try:
+                stop(spec, force=True)
+                state = resolve(spec)
+            except SupervisorError as e:
+                log.warning("supervisor: could not reclaim %s (%s)", name, e)
+        if state.running:
+            out.append(state)
+            continue
+        if spec.manage != "full":
+            out.append(state)
+            continue
+        if spec.lifetime in ("warm", "phase") and name not in explicit:
+            out.append(state)
+            continue
+        out.append(start(spec, wait=wait))
+    return out
+
+
+def down(names: list[str] | None = None, *, phase_only: bool = False,
+         force: bool = False) -> list[str]:
+    """Stop services, dependants before dependencies. Skips what vorch did not start."""
+    specs = services.load()
+    order = list(reversed(services.order(specs, names)))
+    stopped: list[str] = []
+    for name in order:
+        spec = specs[name]
+        if phase_only and spec.lifetime == "long":
+            continue
+        if spec.manage != "full":
+            continue
+        state = resolve(spec, do_probe=False)
+        if not state.running:
+            continue
+        if state.adopted and not force and not state.orphan:
+            log.info("supervisor: leaving %s alone — started outside vorch (use --force)", name)
+            continue
+        try:
+            stop(spec, force=force or state.orphan)
+            stopped.append(name)
+        except SupervisorError as e:
+            log.warning("supervisor: %s", e)
+    return stopped
+
+
+_handlers_installed = False
+
+
+def install_exit_handlers() -> None:
+    """Stop the services we started when this process goes away.
+
+    Only on the main thread, and chaining to whatever handler is already there — uvicorn installs
+    its own, and replacing it would break shutdown. ``SIGKILL`` cannot be caught, which is exactly
+    why the pidfile exists: the next ``vorch up --reclaim-orphans`` picks up what this misses.
+    """
+    global _handlers_installed
+    if _handlers_installed or threading.current_thread() is not threading.main_thread():
+        return
+    atexit.register(_stop_ours)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous = signal.getsignal(sig)
+        except (OSError, ValueError):
+            continue
+
+        def handler(signum, frame, _previous=previous):
+            _stop_ours()
+            if callable(_previous) and _previous not in (signal.SIG_IGN, signal.SIG_DFL):
+                _previous(signum, frame)
+            elif _previous is signal.SIG_DFL:
+                signal.signal(signum, signal.SIG_DFL)
+                os.kill(os.getpid(), signum)
+
+        try:
+            signal.signal(sig, handler)
+        except (OSError, ValueError):
+            continue
+    _handlers_installed = True
+
+
+def _stop_ours() -> None:
+    """Reap the non-``long`` services this process started; leave long-lived ones up."""
+    for name in list(_OURS):
+        try:
+            spec = services.get(name)
+        except ServiceError:
+            continue
+        if spec.lifetime == "long":
+            continue                  # Gemma and ComfyUI outlive one API process on purpose
+        try:
+            stop(spec)
+        except Exception as e:        # exit paths must never raise
+            log.warning("supervisor: could not stop %s on exit (%s)", name, e)
