@@ -764,14 +764,16 @@ def _cmd_status(args) -> int:
         named = ", ".join(f"{h.label} {h.used_mb}" for h in gpu["holders"]) or "nothing"
         print(f"\nGPU: {gpu['free']} / {gpu['total']} MB free — held by {named} MB")
     leaked = [s for s in table if s.orphan and s.spec.lifetime == "phase"]
-    unattended = [s for s in table if s.orphan and s.vram_mb and s not in leaked]
+    # Only a warm service is worth mentioning: nothing is left to idle-reap it. A long-lived one
+    # outliving `vorch up` is what `vorch up` is for.
+    unattended = [s for s in table if s.orphan and s.vram_mb and s.spec.lifetime == "warm"]
     if leaked:
         print(f"\nleaked: {', '.join(s.name for s in leaked)} — `vorch down` releases them")
     if unattended:
         total = sum(s.vram_mb or 0 for s in unattended)
-        print(f"\n{', '.join(s.name for s in unattended)} was started by vorch and nothing is "
-              f"watching it now ({total} MB). It is still yours: `vorch down` frees it, and any "
-              f"render will evict it first.")
+        print(f"\n{', '.join(s.name for s in unattended)} is warm and holding {total} MB with no "
+              f"vorch serve to reap it. `vorch down --phase-only` frees it; a render evicts it "
+              f"anyway.")
     return 1 if any(s.status == "fail" for s in table) else 0
 
 

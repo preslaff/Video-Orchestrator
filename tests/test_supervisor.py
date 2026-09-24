@@ -169,7 +169,23 @@ def test_a_warm_service_outliving_its_starter_is_ours_and_not_a_failure(world):
     assert s.identity == "ours"
     assert s.status == "warn", "holding the card unwatched is worth saying, not a failure"
     assert s.vram_mb == 11268
-    assert "has since exited" in s.detail and "nothing is watching it" in s.detail
+    assert "started by vorch" in s.detail
+    assert "nothing is left to reap it" in s.detail, "the consequence, which is the useful part"
+
+
+def test_a_long_lived_service_outliving_vorch_up_is_simply_ok(world, tmp_path):
+    """That is what `vorch up` is for. Flagging it would make every bring-up look wrong, and
+    claiming a render would evict Gemma is false — it is `resident`."""
+    manifest = _yaml.safe_load(config.SERVICES_FILE.read_text(encoding="utf-8"))
+    manifest["services"]["tts"]["lifetime"] = "long"
+    manifest["services"]["tts"].pop("idle_timeout", None)
+    config.SERVICES_FILE.write_text(_yaml.safe_dump(manifest), encoding="utf-8")
+    services.reset_cache()
+    write_record("tts", pid=251592, owner_pid=dead_pid())
+    s = supervisor.resolve("tts")
+    assert s.orphan and s.identity == "ours"
+    assert s.status == "ok"
+    assert s.detail.endswith("started by vorch")
 
 
 def test_a_leaked_phase_service_is_a_failure(world, tmp_path):
@@ -711,3 +727,58 @@ def _is_zombie_now(pid: int) -> bool:
         return raw[raw.rindex(")") + 1:].split()[0] == "Z"
     except (OSError, ValueError, IndexError):
         return False
+
+
+# --- the environment a child is started with -------------------------------------------
+
+
+def test_the_parents_virtualenv_never_reaches_the_child(world, monkeypatch, tmp_path):
+    """The bug this fixes, reported from a real bring-up.
+
+    `vorch up` was run after `source .venv/bin/activate`, and comfy-cli reads VIRTUAL_ENV to decide
+    which python runs ComfyUI (comfy_cli/resolve_python.py). So ComfyUI was launched under vorch's
+    interpreter and died on `ModuleNotFoundError: No module named 'sqlalchemy'` — a dependency its
+    own venv had installed all along. Verified: the same command with no venv active starts fine.
+    """
+    venv = tmp_path / "parentvenv"
+    (venv / "bin").mkdir(parents=True)
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv))
+    monkeypatch.setenv("VIRTUAL_ENV_PROMPT", "(parentvenv)")
+    monkeypatch.setenv("PYTHONPATH", "/somewhere/else")
+    monkeypatch.setenv("CONDA_PREFIX", "/opt/conda")
+    monkeypatch.setenv("PATH", f"{venv / 'bin'}{os.pathsep}/usr/bin{os.pathsep}/bin")
+
+    env = supervisor.child_env(services.get("tts"))
+    for leaked in ("VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT", "PYTHONPATH", "CONDA_PREFIX"):
+        assert leaked not in env, f"{leaked} must not reach a service with its own environment"
+    assert str(venv / "bin") not in env["PATH"].split(os.pathsep), "nor may its bin win for `python`"
+    assert "/usr/bin" in env["PATH"], "the rest of PATH is left alone"
+    # The manifest's own env still applies — that is the point of declaring it.
+    assert env["OMNIVOICE_BG_REF_AUDIO"] == "Viktoria/11s.wav"
+
+
+def test_a_launcher_that_forks_is_still_recognised_as_ours(world, tmp_path, monkeypatch):
+    """`comfy launch` forks `python main.py`, so the pid we record is not the one that matches.
+
+    Without following the process tree, vorch reported a service it had just started as "started
+    outside vorch" and then refused to stop it without --force.
+    """
+    work = tmp_path / "omni"
+    proc = make_proc(tmp_path / "forked", {
+        500: {"cmdline": "bash launcher.sh", "cwd": work},                    # what we started
+        501: {"cmdline": "python -m omnivoice.cli.serve", "cwd": work,        # what actually serves
+              "environ": {"OMNIVOICE_BG_REF_AUDIO": "Viktoria/11s.wav"}},
+    })
+    # 501's parent is 500 — the launcher.
+    (proc / "501" / "stat").write_text(
+        "501 (fake) S 500 " + " ".join(["0"] * 17 + [str(int(BOOT_OFFSET * TICKS))]), encoding="utf-8")
+    monkeypatch.setattr(supervisor, "PROC", proc)
+    monkeypatch.setattr(vram, "PROC", proc)
+    monkeypatch.setattr(supervisor, "_pid_alive", lambda pid: (proc / str(pid)).is_dir())
+    monkeypatch.setattr(vram, "holders", lambda: [])
+    write_record("tts", pid=500, owner_pid=os.getpid())
+
+    s = supervisor.resolve("tts")
+    assert s.pid == 501, "the pidfile named the launcher; the server is its child"
+    assert s.identity == "ours" and not s.adopted
+    assert s.status == "ok"

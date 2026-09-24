@@ -434,6 +434,23 @@ A failed start already carries the last lines of that log in its error message, 
 not have to go looking. If the log does not exist at all, vorch never started that service — which
 for something you launch by hand is expected, and its output is in your own terminal.
 
+**`ModuleNotFoundError` from a service that works when you start it yourself.** Almost always the
+wrong Python. A service starts in vorch's environment *minus* vorch's own virtualenv —
+`VIRTUAL_ENV`, `CONDA_PREFIX`, `PYTHONPATH`, `PYTHONHOME` and the venv's `bin` are stripped from
+what the child inherits, because a service that manages its own interpreter must not be handed
+ours. comfy-cli, for one, reads `VIRTUAL_ENV` to decide which python runs ComfyUI, so leaking it
+launched ComfyUI under vorch's interpreter and it died on a dependency its own venv had all along.
+
+If you hit this with some *other* service, compare the two:
+
+```bash
+python -m vorch services list --json | grep -A8 '"<name>"'   # what vorch will run
+readlink /proc/<pid>/exe                                     # what is actually running
+```
+
+The fix is to name the interpreter absolutely in the manifest's `argv` rather than relying on
+`python` resolving from `PATH`.
+
 ### "It is running, but vorch says it is down"
 
 The `match:` rules cannot find it. See §4 — this is nearly always a launcher that execs or forks

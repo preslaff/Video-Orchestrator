@@ -43,7 +43,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -168,6 +168,27 @@ def _environ(pid: int) -> dict[str, str] | None:
     return out
 
 
+def _ppid(pid: int) -> int | None:
+    try:
+        raw = (PROC / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+        return int(raw[raw.rindex(")") + 1:].split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _descendant_of(pid: int, ancestor: int, *, depth: int = 8) -> bool:
+    """Is ``pid`` below ``ancestor`` in the process tree?"""
+    seen = pid
+    for _ in range(depth):
+        parent = _ppid(seen)
+        if parent is None or parent <= 1:
+            return False
+        if parent == ancestor:
+            return True
+        seen = parent
+    return False
+
+
 def _matches(spec: ServiceSpec, pid: int) -> bool:
     try:
         m = spec.matcher()
@@ -186,14 +207,29 @@ def _matches(spec: ServiceSpec, pid: int) -> bool:
 
 
 def find_pids(spec: ServiceSpec) -> list[int]:
-    """Every pid matching this service's ``match`` rules, lowest first."""
+    """Every pid matching this service's ``match`` rules, lowest first.
+
+    Never ourselves, and never one of our own ancestors. A ``match`` is a substring test, so the
+    shell that ran ``python -m vorch serve`` matches the ``api`` service as surely as the server
+    does — and so does this very process when the command line mentions it. Excluding our own
+    lineage removes the false positives that are certain rather than merely possible, which matters
+    because a forced stop will signal anything the manifest recognises.
+    """
     found: list[int] = []
     try:
         entries = sorted((int(d.name) for d in PROC.iterdir() if d.name.isdigit()))
     except OSError:
         return found
+    mine = {os.getpid()}
+    walk = os.getpid()
+    for _ in range(8):
+        parent = _ppid(walk)
+        if parent is None or parent <= 1:
+            break
+        mine.add(parent)
+        walk = parent
     for pid in entries:
-        if _matches(spec, pid):
+        if pid not in mine and _matches(spec, pid):
             found.append(pid)
     return found
 
@@ -338,8 +374,10 @@ class ServiceState:
         if self.orphan and self.spec.lifetime == "phase":
             # It should have been stopped when its phase ended, so it has genuinely leaked.
             return "fail"
-        if self.orphan and self.vram_mb:
-            # Ours, but nothing is watching it any more: not broken, yet holding the card.
+        if self.orphan and self.vram_mb and self.spec.lifetime == "warm":
+            # A long-lived service outliving `vorch up` is the entire point of `vorch up`, so that
+            # is plain `ok`. A *warm* one is different: nothing is left to idle-reap it, so it will
+            # sit on the card until something asks for the memory.
             return "warn"
         if not self.running:
             # Not running is the *correct* state for something started on demand.
@@ -386,11 +424,23 @@ def resolve(spec: ServiceSpec | str, *, do_probe: bool = True,
     record = read_record(spec.name)
     pids = find_pids(spec)
 
-    # A stale pidfile is worse than none: it names a pid that may have been reused.
-    if record is not None and (not _pid_alive(record.pid) or not _matches(spec, record.pid)):
-        log.info("supervisor: %s pidfile names pid %d, which is gone or is something else now",
-                 spec.name, record.pid)
+    # A stale pidfile is worse than none: it names a pid that may have been reused. But a launcher
+    # that forks (`comfy launch` -> `python main.py`) means the pid we recorded is legitimately not
+    # the one that matches — the real server is its child. Follow the tree before giving up, or
+    # vorch would fail to recognise a service it started and refuse to stop it.
+    if record is not None and not _pid_alive(record.pid):
+        log.info("supervisor: %s pidfile names pid %d, which is gone", spec.name, record.pid)
         record = None
+    elif record is not None and not _matches(spec, record.pid):
+        child = next((p for p in pids if _descendant_of(p, record.pid)), None)
+        if child is None:
+            log.info("supervisor: %s pidfile names pid %d, which is something else now",
+                     spec.name, record.pid)
+            record = None
+        else:
+            log.debug("supervisor: %s was started via a launcher; the server is pid %d",
+                      spec.name, child)
+            record = replace(record, pid=child)
 
     pid = record.pid if record is not None else (pids[0] if pids else None)
     if record is not None and record.pid not in pids:
@@ -449,9 +499,10 @@ def _describe(s: ServiceState, health_detail: str) -> str:
         bits.append(f"{s.vram_mb} MB VRAM")
     if s.orphan and spec.lifetime == "phase":
         bits.append("LEAKED — a phase-scoped service whose vorch is gone")
+    elif s.orphan and spec.lifetime == "warm":
+        bits.append("started by vorch; nothing is left to reap it when it goes idle")
     elif s.orphan:
-        bits.append("started by vorch, whose process has since exited"
-                    + ("; nothing is watching it" if s.vram_mb else ""))
+        bits.append("started by vorch")
     elif s.adopted:
         bits.append("started outside vorch")
     if s.identity == "mismatch":
@@ -523,7 +574,8 @@ def summary(table: list[ServiceState] | None = None) -> dict:
 
 __all__ = [
     "Identity", "Record", "ServiceState", "SupervisorError",
-    "check_identity", "down", "ensure_headroom", "find_pids", "install_exit_handlers",
+    "check_identity", "child_env", "down", "ensure_headroom", "find_pids",
+    "install_exit_handlers",
     "orphans", "phase", "probe", "read_record", "reap_idle", "resolve", "rotate_log",
     "start", "states", "stop", "summary", "tail", "touch_record", "up", "write_record",
 ]
@@ -621,6 +673,31 @@ def _open_log(spec: ServiceSpec, argv: list[str], env: dict[str, str]):
 # --- starting -------------------------------------------------------------------------
 
 
+#: Variables that describe *our* Python environment. Passing them to a service that manages its own
+#: interpreter is actively harmful: comfy-cli reads ``VIRTUAL_ENV`` to decide which python runs
+#: ComfyUI (comfy_cli/resolve_python.py), so `vorch up` from an activated venv ran ComfyUI under
+#: vorch's interpreter and it died on `ModuleNotFoundError: No module named 'sqlalchemy'` — a
+#: dependency its own venv had all along. A service names its interpreter in its argv; if one really
+#: wants a variable from here, it can set it explicitly in the manifest's ``env:``.
+_VENV_VARS = ("VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT", "CONDA_PREFIX", "CONDA_DEFAULT_ENV",
+              "PYTHONHOME", "PYTHONPATH")
+
+
+def child_env(spec: ServiceSpec, resolved: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment a service is started with: ours, minus our virtualenv, plus its own ``env:``."""
+    env = dict(os.environ)
+    venv = env.get("VIRTUAL_ENV")
+    for key in _VENV_VARS:
+        env.pop(key, None)
+    if venv and (path := env.get("PATH")):
+        # Activation also puts <venv>/bin first on PATH, which would win for a bare `python`.
+        drop = Path(venv) / "bin"
+        kept = [d for d in path.split(os.pathsep) if d and Path(d) != drop]
+        env["PATH"] = os.pathsep.join(kept)
+    env.update(spec.env_resolved() if resolved is None else resolved)
+    return env
+
+
 def start(name: str | ServiceSpec, *, wait: bool = True, timeout: float | None = None,
           free_vram: bool = True) -> ServiceState:
     """Start a service and wait until its health probe answers.
@@ -656,7 +733,7 @@ def start(name: str | ServiceSpec, *, wait: bool = True, timeout: float | None =
     log.info("supervisor: starting %s — %s (log: %s)", spec.name, " ".join(argv), spec.log_path)
     try:
         proc = subprocess.Popen(
-            argv, cwd=str(spec.cwd_path), env={**os.environ, **env},
+            argv, cwd=str(spec.cwd_path), env=child_env(spec, env),
             stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
             # Its own session, so a Ctrl-C in the terminal that ran `vorch up` does not scatter
             # into the services, and so we can later signal the whole group safely.
