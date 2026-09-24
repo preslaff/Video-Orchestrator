@@ -286,7 +286,10 @@ def check_identity(spec: ServiceSpec, pid: int, record: Record | None) -> tuple[
     for key, expected in want.items():
         actual = env.get(key)
         if actual is None:
-            wrong.append(f"{key} is not set on the running server")
+            # Not a mystery: the launcher was run without the variable, so it fell back to its own
+            # built-in default — which for OmniVoice is a different announcer's voice entirely.
+            wrong.append(f"{key} is not set, so it is using the launcher's own default "
+                         f"instead of {_trim(expected)}")
             continue
         got = (actual if len(actual) <= 80
                else "sha1:" + hashlib.sha1(actual.encode("utf-8")).hexdigest()[:12])
