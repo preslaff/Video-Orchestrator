@@ -65,7 +65,45 @@ tells you which are missing.
 See §9. The short version: nothing vorch gains will take away your ability to launch any of
 these in a terminal.
 
-## 3. Reading the Services panel — *planned*
+## 3. Reading the Services panel
+
+**Setup → Services**, beside Environment. Two cards: the GPU, then the services.
+
+The **GPU bar** is one segment per process, widths proportional to what each holds, with the
+driver's own overhead in grey at the end. Hover for pid, MB and uptime. Faded segments are fixed
+costs that will never be freed. This is the thing to glance at before submitting a job.
+
+A segment labelled **unknown — vorch will not touch it** is a process holding VRAM that the
+manifest cannot name. It is shown rather than hidden, with its command line, because vorch will
+refuse to free it and you may need to decide. If it is something of yours, give it a `match:` entry
+(§4); if it is not, it is still your call.
+
+The **services table** carries the vocabulary that matters:
+
+| you see | it means |
+|---|---|
+| `ok` | running, answering, and the right instance |
+| `warn` | running, but we could not verify *which* instance, or more than one process matches |
+| `fail` | an orphan, a wrong instance, or it is not answering its health probe |
+| `down` | **not running — and for an on-demand service that is correct**, not a fault |
+| *started outside vorch* | you launched it. Supported; vorch will not stop it |
+| `ORPHAN` | ours, but the vorch that started it is gone. It holds memory until stopped |
+| `verified` | identity proved — for tts, the cloned voice read out of `/proc/<pid>/environ` |
+| `unverified` | we could not read the identity. A warning, never a block |
+| `WRONG INSTANCE` | proved to be something else. Results from it would be wrong |
+| `warm` / `phase` badge | started on demand, not at bring-up |
+
+The **log** link under each row opens the tail of that service's log file. When a service will not
+start, that is the fastest answer — and for the narration server it is also where you find which
+voice a past run actually used, because every start writes a header.
+
+The same information without a browser:
+
+```bash
+python -m vorch status          # exit code 1 if anything is a fail
+python -m vorch status --json
+```
+
 
 ## 4. The manifest
 
@@ -234,25 +272,109 @@ numbers reconcile. If they ever do not, the attribution is wrong; see §4 on `ma
 
 ## 6. The warm narration server — *planned*
 
-## 7. Diagnosis by symptom — *planned*
+## 7. Diagnosis by symptom
 
-Until it exists, the two that come up most:
+The section to use under pressure. Each entry names the command and what you should see.
 
-- **"only N MB free" / a render OOMs.** Something is holding the card that you cannot see from
-  vorch. `nvidia-smi --query-compute-apps=pid,used_memory --format=csv` names the pid, and
-  `cat /proc/<pid>/cmdline | tr '\0' ' '` names the process. The usual culprit is an OmniVoice
-  server left running from an earlier narration.
-- **"the narration is in the wrong voice."** The voice is passed to OmniVoice only as the
-  environment variable `OMNIVOICE_BG_REF_AUDIO`, and `GET /health` does not report it — so a
-  server started with `serve_bg.sh`'s *default* reference reads every line in a different
-  announcer's voice and nothing notices. Check the running server's actual voice with
-  `tr '\0' '\n' < /proc/<pid>/environ | grep OMNIVOICE_BG_REF_AUDIO`.
+### "Only N MB free" / a render fails to allocate
 
-## 8. Logs — *planned*
+```bash
+python -m vorch vram --by-process
+```
 
-Today there is one stream: whatever `vorch serve` prints to its terminal. The supervised
-OmniVoice child's output is discarded outright (`stdout=DEVNULL`), which is the first thing the
-logging stage fixes.
+Read the holder table. The usual culprit is a narration server left running from an earlier
+session — it is 11 GB, and on a 16 GB card nothing else fits beside it. Release it:
+
+```bash
+python -m vorch down tts
+```
+
+If the largest holder is `UNKNOWN`, vorch will not touch it and neither will it guess: the command
+line is printed so you can decide.
+
+### "The narration is in the wrong voice"
+
+Look at the `service:tts` row in `vorch status` or Setup → Services.
+
+- **`verified`** with the voice named — the server is reading what you think it is. The problem is
+  elsewhere (wording, stress, or a stale wav: see the narration docs).
+- **`WRONG INSTANCE`** — it is reading a different reference. This is the real bug, and it happens
+  because the voice reaches OmniVoice *only* as `OMNIVOICE_BG_REF_AUDIO`; `serve_bg.sh`'s built-in
+  default is a different announcer, and `GET /health` does not report the voice back at all, so
+  nothing downstream can notice. Stop it and let vorch start it with the right reference:
+  `vorch down tts`.
+- **`unverified`** — we could not read `/proc/<pid>/environ` (another user, a hardened kernel). Not
+  a block, by design: a server you started by hand must not be refused merely because we cannot
+  inspect it. Check it yourself:
+
+```bash
+tr '\0' '\n' < /proc/<pid>/environ | grep OMNIVOICE_BG_REF
+```
+
+Any line already spoken keeps the voice it was spoken in — re-speak the affected scenes after
+fixing the server.
+
+### "A service will not start"
+
+```bash
+python -m vorch logs <name>
+```
+
+A failed start already carries the last lines of that log in its error message, so you usually do
+not have to go looking. If the log does not exist at all, vorch never started that service — which
+for something you launch by hand is expected, and its output is in your own terminal.
+
+### "It is running, but vorch says it is down"
+
+The `match:` rules cannot find it. See §4 — this is nearly always a launcher that execs or forks
+into something with a different command line.
+
+### "An orphan is holding the card"
+
+`SIGKILL` cannot be caught, so a hard-killed `vorch serve` leaves its children running. The pidfile
+in `~/vorch/run/` is what makes them findable afterwards: it records the pid *and* the `owner_pid`
+of the vorch that started it, so an orphan is exactly "a pidfile whose owner is gone". It shows as
+a **fail** with the memory it holds. `vorch down <name>` releases it.
+
+### "Submit is blocked"
+
+Only two new things block a submit, and both are genuine defects rather than untidiness: an orphan
+holding VRAM, and a service proved to be the wrong instance. A service simply not being managed by
+vorch never blocks anything. The wizard's `force` remains for the cases where you know better.
+
+### "Verdicts are nonsense" / "I can't see the image"
+
+Not a service-lifecycle problem: llama-server was started without `--mmproj`. Invariant #5;
+`vorch setup check --deep` has a vision probe that catches it.
+
+## 8. Logs
+
+```
+~/vorch/logs/vorch.log        vorch's own output (CLI and `vorch serve` alike)
+~/vorch/logs/vorch.log.1..5   rotated at 8 MiB
+~/vorch/logs/<service>.log    one per supervised service — its stdout AND stderr
+~/vorch/run/<service>.json    pidfile: pid, argv, owner_pid, identity, last use
+```
+
+`vorch.log` is configured in one place, so it exists whether you came in through the CLI or through
+`vorch serve`. `--log-level debug` turns up the detail; `--log-file ''` turns the file off and keeps
+stderr only.
+
+A **service's** log is its own output, redirected to an appended file descriptor — never to
+`DEVNULL`, and never to a pipe that is only read when something goes wrong, which is how OmniVoice's
+diagnostics used to be thrown away entirely. Because it is a plain fd, the output survives even a
+`SIGKILL` of vorch.
+
+Every start writes a header line: the resolved argv, the cwd, and the identity environment values.
+That header is why *"which voice was this server reading?"* is answerable from the log weeks later.
+
+Rotation happens **at start**, not continuously — you cannot rotate a file descriptor another
+process is holding open. A service that runs for weeks and logs heavily is therefore unbounded
+until it is restarted; `vorch status` shows log sizes so it stays visible.
+
+```bash
+python -m vorch logs tts -n 50
+```
 
 ## 9. What vorch will not do, and why
 

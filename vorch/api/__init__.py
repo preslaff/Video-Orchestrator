@@ -17,7 +17,7 @@ from .. import __version__, config, logsetup
 from ..describer import AssetDescriber
 from ..queue import JobManager
 from ..state import Store
-from . import assembly, events, export, jobs, profiles, projects, setup, workflows
+from . import assembly, events, export, jobs, profiles, projects, services, setup, workflows
 from .cors import install_cors
 from .errors import ApiError, install_error_handlers
 from .media import mount_media
@@ -42,6 +42,7 @@ def register_routes(app: FastAPI, manager: JobManager, store: Store,
     app.include_router(workflows.router)
     app.include_router(profiles.router)
     app.include_router(projects.router)
+    app.include_router(services.router)
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict:

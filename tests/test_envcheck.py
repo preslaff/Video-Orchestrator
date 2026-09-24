@@ -7,7 +7,7 @@ import shutil
 import pytest
 import requests
 
-from vorch import config, envcheck, profiles, registry, vram
+from vorch import config, envcheck, profiles, registry, supervisor, vram
 from vorch.clients import comfy
 
 
@@ -46,6 +46,9 @@ def healthy(monkeypatch, tmp_path):
     def fake_get(url, timeout=None):
         if url.endswith("/v1/models"):
             return _Resp({"data": [{"id": "gemma-4"}]})
+        if url.endswith("/health"):
+            # The narration server is not running, which for an on-demand service is correct.
+            raise requests.ConnectionError("refused")
         raise AssertionError(url)
 
     stats = {"system": {"comfyui_version": "0.34.0"}, "devices": [{"name": "RTX", "vram_total": 16 * 2**30}]}
@@ -54,6 +57,12 @@ def healthy(monkeypatch, tmp_path):
     monkeypatch.setattr(comfy, "wait_ready", lambda backend=None, **kw: stats)
     monkeypatch.setattr(comfy, "object_info", lambda refresh=False, backend=None: info)
     monkeypatch.setattr(vram, "snapshot", lambda: {"used": 500, "free": 15000, "total": 16000})
+    # Per-process attribution and the service rows must not read this machine's real state.
+    monkeypatch.setattr(vram, "holders", lambda: [])
+    empty_proc = tmp_path / "proc"
+    empty_proc.mkdir()
+    monkeypatch.setattr(supervisor, "PROC", empty_proc)
+    monkeypatch.setattr(config, "RUN_DIR", tmp_path / "run")
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     for name in ("COMFY_INPUT", "COMFY_OUTPUT"):
         d = tmp_path / name.lower()

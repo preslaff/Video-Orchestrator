@@ -661,6 +661,36 @@ def _cmd_assemble(args) -> int:
         store.close()
 
 
+def _cmd_status(args) -> int:
+    """Every service, whether it is up, whether it is ours, and who holds the card."""
+    from . import supervisor, vram
+
+    table = supervisor.states(do_probe=not args.no_probe)
+    if args.json:
+        json.dump(supervisor.summary(table), sys.stdout, indent=2, ensure_ascii=False, default=str)
+        sys.stdout.write("\n")
+        return 0
+    mark = {"ok": "[ ok ]", "warn": "[warn]", "fail": "[FAIL]", "down": "[down]"}
+    for s in table:
+        print(f"{mark[s.status]} {s.name:<9} {s.detail}")
+        if s.status == "fail" and s.orphan:
+            print(f"         reclaim it with: vorch down {s.name}")
+    gpu = vram.attribute()
+    if gpu is not None:
+        named = ", ".join(f"{h.label} {h.used_mb}" for h in gpu["holders"]) or "nothing"
+        print(f"\nGPU: {gpu['free']} / {gpu['total']} MB free — held by {named} MB")
+    if orphaned := [s.name for s in table if s.orphan]:
+        print(f"\norphans from an earlier vorch: {', '.join(orphaned)} — `vorch down` releases them")
+    return 1 if any(s.status == "fail" for s in table) else 0
+
+
+def _cmd_logs(args) -> int:
+    from . import supervisor
+
+    print(supervisor.tail(args.name, args.lines))
+    return 0
+
+
 def _cmd_services(args) -> int:
     """The manifest as parsed, with the command you could run by hand."""
     from . import services
@@ -1047,6 +1077,16 @@ def build_parser() -> argparse.ArgumentParser:
     ra.add_argument("--out", default=None, help="directory (default: VORCH_USER_WORKFLOW_DIR)")
     ra.add_argument("--force", action="store_true")
     rg.set_defaults(func=_cmd_registry)
+
+    st = sub.add_parser("status", help="which services are up, which are ours, and who holds the GPU")
+    st.add_argument("--json", action="store_true")
+    st.add_argument("--no-probe", action="store_true", help="skip the health requests (faster)")
+    st.set_defaults(func=_cmd_status)
+
+    lg = sub.add_parser("logs", help="tail a service's log file")
+    lg.add_argument("name")
+    lg.add_argument("-n", "--lines", type=int, default=200)
+    lg.set_defaults(func=_cmd_logs)
 
     sv2 = sub.add_parser("services", help="the service manifest: which processes vorch depends on")
     sv2s = sv2.add_subparsers(dest="services_command", required=True)

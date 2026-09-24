@@ -2515,6 +2515,87 @@
           }
         }
       }
+    },
+    "/api/services": {
+      "get": {
+        "tags": [
+          "services"
+        ],
+        "summary": "List Services",
+        "description": "Every service in dependency order, plus the GPU holder table.",
+        "operationId": "list_services_api_services_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Services Api Services Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/services/{name}/logs": {
+      "get": {
+        "tags": [
+          "services"
+        ],
+        "summary": "Service Logs",
+        "description": "The tail of one service's log file.",
+        "operationId": "service_logs_api_services__name__logs_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "tail",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 5000,
+              "minimum": 1,
+              "default": 200,
+              "title": "Tail"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Service Logs Api Services  Name  Logs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

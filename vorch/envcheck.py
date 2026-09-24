@@ -31,6 +31,7 @@ import psycopg
 import requests
 
 from . import backends, config, db, registry, vram
+from . import services as services_mod
 from .backends import ComfyBackend
 from .clients import comfy, gemma
 
@@ -330,6 +331,50 @@ def _check_dir(name: str, path: Path) -> CheckResult:
     return CheckResult(name, "ok", str(path))
 
 
+def _check_services() -> list[CheckResult]:
+    """One row per manifest service that nothing else already covers.
+
+    ``database``, ``comfy:local`` and ``gemma`` have their own checks above, so they are skipped
+    rather than duplicated, and ``api``/``ui`` are skipped because this report is *served by* the
+    API to the UI — by the time you can read the answer, both are demonstrably up. What is left is
+    the narration server, which until now was invisible to diagnostics entirely (``grep -c tts
+    envcheck.py`` was 0) despite being the largest single consumer of the card.
+
+    Not running is **ok** for a service started on demand: it is the correct state, not a fault.
+    What is a fault is an orphan holding VRAM, or a server demonstrably running the wrong instance.
+    """
+    from . import supervisor
+    from .services import ServiceError
+
+    covered = {"postgres", "comfy", "gemma", "api", "ui"}
+    out: list[CheckResult] = []
+    try:
+        wanted = [n for n in services_mod.names() if n not in covered]
+        # Resolve only what we will report: states() would expand dependencies and probe ComfyUI
+        # and PostgreSQL a second time.
+        table = [supervisor.resolve(n) for n in wanted]
+    except ServiceError as e:
+        return [CheckResult("services", "fail", f"the service manifest is unusable: {e}")]
+    for s in table:
+        name = f"service:{s.name}"
+        data = s.to_dict()
+        if s.orphan:
+            held = f", holding {s.vram_mb} MB" if s.vram_mb else ""
+            out.append(CheckResult(name, "fail",
+                                   f"orphan from a vorch that is gone (pid {s.pid}{held}) — "
+                                   f"release it with: vorch down {s.name}", data))
+        elif s.identity == "mismatch":
+            out.append(CheckResult(name, "fail", f"wrong instance: {s.identity_detail}", data))
+        elif not s.running and s.spec.lifetime in ("warm", "phase"):
+            # Started on demand: absent is correct, and must not read as a problem.
+            out.append(CheckResult(name, "ok", s.detail, data))
+        elif not s.running:
+            out.append(CheckResult(name, "warn", s.detail, data))
+        else:
+            out.append(CheckResult(name, s.status, s.detail, data))
+    return out
+
+
 # --- report ----------------------------------------------------------------------------
 
 _cache: dict[tuple, tuple[float, EnvReport]] = {}
@@ -376,6 +421,7 @@ def run_checks(
     if deep and gemma_res.status == "ok":
         checks.append(_check_gemma_vision())
     checks += [_check_tool("ffmpeg"), _check_tool("ffprobe"), _check_gpu()]
+    checks += _check_services()
 
     infos = {
         name: _object_info(known[name], res.status == "ok" and bool(res.data.get("probed")), force)
