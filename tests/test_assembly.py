@@ -684,3 +684,27 @@ def test_status_offers_the_caption_vocabulary(tmp_path):
     st = assembly.status(_job(tmp_path))
     assert "fade" in st["text_effects"] and "typewriter" in st["text_effects"]
     assert "lower-third" in st["text_presets"]
+
+
+def test_a_font_that_cannot_draw_cyrillic_warns_but_still_renders(tmp_path, monkeypatch, caplog):
+    """libass substitutes silently and the render fills with boxes, so the warning is the only
+    signal — but losing a paid render over a font name is the worse trade."""
+    monkeypatch.setattr(media, "text_fonts", lambda **kw: ["DejaVu Sans", "Noto Sans"])
+    job = _job(tmp_path, n=1)
+    spec, _ = assembly.resolve(job, {"items": [{"scene_index": 0}], "cuts": [],
+                                     "texts": [_caption(font="Wingdings")]})
+    assert spec.texts, "the caption is kept"
+    assert "cannot render Cyrillic" in caplog.text and "Wingdings" in caplog.text
+
+
+def test_a_usable_font_says_nothing(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(media, "text_fonts", lambda **kw: ["DejaVu Sans", "Noto Sans"])
+    job = _job(tmp_path, n=1)
+    assembly.resolve(job, {"items": [{"scene_index": 0}], "cuts": [],
+                           "texts": [_caption(font="Noto Sans")]})
+    assert "cannot render Cyrillic" not in caplog.text
+
+
+def test_status_offers_the_installed_fonts(tmp_path, monkeypatch):
+    monkeypatch.setattr(media, "text_fonts", lambda **kw: ["DejaVu Sans", "Noto Serif"])
+    assert assembly.status(_job(tmp_path))["text_fonts"] == ["DejaVu Sans", "Noto Serif"]

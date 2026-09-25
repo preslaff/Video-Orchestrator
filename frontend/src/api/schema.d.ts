@@ -1099,6 +1099,11 @@ export interface components {
                     [key: string]: unknown;
                 };
             };
+            /**
+             * Text Fonts
+             * @default []
+             */
+            text_fonts: string[];
         };
         /**
          * AssemblyTakeOut

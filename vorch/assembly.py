@@ -595,7 +595,27 @@ def resolve(job: Job, spec: dict | None) -> tuple[AssemblySpec, list[Path]]:
             titles_mod.validate(item, limit=total)
         except ValueError as e:
             raise ValueError(f"caption {n + 1}: {e}") from None
+        _warn_unusable_font(item.font)
+    for scene in job.scenes:
+        for raw in scene.texts:
+            try:
+                _warn_unusable_font(titles_mod.from_dict(raw).font)
+            except ValueError:
+                pass                                   # `_texts_for` reports and skips it
     return resolved, paths
+
+
+def _warn_unusable_font(font: str) -> None:
+    """Say so when a font cannot draw Cyrillic — but never fail the render over it.
+
+    libass falls back silently and draws boxes, so the only signal a person gets is a finished
+    file full of tofu. A warning in the log is worth a lot; refusing to render is not, for the
+    same reason `_lock_regions` keeps the unlocked clip rather than losing the whole job.
+    """
+    usable = media.text_fonts()
+    if usable and font not in usable:
+        log.warning("caption font %r cannot render Cyrillic here; libass will substitute "
+                    "(installed and usable: %s)", font, ", ".join(usable[:6]))
 
 
 def clip_infos(job: Job) -> list[dict]:
@@ -822,6 +842,7 @@ def status(job: Job, *, active: bool = False) -> dict:
         # copies into a new item; nothing refers back to one afterwards.
         "text_effects": list(titles_mod.EFFECTS),
         "text_presets": {k: dict(v) for k, v in titles_mod.PRESETS.items()},
+        "text_fonts": media.text_fonts(),
         "default_spec": default_spec(job).to_dict(),
         "clips": clip_infos(job),
         "profile_fps": pv.get("fps"),

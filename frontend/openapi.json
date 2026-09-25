@@ -3214,6 +3214,14 @@
             "type": "object",
             "title": "Text Presets",
             "default": {}
+          },
+          "text_fonts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Text Fonts",
+            "default": []
           }
         },
         "type": "object",

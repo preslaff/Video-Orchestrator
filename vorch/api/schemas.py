@@ -551,3 +551,4 @@ class AssemblyStatus(BaseModel):
     versions: list[AssemblyVersionOut] = []
     text_effects: list[str] = []
     text_presets: dict[str, dict] = {}
+    text_fonts: list[str] = []           # families installed here that can draw Cyrillic

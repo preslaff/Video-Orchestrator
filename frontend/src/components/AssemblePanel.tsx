@@ -438,6 +438,7 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
         <TextItems items={texts} onChange={(v: TextItem[]) => update({ texts: v })}
           videoUrl={status.data?.record?.url ?? undefined}
           effects={status.data?.text_effects} presets={status.data?.text_presets}
+          fonts={status.data?.text_fonts}
           limit={total} busy={run.isPending} testId="timeline-texts" />
       </div>
       <ErrorBox message={run.error ? errorMessage(run.error) : null} />

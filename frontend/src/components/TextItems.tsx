@@ -59,13 +59,16 @@ function NumField({
 
 
 export function TextItems({
-  items, onChange, videoUrl, effects, presets, limit, busy = false, testId = 'texts',
+  items, onChange, videoUrl, effects, presets, fonts, limit, busy = false, testId = 'texts',
 }: {
   items: TextItem[]
   onChange: (items: TextItem[]) => void
   videoUrl?: string | null
   effects?: string[]
   presets?: Record<string, Record<string, unknown>>
+  /** Families installed on the machine that can draw Cyrillic. Offering only these makes the
+   *  silent-tofu failure unreachable from the browser. */
+  fonts?: string[]
   /** How long the thing underneath lasts, so a caption cannot be scheduled past its end. */
   limit?: number | null
   busy?: boolean
@@ -151,6 +154,15 @@ export function TextItems({
                 onCommit={(v) => patch(i, { size: v / 100 })}
                 suffix={<span className="text-neutral-400" title="percent of the frame height, so 9:16 and 16:9 read the same">% of height</span>} />
             </label>
+            {fonts && fonts.length > 0 && (
+              <select value={t.font} disabled={busy} aria-label={`caption ${i + 1} font`}
+                data-testid={`${testId}-font-${i}`}
+                title="only families installed here that can draw Cyrillic — others would render as boxes"
+                onChange={(e) => patch(i, { font: e.target.value })}
+                className="max-w-[10rem] rounded border border-neutral-300 bg-white px-1 py-0.5">
+                {fonts.map((f) => <option key={f} value={f}>{f}</option>)}
+              </select>
+            )}
             <label className="flex items-center gap-1">colour
               <input type="color" value={`#${t.colour}`} disabled={busy}
                 aria-label={`caption ${i + 1} colour`} data-testid={`${testId}-colour-${i}`}

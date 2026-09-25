@@ -678,6 +678,42 @@ def build_filtergraph(
     return ";".join(parts), "[out]"
 
 
+_FONTS: list[str] | None = None
+
+
+def text_fonts(*, refresh: bool = False, lang: str = "bg") -> list[str]:
+    """Font families installed here that can actually render ``lang``.
+
+    Asked of fontconfig rather than hardcoded, because it is the same database libass resolves a
+    family name through — so anything this returns will render, and anything it omits would come
+    out as boxes. That failure is silent: libass draws tofu and reports nothing, which for a
+    Bulgarian caption is the first thing a person would hit. The UI offers this list and nothing
+    else, so the trap is unreachable from the browser.
+
+    Best-effort: without ``fc-list`` the caller gets the default alone rather than an error.
+    """
+    global _FONTS
+    if _FONTS is not None and not refresh:
+        return list(_FONTS)
+    default = "DejaVu Sans"
+    found: set[str] = set()
+    try:
+        out = subprocess.check_output(["fc-list", f":lang={lang}", "family"],
+                                      stderr=subprocess.DEVNULL, timeout=10).decode(errors="replace")
+        for line in out.splitlines():
+            # fc-list prints a comma-separated list of aliases per font; the first is the family.
+            for name in line.split(","):
+                name = name.strip()
+                if name:
+                    found.add(name)
+    except (OSError, subprocess.SubprocessError):
+        log.info("fontconfig unavailable; offering %s alone", default)
+    ordered = [default] if default in found or not found else []
+    ordered += sorted(n for n in found if n != default)
+    _FONTS = ordered
+    return list(ordered)
+
+
 def _filter_path(path: Path) -> str:
     """A path as a filtergraph *argument*.
 

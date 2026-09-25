@@ -482,3 +482,24 @@ def test_a_single_clip_with_titles_still_renders(tmp_path):
     ass = _ass(tmp_path / "t.ass", start=0.0, end=1.0, size=64, height=64)
     out = media.assemble([clip], [], tmp_path / "solo_titled.mp4", fps=8, size=(64, 64), titles=ass)
     assert out.is_file() and media.probe(out).width == 64
+
+
+def test_text_fonts_only_offers_what_can_draw_cyrillic(monkeypatch):
+    """Asked of fontconfig, because that is the same database libass resolves a family through —
+    a font it omits would come out as boxes, silently."""
+    monkeypatch.setattr(media, "_FONTS", None)
+    monkeypatch.setattr(media.subprocess, "check_output",
+                        lambda *a, **k: b"DejaVu Sans\nNoto Sans,Noto Sans Regular\nLiberation Serif\n")
+    fonts = media.text_fonts(refresh=True)
+    assert fonts[0] == "DejaVu Sans", "the default leads, the rest are alphabetical"
+    assert fonts[1:] == ["Liberation Serif", "Noto Sans", "Noto Sans Regular"]
+
+
+def test_text_fonts_degrades_without_fontconfig(monkeypatch):
+    monkeypatch.setattr(media, "_FONTS", None)
+
+    def boom(*a, **k):
+        raise OSError("no fc-list")
+
+    monkeypatch.setattr(media.subprocess, "check_output", boom)
+    assert media.text_fonts(refresh=True) == ["DejaVu Sans"]

@@ -69,6 +69,21 @@ describe('TextItems', () => {
     expect(screen.getByText(/Placement is approximate/i)).toBeInTheDocument()
   })
 
+  it('offers only fonts that can draw Cyrillic', async () => {
+    const user = userEvent.setup()
+    render(<Harness initial={[blankText()]} fonts={['DejaVu Sans', 'Noto Serif']} />)
+    const select = screen.getByLabelText('caption 1 font')
+    expect([...select.querySelectorAll('option')].map((o) => o.textContent))
+      .toEqual(['DejaVu Sans', 'Noto Serif'])
+    await user.selectOptions(select, 'Noto Serif')
+    expect(select).toHaveValue('Noto Serif')
+  })
+
+  it('hides the font control when the server has not said what is installed', () => {
+    render(<Harness initial={[blankText()]} />)
+    expect(screen.queryByLabelText('caption 1 font')).toBeNull()
+  })
+
   it('uses the effects the server offers', async () => {
     render(<Harness initial={[blankText()]} effects={['none', 'fade', 'typewriter']} />)
     const select = screen.getByLabelText('caption 1 effect')
