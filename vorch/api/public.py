@@ -18,15 +18,30 @@ from ..state import Clip, Job, Scene, Store, Variant, _scene_to_dict, job_to_dic
 from .schemas import ClipOut, JobPublic, ProvenanceOut, ScenePublic, VariantOut, VerdictOut
 
 
-def media_url(path: str | None) -> str | None:
-    """``/media/<path relative to COMFY_OUTPUT>`` or None when outside it."""
+def media_url(path: str | None, *, bust: bool = False) -> str | None:
+    """``/media/<path relative to COMFY_OUTPUT>`` or None when outside it.
+
+    ``bust`` appends ``?v=<mtime><size>`` so a browser refetches after the file is rewritten. Most
+    generated media does not need it — ComfyUI numbers every output, so a regenerated keyframe
+    arrives under a new name and the URL changes by itself. Narration is the exception: a scene's
+    take is deliberately written to one path, so re-speaking a line left the URL identical and the
+    browser went on playing the previous take from cache (and a cached byte range against a file of
+    a different length answers 416).
+    """
     if not path:
         return None
     try:
         rel = Path(path).resolve().relative_to(config.COMFY_OUTPUT.resolve())
     except ValueError:
         return None
-    return "/media/" + rel.as_posix()
+    url = "/media/" + rel.as_posix()
+    if bust:
+        try:
+            st = Path(path).stat()
+            return f"{url}?v={int(st.st_mtime)}{st.st_size}"
+        except OSError:
+            pass
+    return url
 
 
 def verdict_out(v: Verdict | None) -> VerdictOut | None:
@@ -64,7 +79,7 @@ def scene_to_public(s: Scene, project_id: str | None = None) -> ScenePublic:
         identity_url=(f"/api/projects/{project_id}/assets/{s.identity_asset_id}/file"
                       if project_id and s.identity_asset_id else None),
         keyframe_url=media_url(s.keyframe_path),
-        narration_url=media_url(s.narration_path),
+        narration_url=media_url(s.narration_path, bust=True),
         narration_stale=bool(s.narration.strip()) and s.narration.strip() != s.narration_said.strip(),
         video_url=media_url(s.video_path),
         swapped_url=media_url(s.swapped_path),

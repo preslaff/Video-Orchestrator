@@ -676,7 +676,10 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                       </button>
                       {s.narration_url && (
                         <>
-                          <audio src={s.narration_url} controls preload="none" className="h-8" data-testid={`narration-audio-${s.index}`} />
+                          {/* keyed on the URL so a re-spoken take remounts the element rather than reusing the
+                              player's already-loaded audio */}
+                          <audio key={s.narration_url} src={s.narration_url} controls preload="none"
+                            className="h-8" data-testid={`narration-audio-${s.index}`} />
                           <span data-testid={`narration-fit-${s.index}`}>
                             {s.narration_seconds.toFixed(2)}s
                             {clipSecs != null && ` over a ${clipSecs.toFixed(2)}s clip`}

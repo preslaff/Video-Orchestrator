@@ -1189,3 +1189,35 @@ def test_a_clip_thumbnail_is_a_poster_frame_never_the_clip(client, tmp_path):
     assert r2.status_code in (200, 404)
     if r2.status_code == 200:
         assert r2.headers["content-type"] == "image/jpeg", "never the video itself"
+
+
+def test_narration_url_changes_when_the_take_is_respoken(tmp_path, monkeypatch):
+    """Re-speaking wrote the same filename, so the URL never changed and the browser kept playing
+    the previous take from cache — a cached byte range against a file of a different length even
+    answers 416. Every other kind of media is numbered by ComfyUI and changes name by itself."""
+    import os
+    import time
+
+    from vorch import config
+    from vorch.api.public import media_url
+
+    out = tmp_path / "out"
+    (out / "vorch").mkdir(parents=True)
+    monkeypatch.setattr(config, "COMFY_OUTPUT", out)
+    wav = out / "vorch" / "s06_narration.wav"
+    wav.write_bytes(b"RIFF" + b"\0" * 100)
+
+    first = media_url(str(wav), bust=True)
+    assert first is not None and first.startswith("/media/vorch/s06_narration.wav?v=")
+    # The plain URL is unchanged for everything else.
+    assert media_url(str(wav)) == "/media/vorch/s06_narration.wav"
+
+    time.sleep(0.01)
+    wav.write_bytes(b"RIFF" + b"\0" * 250)          # a different take, same path
+    os.utime(wav, (time.time() + 2, time.time() + 2))
+    assert media_url(str(wav), bust=True) != first
+
+    # A missing file degrades to the plain URL rather than failing.
+    wav.unlink()
+    assert media_url(str(wav), bust=True) == "/media/vorch/s06_narration.wav"
+    assert media_url(None, bust=True) is None
