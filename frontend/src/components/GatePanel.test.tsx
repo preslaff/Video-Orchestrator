@@ -10,7 +10,7 @@ const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) 
   keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', edit_workflow: '', edit_base: '', edit_base_path: '', references: [],
   keyframe_path: null, keyframe_url: null, keyframe_verdict: null, video_path: null, video_url: null, video_verdict: null,
   swapped_path: null, swapped_url: null, swap_verdict: null, variants: [], raw_video_path: null, post_paths: [],
-  identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], clips: [], locked_regions: [], narration: '', narration_url: null, narration_seconds: 0, narration_stale: false, ...extra,
+  identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], clips: [], locked_regions: [], narration: '', narration_url: null, narration_seconds: 0, narration_stale: false, texts: [], ...extra,
 })
 const job = {
   id: 'j1', idea: 'ages', style: '', master_face: '/m.png', autonomy: 'semi', n_scenes: 2, seed: 0, max_attempts: 2,
@@ -599,7 +599,7 @@ describe('GatePanel narration', () => {
     scenes: [scene(0, {
       video_path: '/v0.mp4', video_url: '/media/v0.mp4',
       narration: 'Открий своя аромат.', narration_url: '/media/n0.wav',
-      narration_seconds: 4.2, narration_stale: false,
+      narration_seconds: 4.2, narration_stale: false, texts: [],
     })],
   } as unknown as JobPublic
 

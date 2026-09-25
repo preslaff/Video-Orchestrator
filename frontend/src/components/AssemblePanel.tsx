@@ -4,11 +4,12 @@ import { useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { errorMessage } from '@/api/client'
 import { describeStep, type JobEvent } from '@/api/events'
-import type { AssemblyClip, AssemblySpecIn, AssemblyStatus as AssemblyStatusT, JobPublic } from '@/api/types'
+import type { AssemblyClip, AssemblySpecIn, AssemblyStatus as AssemblyStatusT, JobPublic, TextItem } from '@/api/types'
 import { useAssembly, useRunAssembly, useSaveCut } from '@/hooks/useJobs'
 import { ClipPreview } from '@/components/ClipPreview'
 import { MediaThumb } from '@/components/MediaThumb'
 import { AssemblyVersions } from '@/components/AssemblyVersions'
+import { TextItems } from '@/components/TextItems'
 import { Button, Empty, ErrorBox, fmtTime } from '@/components/ui'
 import { clampCut, clampTarget, defaultCuts, effectiveSource, snapToFrame, fmtBytes, fmtSeconds, fmtSpeed, groupTransitions, maxTransition, retimed, round2, speedFor, totalDuration, MAX_SPEED, type CutDraft } from '@/lib/assembly'
 
@@ -32,14 +33,14 @@ function clipSize(job: JobPublic): [number, number] | null {
   return v?.width && v.height ? [v.width, v.height] : null
 }
 
-type Draft = { rows: Row[]; cuts: CutDraft[]; fps: number | ''; smooth: boolean; audio: boolean; narration: boolean }
+type Draft = { rows: Row[]; cuts: CutDraft[]; fps: number | ''; smooth: boolean; audio: boolean; narration: boolean; texts: TextItem[]; titles: boolean }
 
 /** Initial editor state from the last assembly spec (if any) or all clips in order. */
 function seedDraft(status: AssemblyStatusT | undefined): Draft {
-  if (!status) return { rows: [], cuts: [], fps: '', smooth: false, audio: false, narration: true }
+  if (!status) return { rows: [], cuts: [], fps: '', smooth: false, audio: false, narration: true, texts: [], titles: true }
   const clips = status.clips
   const known = new Set(clips.map((c) => c.scene_index))
-  const spec = status.record?.spec as { items?: { scene_index: number; source: 'final' | 'raw'; target_seconds?: number | null; clip_id?: string | null; start?: number | null; end?: number | null }[]; cuts?: CutDraft[]; fps?: number | null; smooth?: boolean; audio?: boolean; narration?: boolean } | undefined
+  const spec = status.record?.spec as { items?: { scene_index: number; source: 'final' | 'raw'; target_seconds?: number | null; clip_id?: string | null; start?: number | null; end?: number | null }[]; cuts?: CutDraft[]; fps?: number | null; smooth?: boolean; audio?: boolean; narration?: boolean; texts?: TextItem[]; titles?: boolean } | undefined
   const num = (v: number | null | undefined) => (v != null ? String(v) : null)
   const rows: Row[] = []
   // Every saved item becomes its own row, repeats included — collapsing them by scene used to
@@ -54,7 +55,8 @@ function seedDraft(status: AssemblyStatusT | undefined): Draft {
   for (const c of clips) if (!placed.has(c.scene_index)) rows.push({ uid: seedUid(rows.length), scene_index: c.scene_index, selected: !spec, source: 'final', target: null, clip_id: null, start: null, end: null })
   const n = rows.filter((r) => r.selected).length
   const cuts = defaultCuts(n).map((d, i) => spec?.cuts?.[i] ?? d)
-  return { rows, cuts, fps: spec?.fps ?? '', smooth: !!spec?.smooth, audio: !!spec?.audio, narration: spec?.narration !== false }
+  return { rows, cuts, fps: spec?.fps ?? '', smooth: !!spec?.smooth, audio: !!spec?.audio, narration: spec?.narration !== false,
+    texts: spec?.texts ?? [], titles: spec?.titles !== false }
 }
 
 export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; events: JobEvent[]; onStarted?: () => void }) {
@@ -71,6 +73,8 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
   const smooth = seeded.smooth
   const audio = seeded.audio
   const narration = seeded.narration
+  const texts = seeded.texts
+  const titles = seeded.titles
   const update = (patch: Partial<Draft>) => setDraft({ ...seeded, ...patch })
   const [encoder, setEncoder] = useState<'libx264' | 'h264_nvenc'>('libx264')
   // What the assembly is mastered as. The clips are rendered small (a 16 GB card animates at
@@ -171,6 +175,8 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
       audio,
       narration,
       duck: 6,
+      texts,
+      titles,
       delivery: target?.id ?? 'source',
       grain,
       max_mbps: null,
@@ -404,6 +410,12 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
             onChange={(e) => update({ narration: e.target.checked })} />
           narration
         </label>
+        <label className="flex items-center gap-1 text-neutral-600"
+          title="draw the captions — scene captions and the ones below. Off renders a clean pass without deleting anything">
+          <input type="checkbox" aria-label="titles" checked={titles}
+            onChange={(e) => update({ titles: e.target.checked })} />
+          titles{texts.length > 0 && <span className="text-xs text-neutral-400">({texts.length} on the film)</span>}
+        </label>
         <label className="flex items-center gap-1 text-neutral-600">encoder
           <select value={encoder} onChange={(e) => setEncoder(e.target.value as 'libx264' | 'h264_nvenc')} className="rounded border border-neutral-300 bg-white px-2 py-1">
             <option value="libx264">libx264 (CPU)</option>
@@ -413,6 +425,20 @@ export function AssemblePanel({ job, events, onStarted }: { job: JobPublic; even
         <Button data-testid="assemble" variant="primary" disabled={busy || selected.length === 0} onClick={submit}>
           {run.isPending || active ? 'Assembling…' : rec ? 'Re-assemble' : 'Assemble'}
         </Button>
+      </div>
+
+      <div className="mt-3 rounded border border-neutral-200 p-3">
+        <div className="mb-2 flex items-baseline gap-2">
+          <h3 className="text-sm font-medium">Captions on the film</h3>
+          <span className="text-xs text-neutral-500">
+            absolute times on the finished cut — a title card, an end card, credits. These do not
+            follow a reorder or a trim; a caption that should stay with a shot belongs on the scene.
+          </span>
+        </div>
+        <TextItems items={texts} onChange={(v: TextItem[]) => update({ texts: v })}
+          videoUrl={status.data?.record?.url ?? undefined}
+          effects={status.data?.text_effects} presets={status.data?.text_presets}
+          limit={total} busy={run.isPending} testId="timeline-texts" />
       </div>
       <ErrorBox message={run.error ? errorMessage(run.error) : null} />
 

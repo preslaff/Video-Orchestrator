@@ -242,3 +242,41 @@ describe('AssemblePanel trims and repeats', () => {
     expect(screen.getByTestId('total')).toHaveTextContent('6.12s')   // 1 + 2×3.062 − 2×0.5
   })
 })
+
+describe('AssemblePanel captions', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('submits timeline captions with the spec, and titles on by default', async () => {
+    const posts = mockFetch()
+    renderPanel()
+    await screen.findByTestId('total')
+
+    const user = userEvent.setup()
+    await user.click(within(screen.getByTestId('timeline-texts')).getByText('Add caption'))
+    await user.type(screen.getByTestId('timeline-texts-text-0'), 'Открий своя аромат')
+    await user.click(screen.getByRole('button', { name: /^assemble/i }))
+
+    await waitFor(() => expect(posts.length).toBeGreaterThan(0))
+    const spec = posts[0] as { texts: { text: string }[]; titles: boolean }
+    expect(spec.titles).toBe(true)
+    expect(spec.texts.map((x) => x.text)).toEqual(['Открий своя аромат'])
+  })
+
+  it('renders a clean pass without deleting the captions', async () => {
+    const posts = mockFetch()
+    renderPanel()
+    await screen.findByTestId('total')
+
+    const user = userEvent.setup()
+    await user.click(within(screen.getByTestId('timeline-texts')).getByText('Add caption'))
+    await user.type(screen.getByTestId('timeline-texts-text-0'), 'тест')
+    await user.click(screen.getByLabelText('titles'))
+    await user.click(screen.getByRole('button', { name: /^assemble/i }))
+
+    await waitFor(() => expect(posts.length).toBeGreaterThan(0))
+    const spec = posts[0] as { texts: { text: string }[]; titles: boolean }
+    expect(spec.titles).toBe(false)
+    // The captions are kept in the spec — off means "do not draw", not "delete".
+    expect(spec.texts).toHaveLength(1)
+  })
+})
