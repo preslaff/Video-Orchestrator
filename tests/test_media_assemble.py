@@ -397,3 +397,88 @@ def test_probe_refuses_audio_but_audio_seconds_reads_it(tmp_path):
     assert media.audio_seconds(wav) == pytest.approx(1.5, abs=0.05)
     with pytest.raises(FileNotFoundError):
         media.audio_seconds(tmp_path / "gone.wav")
+
+
+# --- captions: the one filter that draws them ------------------------------------------
+
+
+def _ass(path: Path, text="ЗДРАВЕЙ", *, start=0.0, end=2.0, size=480, height=480) -> Path:
+    path.write_text(
+        "[Script Info]\nScriptType: v4.00+\n"
+        f"PlayResX: {size}\nPlayResY: {height}\nWrapStyle: 2\n\n"
+        "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, "
+        "BackColour, Bold, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: t0,DejaVu Sans,28,&H00FFFFFF,&H00000000,&H00000000,-1,2,0,5,10,10,10,1\n\n"
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        f"Dialogue: 0,0:00:{start:05.2f},0:00:{end:05.2f},t0,,0,0,0,,{text}\n",
+        encoding="utf-8")
+    return path
+
+
+def test_filter_path_escaping_is_not_ass_escaping(tmp_path):
+    """Two unrelated layers. This one is ffmpeg's filter-argument syntax; ASS escaping is about
+    braces and line breaks in the subtitle text. Confusing them corrupts the graph."""
+    assert media._filter_path(Path("/tmp/a b/x.ass")) == "/tmp/a b/x.ass"
+    assert media._filter_path(Path("/tmp/od:d/x.ass")) == r"/tmp/od\:d/x.ass"
+    assert media._filter_path(Path("/tmp/it's/x.ass")) == r"/tmp/it\'s/x.ass"
+
+
+@pytest.mark.parametrize("durations,cuts,label", [
+    ([2], [], "[v0]"),                                        # one clip, no join
+    ([2, 2], [Cut("fade", 0.5)], "[g0]"),                     # one xfade group
+    ([2, 2], [Cut("none")], "[out]"),                         # a hard cut splits into groups
+])
+def test_the_text_stage_consumes_whatever_label_the_join_produced(durations, cuts, label):
+    """The final video label is not fixed — hardcoding one breaks the other two shapes."""
+    _, out = media.build_filtergraph(durations, cuts, width=64, height=64, fps=8)
+    assert out == label
+    stage = media._text_stage(out, Path("/t/titles.ass"), width=480, height=832)
+    assert stage.startswith(f"{label}ass=/t/titles.ass")
+    assert stage.endswith(":original_size=480x832:shaping=complex[txt]")
+
+
+@needs_ffmpeg
+def test_no_titles_leaves_the_command_untouched(tmp_path, monkeypatch):
+    """A job without text must produce exactly today's ffmpeg invocation."""
+    seen = []
+    real = media.subprocess.run
+
+    def spy(cmd, **kw):
+        seen.append(list(cmd))
+        return real(cmd, **kw)
+
+    monkeypatch.setattr(media.subprocess, "run", spy)
+    clips = [_clip(tmp_path, "a", "red"), _clip(tmp_path, "b", "blue")]
+    media.assemble(clips, [Cut("fade", 0.5)], tmp_path / "plain.mp4", fps=8, size=(64, 64))
+    graph = seen[-1][seen[-1].index("-filter_complex") + 1]
+    assert "ass=" not in graph
+    assert seen[-1][seen[-1].index("-map") + 1] == "[g0]", "the join's own label is mapped"
+
+
+@needs_ffmpeg
+def test_titles_are_drawn_over_the_joined_picture(tmp_path):
+    """End to end: the pixels change while a caption is on screen and not after it."""
+    clips = [_clip(tmp_path, "a", "black", secs=3), _clip(tmp_path, "b", "black", secs=3)]
+    cuts = [Cut("fade", 0.5)]
+    plain = media.assemble(clips, cuts, tmp_path / "plain.mp4", fps=8, size=(64, 64))
+    ass = _ass(tmp_path / "t.ass", start=0.0, end=1.5, size=64, height=64)
+    titled = media.assemble(clips, cuts, tmp_path / "titled.mp4", fps=8, size=(64, 64), titles=ass)
+
+    def frame(path, at):
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(at), "-i", str(path),
+                              "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                             capture_output=True, check=True).stdout
+        return np.frombuffer(raw, np.uint8)
+
+    assert frame(titled, 0.7).mean() > frame(plain, 0.7).mean() + 1, "text is on screen"
+    assert abs(float(frame(titled, 3.0).mean()) - float(frame(plain, 3.0).mean())) < 0.5, \
+        "and gone again once the event ends"
+
+
+@needs_ffmpeg
+def test_a_single_clip_with_titles_still_renders(tmp_path):
+    """The `[v0]` shape — no xfade at all — is the one a hardcoded `[out]` would break."""
+    clip = _clip(tmp_path, "solo", "green", secs=2)
+    ass = _ass(tmp_path / "t.ass", start=0.0, end=1.0, size=64, height=64)
+    out = media.assemble([clip], [], tmp_path / "solo_titled.mp4", fps=8, size=(64, 64), titles=ass)
+    assert out.is_file() and media.probe(out).width == 64

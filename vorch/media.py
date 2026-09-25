@@ -678,6 +678,36 @@ def build_filtergraph(
     return ";".join(parts), "[out]"
 
 
+def _filter_path(path: Path) -> str:
+    """A path as a filtergraph *argument*.
+
+    A second, unrelated escaping layer from :func:`vorch.titles.escape`, and the two must never be
+    confused: this one is ffmpeg's filter-argument syntax, where ``:`` separates options and
+    backslash and ``\'`` are special. ASS escaping is about braces and line breaks inside the
+    subtitle text. Two problems, two functions. (No shell quoting is involved — the whole graph is
+    a single argv element.)
+    """
+    return str(path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
+def _text_stage(out: str, ass: Path, *, width: int, height: int) -> str:
+    """The one filter that draws every caption, applied to the joined picture.
+
+    It consumes whatever label ``build_filtergraph`` returned — ``[v0]`` for a single clip, ``[g0]``
+    for one xfade group, ``[out]`` when a hard cut split it into groups — so the caller reassigns
+    ``out`` and the ``-map`` a few lines later needs no special case.
+
+    Two properties of where this sits, both worth not "fixing" later:
+
+    * ``_norm`` has already scaled and padded **every** input to ``width x height`` before the join,
+      so text is drawn at true output resolution and clips of differing sizes are a non-issue;
+    * grain is applied per input, also before the join, so it is never laid over the type. Titles
+      stay crisp over grainy footage. Moving grain after the join would soften every caption.
+    """
+    return (f"{out}ass={_filter_path(ass)}:original_size={int(width)}x{int(height)}"
+            f":shaping=complex[txt]")
+
+
 def assemble(
     clips: list[str | Path],
     cuts: list[Cut],
@@ -697,6 +727,7 @@ def assemble(
     trims: list[tuple[float | None, float | None]] | None = None,
     narration: list[tuple[Path, float]] | None = None,
     duck: float = 6.0,
+    titles: str | Path | None = None,
 ) -> Path:
     """Join ``clips`` into one h264 mp4 with per-cut xfade transitions.
 
@@ -746,6 +777,9 @@ def assemble(
     validate_cuts(rt, cuts, fps=fps)
     graph, out = build_filtergraph(durations, cuts, width=width, height=height, fps=fps,
                                    speeds=speeds, smooth=smooth, grain=grain, spans=spans)
+    if titles is not None:
+        graph = f'{graph};{_text_stage(out, Path(titles), width=width, height=height)}'
+        out = '[txt]'
     # Narration forces an audio path even when no clip carries a track — a Wan timeline is
     # silent, and a voice over it is the whole point.
     bed = bool(audio) and any(i.has_audio for i in infos)
