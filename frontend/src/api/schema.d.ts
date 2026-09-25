@@ -1041,6 +1041,17 @@ export interface components {
              * @default 0
              */
             grain: number;
+            /**
+             * Texts
+             * @description captions on the finished film — a title card, an end card, credits. Times are absolute, so these do not follow a reorder or a trim.
+             */
+            texts?: components["schemas"]["TextItemIn"][] | null;
+            /**
+             * Titles
+             * @description draw captions at all; off renders a clean pass without deleting anything
+             * @default true
+             */
+            titles: boolean;
         };
         /** AssemblyStatus */
         AssemblyStatus: {
@@ -1074,6 +1085,20 @@ export interface components {
              * @default []
              */
             versions: components["schemas"]["AssemblyVersionOut"][];
+            /**
+             * Text Effects
+             * @default []
+             */
+            text_effects: string[];
+            /**
+             * Text Presets
+             * @default {}
+             */
+            text_presets: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
         };
         /**
          * AssemblyTakeOut
@@ -2150,6 +2175,11 @@ export interface components {
              * @default false
              */
             narration_stale: boolean;
+            /**
+             * Texts
+             * @default []
+             */
+            texts: components["schemas"]["TextItemIn"][];
         };
         /**
          * SceneRegenerate
@@ -2225,6 +2255,117 @@ export interface components {
              * @default distorted, morphing, jitter, flicker, extra limbs, warped face
              */
             animation_negative: string;
+        };
+        /**
+         * TextItemIn
+         * @description One caption. Every appearance value lives on the item — there is no preset to look up at
+         *     render time, so changing a preset later never moves text that already exists.
+         *
+         *     Colours are ``RRGGBB`` as a person writes them. ASS wants those bytes reversed, and that
+         *     conversion happens in exactly one place (``vorch.titles.ass_colour``), nowhere near this edge.
+         */
+        TextItemIn: {
+            /**
+             * Text
+             * @description what to draw; a newline becomes a hard line break
+             */
+            text: string;
+            /**
+             * Start
+             * @description seconds — into the clip for a scene's caption, onto the finished film for the timeline's
+             * @default 0
+             */
+            start: number;
+            /**
+             * Duration
+             * @description seconds on screen
+             * @default 2
+             */
+            duration: number;
+            /**
+             * Effect
+             * @description one of the assembly status's `text_effects`
+             * @default fade
+             */
+            effect: string;
+            /**
+             * Effect Seconds
+             * @description how long the effect takes
+             * @default 0.35
+             */
+            effect_seconds: number;
+            /**
+             * Font
+             * @default DejaVu Sans
+             */
+            font: string;
+            /**
+             * Size
+             * @description fraction of the frame HEIGHT, so 9:16 and 16:9 read the same
+             * @default 0.048
+             */
+            size: number;
+            /**
+             * Colour
+             * @description RRGGBB
+             * @default FFFFFF
+             */
+            colour: string;
+            /**
+             * Outline
+             * @description RRGGBB
+             * @default 202020
+             */
+            outline: string;
+            /**
+             * Outline Width
+             * @description fraction of the frame height
+             * @default 0.004
+             */
+            outline_width: number;
+            /**
+             * Shadow
+             * @default 0
+             */
+            shadow: number;
+            /**
+             * Bold
+             * @default true
+             */
+            bold: boolean;
+            /**
+             * Italic
+             * @default false
+             */
+            italic: boolean;
+            /**
+             * Align
+             * @description ASS numpad anchor: 1 bottom-left … 9 top-right
+             * @default 2
+             */
+            align: number;
+            /**
+             * Margin X
+             * @description fraction of the frame width
+             * @default 0.08
+             */
+            margin_x: number;
+            /**
+             * Margin Y
+             * @description fraction of the frame height
+             * @default 0.08
+             */
+            margin_y: number;
+            /**
+             * Angle
+             * @default 0
+             */
+            angle: number;
+            /**
+             * Opacity
+             * @default 1
+             */
+            opacity: number;
         };
         /** ValidationError */
         ValidationError: {

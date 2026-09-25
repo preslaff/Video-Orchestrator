@@ -30,6 +30,13 @@ import re
 from dataclasses import dataclass, replace
 from typing import NamedTuple
 
+#: A ceiling on how many captions one list may hold. Not a style rule — a pathological spec could
+#: otherwise emit a ten-thousand-event script, and a typewriter multiplies each item by its length.
+MAX_ITEMS = 50
+#: Long text reads badly as a caption and, typed out character by character, is an event explosion.
+MAX_CHARS = 500
+MAX_TYPEWRITER_CHARS = 80
+
 #: What an item's ``effect`` may be. Exposed by the assembly status like ``media.transitions()``,
 #: so the UI is a dropdown rather than a free-text field nobody can spell.
 EFFECTS: tuple[str, ...] = ("none", "fade", "slide", "pop", "typewriter")
@@ -143,6 +150,12 @@ def validate(item: TextItem, *, limit: float | None = None) -> None:
         raise ValueError(f"text align {item.align}: an ASS anchor, 1-9")
     if not 0 <= item.opacity <= 1:
         raise ValueError(f"text opacity {item.opacity:g}: 0-1")
+    if len(item.text) > MAX_CHARS:
+        raise ValueError(f"text is {len(item.text)} characters: at most {MAX_CHARS}")
+    if item.effect == "typewriter" and len(item.text) > MAX_TYPEWRITER_CHARS:
+        raise ValueError(
+            f"typewriter text is {len(item.text)} characters: at most {MAX_TYPEWRITER_CHARS} "
+            "(one event per character, and it reads badly longer than that)")
     for name, value in (("colour", item.colour), ("outline", item.outline)):
         if not _HEX.match(value):
             raise ValueError(f"text {name} {value!r}: six hex digits, e.g. D8B26A")
@@ -308,6 +321,7 @@ def build(placed: list[Placed], *, width: int, height: int) -> str:
 
 
 __all__ = [
-    "EFFECTS", "PRESETS", "Placed", "TextItem",
+    "EFFECTS", "MAX_CHARS", "MAX_ITEMS", "MAX_TYPEWRITER_CHARS", "PRESETS", "Placed",
+    "TextItem",
     "ass_colour", "build", "escape", "from_dict", "replace", "validate",
 ]

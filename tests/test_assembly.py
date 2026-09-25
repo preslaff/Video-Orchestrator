@@ -6,7 +6,8 @@ import pathlib
 
 import pytest
 
-from vorch import assembly, config, media
+from vorch import assembly
+from vorch import titles as titles_mod, config, media
 from vorch.media import Cut, MediaInfo
 from vorch.state import Scene, new_job
 
@@ -520,3 +521,166 @@ def test_narration_is_chosen_by_the_take_that_exists_not_the_text(tmp_path):
     # Clearing the path is what removes it from the mix.
     job.scenes[0].narration_path = None
     assert assembly._narration_for(job, spec, [3.0625, 3.0625]) == []
+
+
+# --- captions on the finished film -------------------------------------------------------
+
+
+def _caption(**kw) -> dict:
+    return {"text": "Открий своя аромат", "start": 0.0, "duration": 2.0, **kw}
+
+
+def test_the_spec_round_trips_its_captions():
+    """Guard one of the three sites that enumerate keys explicitly and drop anything unnamed."""
+    spec = assembly.AssemblySpec(items=[], cuts=[], texts=[_caption()], titles=False)
+    back = assembly.AssemblySpec.from_dict(spec.to_dict())
+    assert back.texts == spec.texts and back.titles is False
+
+
+def test_resolve_keeps_captions_the_api_sent(tmp_path):
+    """The other site: `resolve()` builds the spec field by field, and it is the path the API and
+    the CLI actually use — a round-trip test alone passes with this one missing."""
+    job = _job(tmp_path, n=2)
+    spec, _ = assembly.resolve(job, {"items": [{"scene_index": 0}, {"scene_index": 1}],
+                                     "cuts": [{"transition": "fade"}],
+                                     "texts": [_caption()], "titles": True})
+    assert [t["text"] for t in spec.texts] == ["Открий своя аромат"]
+    assert spec.titles is True
+    assert assembly.resolve(job, {"titles": False})[0].titles is False
+
+
+def test_a_timeline_caption_past_the_end_is_refused(tmp_path):
+    """Authored against the finished length, so running past it is a spec error — unlike a
+    scene's caption, which is clamped."""
+    job = _job(tmp_path, n=2)
+    with pytest.raises(ValueError, match="caption 1: .*past the end"):
+        assembly.resolve(job, {"texts": [_caption(start=99.0)]})
+
+
+def test_a_malformed_caption_is_refused_with_its_position(tmp_path):
+    job = _job(tmp_path, n=2)
+    with pytest.raises(ValueError, match="caption 2: .*unknown"):
+        assembly.resolve(job, {"texts": [_caption(), _caption(effect="explode")]})
+
+
+def test_too_many_captions_are_refused(tmp_path):
+    job = _job(tmp_path, n=2)
+    with pytest.raises(ValueError, match="at most"):
+        assembly.resolve(job, {"texts": [_caption() for _ in range(titles_mod.MAX_ITEMS + 1)]})
+
+
+# --- placing a scene's caption ------------------------------------------------------------
+
+
+def test_a_scenes_caption_is_placed_through_the_transition_arithmetic(tmp_path):
+    """The whole point: a caption cannot drift from the shot it annotates."""
+    job = _job(tmp_path, n=3)
+    job.scenes[1].texts = [_caption(start=1.2, duration=1.0)]
+    spec, _ = assembly.resolve(job, {"items": [{"scene_index": i} for i in range(3)],
+                                     "cuts": [{"transition": "fade"}, {"transition": "fade"}]})
+    durations = [3.0625] * 3
+    placed = assembly._texts_for(job, spec, durations)
+    offsets = media.item_offsets(durations, spec.cuts, spec.speeds)
+    assert len(placed) == 1
+    assert placed[0].start == pytest.approx(offsets[1] + 1.2)
+    assert placed[0].duration == pytest.approx(1.0)
+
+
+def test_a_retimed_scene_carries_its_caption_with_it(tmp_path):
+    """Start and duration both divide by the speed, so the caption stays glued to its frames."""
+    job = _job(tmp_path, n=2)
+    job.scenes[0].texts = [_caption(start=1.2, duration=1.0)]
+    spec, _ = assembly.resolve(job, {
+        "items": [{"scene_index": 0, "target_seconds": 3.0625 / 2}, {"scene_index": 1}],
+        "cuts": [{"transition": "fade"}]})
+    assert spec.items[0].speed == pytest.approx(2.0)
+    placed = assembly._texts_for(job, spec, [3.0625, 3.0625])
+    assert placed[0].start == pytest.approx(1.2 / 2)
+    assert placed[0].duration == pytest.approx(0.5)
+
+
+def test_a_scene_placed_twice_is_captioned_twice(tmp_path):
+    job = _job(tmp_path, n=2)
+    job.scenes[0].texts = [_caption(duration=1.0)]
+    spec, _ = assembly.resolve(job, {"items": [{"scene_index": 0}, {"scene_index": 0}],
+                                     "cuts": [{"transition": "fade"}]})
+    placed = assembly._texts_for(job, spec, [3.0625, 3.0625])
+    assert len(placed) == 2 and placed[0].start < placed[1].start
+
+
+def test_a_scenes_caption_is_clamped_to_its_clip_not_refused(tmp_path):
+    """A trim gets retuned constantly; failing a whole render over 0.3s is the wrong trade."""
+    job = _job(tmp_path, n=1)
+    job.scenes[0].texts = [_caption(start=2.5, duration=5.0), _caption(start=99.0)]
+    spec, _ = assembly.resolve(job, {"items": [{"scene_index": 0}], "cuts": []})
+    placed = assembly._texts_for(job, spec, [3.0625])
+    assert len(placed) == 1, "the one starting past the clip is dropped, not raised"
+    assert placed[0].duration == pytest.approx(3.0625 - 2.5), "the overrun is trimmed"
+
+
+def test_the_titles_switch_renders_a_clean_pass(tmp_path):
+    job = _job(tmp_path, n=1)
+    job.scenes[0].texts = [_caption()]
+    spec, _ = assembly.resolve(job, {"items": [{"scene_index": 0}], "cuts": [], "titles": False})
+    assert assembly._texts_for(job, spec, [3.0625]) == []
+
+
+def test_an_unusable_scene_caption_is_logged_and_skipped(tmp_path, caplog):
+    job = _job(tmp_path, n=1)
+    job.scenes[0].texts = [{"text": "   "}, _caption()]
+    spec, _ = assembly.resolve(job, {"items": [{"scene_index": 0}], "cuts": []})
+    placed = assembly._texts_for(job, spec, [3.0625])
+    assert len(placed) == 1 and "nothing to draw" in caplog.text
+
+
+# --- the file that gets written -----------------------------------------------------------
+
+
+def test_run_writes_the_ass_at_the_resolved_output_size(tmp_path, monkeypatch):
+    """The bug already paid for once: PlayRes must be the resolved size, not a clip's. A 9:16 job
+    given 16:9 coordinates has every caption rescaled and the anchored ones pushed off frame."""
+    job = _job(tmp_path, n=1)
+    job.profile = {"video": {"width": 480, "height": 832, "fps": 16, "length": 49}}
+    job.scenes[0].texts = [_caption(size=0.048)]
+    monkeypatch.setattr(media, "probe", lambda p: MediaInfo(480, 832, 16.0, 3.0625, 49, "h264", False))
+    seen = {}
+
+    def fake_assemble(clips, cuts, dest, **kw):
+        seen.update(kw)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"mp4")
+        return dest
+
+    monkeypatch.setattr(media, "assemble", fake_assemble)
+    spec, paths = assembly.resolve(job, {"items": [{"scene_index": 0}], "cuts": []})
+    rec = assembly.run(job, spec, paths)
+    assert rec.ok
+    ass = pathlib.Path(seen["titles"])
+    assert ass.name.endswith(".ass") and ass.is_file()
+    body = ass.read_text(encoding="utf-8")
+    assert "PlayResX: 480" in body and "PlayResY: 832" in body
+    assert ",40," in body, "0.048 of 832 is a 40px caption"
+    assert "Открий своя аромат" in body
+
+
+def test_no_captions_means_no_ass_and_no_filter(tmp_path, monkeypatch):
+    job = _job(tmp_path, n=1)
+    seen = {}
+
+    def fake_assemble(clips, cuts, dest, **kw):
+        seen.update(kw)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"mp4")
+        return dest
+
+    monkeypatch.setattr(media, "assemble", fake_assemble)
+    spec, paths = assembly.resolve(job, {"items": [{"scene_index": 0}], "cuts": []})
+    assembly.run(job, spec, paths)
+    assert seen["titles"] is None
+    assert not list(assembly.output_dir(job).glob("*.ass"))
+
+
+def test_status_offers_the_caption_vocabulary(tmp_path):
+    st = assembly.status(_job(tmp_path))
+    assert "fade" in st["text_effects"] and "typewriter" in st["text_effects"]
+    assert "lower-third" in st["text_presets"]

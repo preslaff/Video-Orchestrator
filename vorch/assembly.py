@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import config, media, provenance
+from . import config, media, provenance, titles as titles_mod
 from .media import Cut
 from . import versions
 from .state import Clip, Job, Scene
@@ -157,6 +157,12 @@ class AssemblySpec:
     delivery: str = DELIVERY_SOURCE  # a target from `deliveries()`; width/height/fps override it
     max_mbps: float | None = None   # cap the bitrate (a platform ceiling); None = CRF alone
     grain: float = 0.0              # 0-3: light film grain, which upscaled 480p needs to not read plastic
+    # Captions written against the finished film — a title card, an end card, credits. Times are
+    # absolute, so unlike a scene's text these do NOT follow a reorder or a trim; that is what
+    # "timeline-level" means. `titles` is the master switch, mirroring `narration`: it renders a
+    # clean pass without deleting anything.
+    texts: list[dict] = field(default_factory=list)
+    titles: bool = True
 
     @property
     def speeds(self) -> list[float]:
@@ -169,6 +175,7 @@ class AssemblySpec:
             "fps": self.fps, "width": self.width, "height": self.height,
             "crf": self.crf, "encoder": self.encoder, "smooth": self.smooth, "audio": self.audio,
             "narration": self.narration, "duck": self.duck,
+            "texts": [dict(x) for x in self.texts], "titles": self.titles,
             "delivery": self.delivery, "max_mbps": self.max_mbps, "grain": self.grain,
         }
 
@@ -182,6 +189,7 @@ class AssemblySpec:
             crf=int(d.get("crf", 18)), encoder=str(d.get("encoder", "libx264")),
             smooth=bool(d.get("smooth", False)), audio=bool(d.get("audio", False)),
             narration=bool(d.get("narration", True)), duck=float(d.get("duck", 6.0) or 6.0),
+            texts=[dict(x) for x in d.get("texts", []) or []], titles=bool(d.get("titles", True)),
             delivery=str(d.get("delivery") or DELIVERY_SOURCE),
             max_mbps=float(d["max_mbps"]) if d.get("max_mbps") else None,
             grain=float(d.get("grain", 0) or 0),
@@ -324,9 +332,7 @@ def select_version(job: Job, version: int) -> dict:
         raise FileNotFoundError(f"assembly version {version} is no longer on disk ({src.name})")
     dest = output_path(job)
     _link_replace(src, dest)
-    side = provenance.manifest_path(src)
-    if side.is_file():
-        _link_replace(side, provenance.manifest_path(dest))
+    _link_sidecars(src, dest)
     current = dict(match)
     current["versions"] = versions_of(job)
     job.assembly = current
@@ -339,7 +345,7 @@ def delete_version(job: Job, version: int) -> dict:
     match = next((v for v in versions if int(v.get("version", 0)) == version), None)
     if match is None:
         raise KeyError(f"no assembly version {version}")
-    for f in (Path(match["path"]), provenance.manifest_path(match["path"])):
+    for f in (Path(match["path"]), *_sidecars(match["path"])):
         try:
             f.unlink()
         except OSError:
@@ -351,7 +357,7 @@ def delete_version(job: Job, version: int) -> dict:
             job.assembly = {**remaining[-1], "versions": remaining}
             select_version(job, int(remaining[-1]["version"]))
             return job.assembly
-        for f in (output_path(job), provenance.manifest_path(output_path(job))):
+        for f in (output_path(job), *_sidecars(output_path(job))):
             try:
                 f.unlink()
             except OSError:
@@ -361,6 +367,29 @@ def delete_version(job: Job, version: int) -> dict:
     current["versions"] = remaining
     job.assembly = current
     return current
+
+
+def _sidecars(path: str | Path) -> list[Path]:
+    """The files that travel with an assembly: its provenance manifest and its titles.
+
+    Three places move or remove a version's companions — rendering one, making one current, and
+    deleting one — and a list that lived in three tuples would eventually disagree with itself.
+    """
+    p = Path(path)
+    return [provenance.manifest_path(p), p.with_suffix(".ass")]
+
+
+def _link_sidecars(src: str | Path, dest: str | Path) -> None:
+    """Point ``dest``'s companions at ``src``'s, and clear any the source does not have.
+
+    The clearing half matters: selecting a version that has no titles must not leave the previous
+    version's ``assembly.ass`` sitting next to it, still claiming to describe the film.
+    """
+    for a, b in zip(_sidecars(src), _sidecars(dest)):
+        if a.is_file():
+            _link_replace(a, b)
+        else:
+            b.unlink(missing_ok=True)
 
 
 def _link_replace(src: Path, dest: Path) -> None:
@@ -523,7 +552,9 @@ def resolve(job: Job, spec: dict | None) -> tuple[AssemblySpec, list[Path]]:
     resolved = AssemblySpec(items=items, cuts=cuts, fps=d.get("fps"), width=d.get("width"),
                             height=d.get("height"), crf=crf, encoder=encoder, smooth=bool(d.get("smooth", False)),
                             audio=bool(d.get("audio", False)), delivery=delivery, max_mbps=max_mbps, grain=grain,
-                            narration=bool(d.get("narration", True)), duck=float(d.get("duck", 6.0) or 6.0))
+                            narration=bool(d.get("narration", True)), duck=float(d.get("duck", 6.0) or 6.0),
+                            texts=[dict(x) for x in d.get("texts", []) or []],
+                            titles=bool(d.get("titles", True)))
     # Speeds from target durations, then transition lengths vs the RETIMED clip lengths.
     infos = [media.probe(p) for p in paths]
     # Trim first: the kept length is what a target duration is a target *for*, and what the
@@ -552,6 +583,18 @@ def resolve(job: Job, spec: dict | None) -> tuple[AssemblySpec, list[Path]]:
         it.speed = speed
     fps = float(resolved.fps or profile_video(job).get("fps") or infos[0].fps or config.WAN_FPS)
     media.validate_cuts(media.retimed(kept, resolved.speeds), cuts, fps=fps)
+    # Timeline captions are authored against the finished length, so one that runs past the end is
+    # a spec error worth refusing — unlike a scene's caption, which is clamped to its clip because
+    # a trim gets retuned constantly (see `_texts_for`).
+    total = media.total_duration(kept, cuts, resolved.speeds)
+    if len(resolved.texts) > titles_mod.MAX_ITEMS:
+        raise ValueError(f"{len(resolved.texts)} timeline captions: at most {titles_mod.MAX_ITEMS}")
+    for n, raw in enumerate(resolved.texts):
+        item = titles_mod.from_dict(raw)              # ValueError -> 400
+        try:
+            titles_mod.validate(item, limit=total)
+        except ValueError as e:
+            raise ValueError(f"caption {n + 1}: {e}") from None
     return resolved, paths
 
 
@@ -610,6 +653,61 @@ def _narration_for(job: Job, spec: AssemblySpec, durations: list[float]) -> list
     return out
 
 
+def _texts_for(job: Job, spec: "AssemblySpec", durations: list[float]) -> list[titles_mod.Placed]:
+    """Every caption on the finished timeline, with its times already resolved.
+
+    The two levels differ only here, which is why supporting both costs almost nothing:
+
+    * a **scene's** text is written in clip time, so it resolves through the same
+      ``media.item_offsets`` the transitions use — ``offsets[i] + t / speed``. Start *and*
+      duration are divided by the speed, so a caption stays glued to the frames it annotates: slow
+      a shot down and its caption holds longer. One clock, no special case.
+    * a **timeline** text is already absolute and is passed through untouched.
+
+    A scene placed twice is captioned twice, for the same reason it is narrated twice.
+
+    Per-scene items are **clamped** to their clip rather than refused: a trim gets retuned
+    constantly, and failing a whole render because a shot got 0.3 s shorter is the wrong trade.
+    A timeline item that runs past the end *is* refused, in ``resolve()`` — it was authored
+    against the finished length, so it is a spec error.
+    """
+    if not spec.titles:
+        return []
+    by_index = {s.index: s for s in job.scenes}
+    offsets = media.item_offsets(durations, spec.cuts, spec.speeds)
+    out: list[titles_mod.Placed] = []
+    dropped = 0
+    for i, (item, at) in enumerate(zip(spec.items, offsets)):
+        scene = by_index.get(item.scene_index)
+        if scene is None:
+            continue
+        speed = item.speed or 1.0
+        # By position, never by `.index(item)`: a scene placed twice has two equal items, and
+        # looking one up by equality would give both of them the first one's length.
+        kept = durations[i]
+        for raw in scene.texts:
+            try:
+                text = titles_mod.from_dict(raw)
+                titles_mod.validate(text)
+            except ValueError as e:
+                log.warning("job %s: scene %d caption ignored (%s)", job.id, scene.index, e)
+                dropped += 1
+                continue
+            start = at + text.start / speed
+            duration = text.duration / speed
+            room = (kept / speed) - (text.start / speed)
+            if room <= 0:
+                dropped += 1          # the trim now ends before this caption was due
+                continue
+            out.append(titles_mod.Placed(text, start, min(duration, room)))
+    for raw in spec.texts:
+        text = titles_mod.from_dict(raw)
+        out.append(titles_mod.Placed(text, text.start, text.duration))
+    if dropped:
+        log.info("job %s: %d caption(s) fell outside their clip and were dropped", job.id, dropped)
+    return out
+
+
 def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict], None] | None = None) -> AssemblyRecord:
     """Render a new assembly version; never raises (failures are recorded in the returned record).
 
@@ -634,6 +732,17 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
         speeds = spec.speeds
         total = media.total_duration(durations, spec.cuts, speeds)
         voices = _narration_for(job, spec, durations)
+        # PlayRes has to be the resolved output size, not the profile's and not a clip's: a
+        # delivery target can reframe the film, and a mismatch silently rescales every caption and
+        # pushes anchored ones off frame.
+        placed = _texts_for(job, spec, durations)
+        ass_path = dest.with_suffix(".ass") if placed else None
+        if ass_path is not None:
+            # media.assemble creates the output directory, but the captions are written before it
+            # runs — on a job's first assembly nothing has made the folder yet.
+            ass_path.parent.mkdir(parents=True, exist_ok=True)
+            ass_path.write_text(titles_mod.build(placed, width=width, height=height),
+                                encoding="utf-8")
         if emit:
             emit({"job_id": job.id, "type": "step", "step": "assemble", "n_clips": len(paths),
                   "seconds": round(total, 2), "fps": fps, "width": width, "height": height,
@@ -642,7 +751,7 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
                        encoder=spec.encoder, speeds=speeds, smooth=spec.smooth, audio=spec.audio,
                        max_mbps=spec.max_mbps, grain=spec.grain,
                        trims=[(i.start, i.end) for i in spec.items],
-                       narration=voices, duck=spec.duck)
+                       narration=voices, duck=spec.duck, titles=ass_path)
         info = media.probe(dest)
         rec = AssemblyRecord(
             path=str(dest), created_at=created, duration=round(info.frame_duration, 3), n_clips=len(paths),
@@ -653,12 +762,10 @@ def run(job: Job, spec: AssemblySpec, paths: list[Path], *, emit: Callable[[dict
             "spec": spec.to_dict(), "clips": [str(p) for p in paths], "fps": fps, "width": width,
             "height": height, "crf": spec.crf, "encoder": spec.encoder, "version": version,
             "speeds": speeds, "smooth": spec.smooth, "audio": spec.audio,
-            "trims": [[i.start, i.end] for i in spec.items],
+            "trims": [[i.start, i.end] for i in spec.items], "titles": len(placed),
         }, {"kind": "assembly", "job_id": job.id})
         _link_replace(dest, output_path(job))
-        side = provenance.manifest_path(dest)
-        if side.is_file():
-            _link_replace(side, provenance.manifest_path(output_path(job)))
+        _link_sidecars(dest, output_path(job))
         return rec
     except (media.MediaError, ValueError, FileNotFoundError, OSError) as e:
         log.warning("job %s: assembly failed: %s", job.id, e)
@@ -710,6 +817,11 @@ def status(job: Job, *, active: bool = False) -> dict:
         "available": job.kind == "video" and bool(scenes),
         "active": active,
         "transitions": list(media.transitions()),
+        # The caption vocabulary, exposed the same way transitions are, so the UI is a dropdown
+        # rather than a free-text field nobody can spell. Presets are starting values the editor
+        # copies into a new item; nothing refers back to one afterwards.
+        "text_effects": list(titles_mod.EFFECTS),
+        "text_presets": {k: dict(v) for k, v in titles_mod.PRESETS.items()},
         "default_spec": default_spec(job).to_dict(),
         "clips": clip_infos(job),
         "profile_fps": pv.get("fps"),

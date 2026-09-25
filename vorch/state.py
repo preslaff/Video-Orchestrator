@@ -184,6 +184,11 @@ class Scene:
     narration_path: str | None = None
     narration_said: str = ""
     narration_seconds: float = 0.0
+    # Captions drawn over this scene, in clip time. They travel with the shot: a reorder, a repeat
+    # or a retime carries them, exactly like narration, and a scene placed twice is captioned
+    # twice. Compiled into the assembly's .ass at render time — see ``vorch/titles.py``; nothing is
+    # burnt into the clip itself, so re-animating a scene never loses its text.
+    texts: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -401,6 +406,7 @@ def _scene_to_dict(s: Scene) -> dict:
         "narration_path": s.narration_path,
         "narration_said": s.narration_said,
         "narration_seconds": s.narration_seconds,
+        "texts": [dict(x) for x in s.texts],
         "reference_suggestion": (
             {"asset_id": s.reference_suggestion.asset_id, "why": s.reference_suggestion.why,
              "fit": s.reference_suggestion.fit} if s.reference_suggestion else None
@@ -447,6 +453,7 @@ def _scene_from_dict(d: dict) -> Scene:
         narration_path=d.get("narration_path"),
         narration_said=d.get("narration_said", "") or "",
         narration_seconds=float(d.get("narration_seconds", 0) or 0),
+        texts=[dict(x) for x in d.get("texts", []) or []],
         reference_suggestion=_suggestion_from_dict(d.get("reference_suggestion")),
     )
 

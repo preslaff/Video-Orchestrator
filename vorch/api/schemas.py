@@ -265,6 +265,7 @@ class ScenePublic(BaseModel):
     narration_url: str | None = None     # the voice, once spoken
     narration_seconds: float = 0.0
     narration_stale: bool = False        # the line has been reworded since it was spoken
+    texts: list[TextItemIn] = []         # captions over this scene, in clip time
 
 
 class SceneLocks(BaseModel):
@@ -356,6 +357,42 @@ class ErrorEnvelope(BaseModel):
 # --- assembly ----------------------------------------------------------------
 
 
+class TextItemIn(BaseModel):
+    """One caption. Every appearance value lives on the item — there is no preset to look up at
+    render time, so changing a preset later never moves text that already exists.
+
+    Colours are ``RRGGBB`` as a person writes them. ASS wants those bytes reversed, and that
+    conversion happens in exactly one place (``vorch.titles.ass_colour``), nowhere near this edge.
+    """
+
+    text: str = Field(description="what to draw; a newline becomes a hard line break")
+    start: float = Field(0.0, ge=0, description="seconds — into the clip for a scene's caption, "
+                                                "onto the finished film for the timeline's")
+    duration: float = Field(2.0, gt=0, description="seconds on screen")
+    effect: str = Field("fade", description="one of the assembly status's `text_effects`")
+    effect_seconds: float = Field(0.35, ge=0, description="how long the effect takes")
+    font: str = "DejaVu Sans"
+    size: float = Field(0.048, gt=0, le=1, description="fraction of the frame HEIGHT, so 9:16 and "
+                                                      "16:9 read the same")
+    colour: str = Field("FFFFFF", description="RRGGBB")
+    outline: str = Field("202020", description="RRGGBB")
+    outline_width: float = Field(0.004, ge=0, le=0.1, description="fraction of the frame height")
+    shadow: float = Field(0.0, ge=0, le=0.1)
+    bold: bool = True
+    italic: bool = False
+    align: int = Field(2, ge=1, le=9, description="ASS numpad anchor: 1 bottom-left … 9 top-right")
+    margin_x: float = Field(0.08, ge=0, lt=0.5, description="fraction of the frame width")
+    margin_y: float = Field(0.08, ge=0, lt=0.5, description="fraction of the frame height")
+    angle: float = 0.0
+    opacity: float = Field(1.0, ge=0, le=1)
+
+
+class SceneTexts(BaseModel):
+    """The whole caption list for one scene — an empty list removes them all."""
+
+    texts: list[TextItemIn] = []
+
+
 class AssemblyItemIn(BaseModel):
     scene_index: int
     source: Literal["final", "raw"] = "final"
@@ -407,6 +444,11 @@ class AssemblySpecIn(BaseModel):
     delivery: str = "source"          # a target id from AssemblyStatus.deliveries; width/height/fps win
     max_mbps: float | None = None     # cap the bitrate for a platform ceiling
     grain: float = 0.0                # 0-3: light film grain (an upscale reads plastic without it)
+    texts: list[TextItemIn] | None = Field(
+        None, description="captions on the finished film — a title card, an end card, credits. "
+                          "Times are absolute, so these do not follow a reorder or a trim.")
+    titles: bool = Field(True, description="draw captions at all; off renders a clean pass "
+                                           "without deleting anything")
 
 
 class AssemblyTakeOut(BaseModel):
@@ -507,3 +549,5 @@ class AssemblyStatus(BaseModel):
     delivery: str = "source"             # the preselected one
     record: AssemblyRecordOut | None = None
     versions: list[AssemblyVersionOut] = []
+    text_effects: list[str] = []
+    text_presets: dict[str, dict] = {}

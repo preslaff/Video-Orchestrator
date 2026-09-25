@@ -3100,6 +3100,27 @@
             "type": "number",
             "title": "Grain",
             "default": 0.0
+          },
+          "texts": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TextItemIn"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Texts",
+            "description": "captions on the finished film — a title card, an end card, credits. Times are absolute, so these do not follow a reorder or a trim."
+          },
+          "titles": {
+            "type": "boolean",
+            "title": "Titles",
+            "description": "draw captions at all; off renders a clean pass without deleting anything",
+            "default": true
           }
         },
         "type": "object",
@@ -3176,6 +3197,23 @@
             "type": "array",
             "title": "Versions",
             "default": []
+          },
+          "text_effects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Text Effects",
+            "default": []
+          },
+          "text_presets": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Text Presets",
+            "default": {}
           }
         },
         "type": "object",
@@ -5556,6 +5594,14 @@
             "type": "boolean",
             "title": "Narration Stale",
             "default": false
+          },
+          "texts": {
+            "items": {
+              "$ref": "#/components/schemas/TextItemIn"
+            },
+            "type": "array",
+            "title": "Texts",
+            "default": []
           }
         },
         "type": "object",
@@ -5781,6 +5827,134 @@
         },
         "type": "object",
         "title": "StyleSettings"
+      },
+      "TextItemIn": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "what to draw; a newline becomes a hard line break"
+          },
+          "start": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Start",
+            "description": "seconds — into the clip for a scene's caption, onto the finished film for the timeline's",
+            "default": 0.0
+          },
+          "duration": {
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Duration",
+            "description": "seconds on screen",
+            "default": 2.0
+          },
+          "effect": {
+            "type": "string",
+            "title": "Effect",
+            "description": "one of the assembly status's `text_effects`",
+            "default": "fade"
+          },
+          "effect_seconds": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Effect Seconds",
+            "description": "how long the effect takes",
+            "default": 0.35
+          },
+          "font": {
+            "type": "string",
+            "title": "Font",
+            "default": "DejaVu Sans"
+          },
+          "size": {
+            "type": "number",
+            "maximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Size",
+            "description": "fraction of the frame HEIGHT, so 9:16 and 16:9 read the same",
+            "default": 0.048
+          },
+          "colour": {
+            "type": "string",
+            "title": "Colour",
+            "description": "RRGGBB",
+            "default": "FFFFFF"
+          },
+          "outline": {
+            "type": "string",
+            "title": "Outline",
+            "description": "RRGGBB",
+            "default": "202020"
+          },
+          "outline_width": {
+            "type": "number",
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "title": "Outline Width",
+            "description": "fraction of the frame height",
+            "default": 0.004
+          },
+          "shadow": {
+            "type": "number",
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "title": "Shadow",
+            "default": 0.0
+          },
+          "bold": {
+            "type": "boolean",
+            "title": "Bold",
+            "default": true
+          },
+          "italic": {
+            "type": "boolean",
+            "title": "Italic",
+            "default": false
+          },
+          "align": {
+            "type": "integer",
+            "maximum": 9.0,
+            "minimum": 1.0,
+            "title": "Align",
+            "description": "ASS numpad anchor: 1 bottom-left … 9 top-right",
+            "default": 2
+          },
+          "margin_x": {
+            "type": "number",
+            "exclusiveMaximum": 0.5,
+            "minimum": 0.0,
+            "title": "Margin X",
+            "description": "fraction of the frame width",
+            "default": 0.08
+          },
+          "margin_y": {
+            "type": "number",
+            "exclusiveMaximum": 0.5,
+            "minimum": 0.0,
+            "title": "Margin Y",
+            "description": "fraction of the frame height",
+            "default": 0.08
+          },
+          "angle": {
+            "type": "number",
+            "title": "Angle",
+            "default": 0.0
+          },
+          "opacity": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Opacity",
+            "default": 1.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "TextItemIn",
+        "description": "One caption. Every appearance value lives on the item — there is no preset to look up at\nrender time, so changing a preset later never moves text that already exists.\n\nColours are ``RRGGBB`` as a person writes them. ASS wants those bytes reversed, and that\nconversion happens in exactly one place (``vorch.titles.ass_colour``), nowhere near this edge."
       },
       "ValidationError": {
         "properties": {
