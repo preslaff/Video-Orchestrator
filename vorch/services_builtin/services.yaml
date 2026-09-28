@@ -55,10 +55,12 @@ services:
     description: ComfyUI — FLUX.2 Klein, Wan 2.2 (GGUF), ReActor
     manage: full
     cwd: ~/comfy/ComfyUI
-    argv: [~/WORK/LTX-Colab/venv/bin/comfy, launch]
-    # `comfy launch` does not exec: it forks `python main.py` as a child, and THAT grandchild is
-    # the process holding the VRAM. Without this, per-process attribution would blame the wrong
-    # pid and `/free` would appear to do nothing.
+    # main.py directly, with the interpreter named, rather than `comfy launch`. comfy-cli picks the
+    # interpreter from VIRTUAL_ENV (comfy_cli/resolve_python.py) and falls back to the workspace's
+    # own venv — which here has almost none of the custom-node dependencies: no gguf, so Wan's
+    # UnetLoaderGGUF is missing, and no onnxruntime, so ReActor fails too. Naming the interpreter
+    # removes the guess, and it is also what was running before any of this was managed.
+    argv: [~/WORK/LTX-Colab/venv/bin/python, main.py, --enable-manager]
     match: {cmdline_contains: ["main.py"], cwd: ~/comfy/ComfyUI}
     health: {probe: http, url: "${VORCH_COMFY_URL}/system_stats", timeout: 5}
     ready_timeout: 300                 # custom nodes import slowly
