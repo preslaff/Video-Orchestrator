@@ -48,11 +48,13 @@ auditable.
 | Stills jobs | Storyboard → N keyframe variants per scene, best chosen by verdict, face swap per variant, no video phase. |
 | Post-processing | Any registered `postprocess` workflow (interpolation, upscale, …) runs after each clip or still, in order. Built-in `faceswap_video` imposes the master face on every frame of a clip. |
 | Locked regions | A video model cannot carry printed type below ~32 px of cap height — a brand label comes back misspelt from the very first frame. Mark it once on the scene's keyframe (**Lock the label…**) and those pixels are pasted back onto every frame of the clip, **following the shot**: the region is tracked frame by frame (scale + translation), so it stays on the product through a dolly. No re-render. Why and what else was tried: [`docs/label-fidelity.md`](docs/label-fidelity.md). |
+| Narration | A Bulgarian line per scene, spoken in a **cloned voice** by OmniVoice-BG and laid over the cut, with the clip audio ducking under it while it speaks. Write the line at the gate, press **Speak**, hear it against the shot and see whether it fits the clip's length; **Remove voice** throws a take away and gives the clip its own audio back. Send plain Cyrillic — the server verbalises numbers and marks stress itself. |
+| Captions | Text over the picture, drawn at assembly time by libass and therefore **pixel-exact**: it never passes through the video model, which is what destroys generated type (see Locked regions). Per caption: the words, when and how long, an effect (fade, slide, pop, typewriter), the nine-position anchor, size as a fraction of the frame, colour, outline, bold and the font — offered from the families installed here that can actually draw Cyrillic. A live preview shows the timing exactly; the burn-in is an ffmpeg `ass` filter and the same text also ships as `titles.ass`, which Shotcut imports as an editable subtitle track. |
 | Pluggable workflows | Register a newly exported ComfyUI graph with a YAML sidecar, no Python: `vorch registry inspect` → `add` → `validate --online`. |
 | Cloud backends (optional) | Any workflow can declare `backend: modal-h100`; its runs go to a remote ComfyUI (e.g. on Modal) and the outputs are downloaded into the local layout. Ready-made cloud workflows: Wan 2.2 fp8/fp16 (480p/720p), **LTX-2.5 with native audio**, FLUX.2 Klein 4B/9B keyframes, **Wan-Animate-2** character replacement. Design, cost model and phases in [`docs/modal-backend.md`](docs/modal-backend.md); deployment files and runbook in [`modal/`](modal/README.md) (`pip install -e ".[cloud]"`). |
-| Deliverables | A per-job **export folder** for Shotcut (numbered stills/clips, manifest, storyboard, README). **Assemble** selected clips into one video with per-cut ffmpeg `xfade` transitions, per-clip speed, optional audio (LTX clips), kept as versions. |
+| Deliverables | A per-job **export folder** for Shotcut (numbered stills/clips, spoken lines, manifest, storyboard, README). **Assemble** selected clips into one video with per-cut ffmpeg `xfade` transitions, per-clip speed (0.25–4×), trims, the clips' own audio, narration with ducking and burnt-in captions — kept as versions, each with its own `.ass` subtitle track beside it. |
 | Live control | Next.js UI with live progress (phase stepper, current step, elapsed time), server-sent events with replay, decision log, provenance (seed + prompt per file). |
-| Operations | Environment check (database, ComfyUI, Gemma + vision probe, ffmpeg, GPU headroom, every workflow's node classes and model files), VRAM guard between heavy models, PostgreSQL state, CLI for everything. |
+| Operations | **One command brings the world up**: `vorch up` starts PostgreSQL's dependants, Gemma, ComfyUI and the API in dependency order, waits for each to answer, and adopts anything already running — starting a service by hand stays fully supported. `vorch status` says who is up, whose it is and **who holds the GPU**, attributed per process. VRAM is arbitrated rather than hoped for: a step declares what it needs, the card is freed in the cheapest order, and a render is refused by name rather than left to OOM. Environment check (database, ComfyUI, Gemma + vision probe, narration server and its cloned voice, ffmpeg, GPU headroom, every workflow's node classes and model files), per-service logs under `~/vorch/logs/`, PostgreSQL state, CLI for everything. See [`docs/services.md`](docs/services.md). |
 
 ## Architecture
 
@@ -163,14 +165,10 @@ happens when it is exceeded.
 | Route | Purpose |
 |---|---|
 | `/jobs` | All jobs with id, status, project, kind and profile name; filters by project, unassigned and status, kept in the URL (`/jobs?project_id=…`, `?unassigned=1`); live status badges; delete. |
-| `/jobs/new` | The **new-job wizard**, in two shapes. *Generate images*: project → profile → brief (idea, style, scenes, seed, autonomy, keyframe mode + references, face swap, evaluation) → review. *Animate my images*: the keyframes already exist as project assets — pick them in playing order, give a one-line **direction**, and vorch makes one scene per asset with that image installed as its keyframe and the motion written by Gemma **looking at the frame**. No storyboard, no keyframe generation; face swap must be off, and an asset of another aspect is flagged before it is centre-cropped. Either shape can override the **output** for this job without touching the profile: the model
-(any registered `animate` workflow — local Wan, Wan fp8/fp16 on Modal, LTX-2.5), the aspect, the
-480/720 size class and the frame count, with the measured render time and the VRAM headroom shown
-as you choose. The still and the clip size always move together, because a profile whose aspects
-differ is rejected at submit; in *Animate my images* the panel also counts how many of the picked
-images that crop would cut. Submission is blocked, with reasons, while the environment check fails (a *force* switch overrides). |
-| `/jobs/[id]` | The **job page**: progress panel, gate/review panel, scene grid (keyframes, variants, clips), assemble panel, export panel, collapsible decision log and provenance. Everything updates live over SSE; the stream resumes across approval gates and reloads. |
+| `/jobs/new` | The **new-job wizard**, in two shapes. *Generate images*: project → profile → brief (idea, style, scenes, seed, autonomy, keyframe mode + references, face swap, evaluation) → review. *Animate my images*: the keyframes already exist as project assets — pick them in playing order, give a one-line **direction**, and vorch makes one scene per asset with that image installed as its keyframe and the motion written by Gemma **looking at the frame**. No storyboard, no keyframe generation; face swap must be off, and an asset of another aspect is flagged before it is centre-cropped. Either shape can override the **output** for this job without touching the profile: the model (any registered `animate` workflow — local Wan, Wan fp8/fp16 on Modal, LTX-2.5), the aspect, the 480/720 size class and the frame count, with the measured render time and the VRAM headroom shown as you choose. The still and the clip size always move together, because a profile whose aspects differ is rejected at submit; in *Animate my images* the panel also counts how many of the picked images that crop would cut. Submission is blocked, with reasons, while the environment check fails (a *force* switch overrides). |
+| `/jobs/[id]` | The **job page**: progress panel, gate/review panel, scene grid (keyframes, variants, clips), assemble panel, export panel, collapsible decision log and provenance. The gate panel carries each scene's **narration** — write the line, Speak it, hear it against the clip, see whether it overruns, remove the take; the assemble panel carries the **captions** for the finished film, with a live preview. Everything updates live over SSE; the stream resumes across approval gates and reloads. |
 | `/setup/env` | Environment check with a re-run button and the effective configuration. |
+| `/setup/services` | Every service vorch depends on: whether it is up, whether **vorch** started it or you did, whether the narration server is holding the cloned voice you meant, and a **GPU bar** with one segment per process — including anything vorch cannot name, which it will never touch. Each row opens that service's log. |
 | `/setup/workflows` | Registered ComfyUI workflows, their parameters and requirements; how to add one. |
 | `/setup/profiles` | Output profiles: clone, edit (aspect presets, sizes, 4n+1 helper, style vocabulary, workflow pickers, post-steps), delete. Built-ins are read-only. |
 | `/projects` | The projects list (default profile, assets, jobs, last activity, plus an **Unassigned** row for jobs without a project) and the project page: settings, asset uploads (master face, references, products, logos), the project's jobs and **New job in this project** (opens the wizard with the project preselected). `/setup/projects` redirects here. |
@@ -426,6 +424,27 @@ workflow (`identity_edit` or `kv_edit`) from one or more reference images, which
 the target size and staged once per run. Reference editing locks the composition, so it is meant
 for "same composition, light edit" variants and product placement, not for fresh scenes.
 
+### Narration (Bulgarian, in a cloned voice)
+
+Each scene can carry a line to be spoken over it. Write it in the gate panel, press **Speak**, and
+the line is synthesised by OmniVoice-BG in the cloned reference voice; the player appears beside it
+with the measured length against the clip's, so a line that overruns into the next shot says so.
+Rewording marks the take stale until you speak it again; **Remove voice** throws the take away and
+gives the clip its own audio back. Clearing the text does the same — no line, no voice.
+
+Write **plain Cyrillic**. The server verbalises numbers and marks stress itself, in that order, so
+pre-processing here would fight it — and a stress mark placed by hand is silently discarded. Three
+rules that are not guessable: write `39 лева и 90 стотинки`, not `39.90 лв.` (the decimal point is
+read aloud as "точка"); write Latin names in Cyrillic (`ФЛАУЪР БЛУМИНГ`), because Latin is passed
+through unspoken; and keep a line to a sentence or two. A mis-stressed word is fixed in OmniVoice,
+hot-reloaded: `./venv/bin/python bg_stress_add.py парИ`.
+
+Speaking is deliberate and never automatic — saving text does not trigger it. It loads an 11 GB
+model, so it takes the GPU lock and the arbiter frees the card first: if a render is in flight the
+request waits for it rather than fighting it for VRAM. The server is then left **warm** for ten
+minutes, so rewording and re-speaking costs seconds rather than another model load, and is stopped
+again by the idle reaper or by anything that needs the card.
+
 ### Post-processing chains
 
 A profile's `post_steps` run after each clip (and each still variant): the previous output is
@@ -453,8 +472,9 @@ manifest.json         profile snapshot, prompts, seeds, verdicts, sources, assem
 storyboard.md         per scene: description, prompts, verdicts, seeds
 s01_keyframe.png      s01_keyframe_v2.png … (stills variants)
 s01_swapped.png       (when the master face was imposed)
+s01_narration.wav     (when the scene has a spoken line)
 s01_clip.mp4          s01_clip_raw.mp4 (when post-steps changed the clip)
-assembly.mp4          (optional: the current assembly)
+assembly.mp4          (optional: the current assembly, captions burnt in)
 provenance/           copied sidecar manifests
 ```
 
@@ -488,6 +508,31 @@ line is still heard as the take that exists. So emptying the words does not sile
 **Remove voice** (beside the player in the gate panel) throws the take away and gives the clip its
 own audio back, keeping the line so it can be spoken again. Clearing the text does the same.
 `DELETE /api/jobs/{id}/scenes/{i}/narration?keep_text=false` removes the line as well.
+
+**Captions.** Text over the picture, in *Captions on the film* under the timeline. Add one (or start
+from a preset — title, lower-third, kicker, credits) and set the words, when it appears and for how
+long, an **effect** (fade, slide, pop, typewriter), the nine-position anchor, size, colour, outline,
+bold and the **font**. The font list is the families installed on this machine that can render
+Cyrillic, asked of fontconfig — the same database libass resolves a name through, so anything
+offered will render and anything missing would come out as boxes, silently. Sizes are a *percentage
+of the frame height*, not pixels, so one design reads the same at 16:9 and 9:16.
+
+The preview above the list is honest about which half is exact: **the timing is** — it is the same
+arithmetic the renderer uses — while placement is approximate, because libass shapes with harfbuzz
+and strokes a real outline and a browser can only imitate both. A **titles** switch renders a clean
+pass without deleting anything.
+
+Each version keeps its own `assembly_v<N>.ass` beside the mp4, which Shotcut imports as an editable
+subtitle track (*Timeline → Track Operations → Add Subtitle Track → Import*) — so wording and timing
+can still be changed downstream without re-rendering. It is not copied into the export folder yet.
+
+Text is drawn at assembly time and never passes through the video model, which is precisely why it
+survives: a VAE compresses 8× spatially and destroys printed type (the problem *Locked regions*
+exists for). It is also composited *after* grain, so captions stay crisp over grainy footage.
+
+Times on the timeline are absolute, so a caption does **not** follow a reorder or a trim. Captions
+that ride with a shot through reorders and retimes are plumbed through the renderer but not yet
+reachable from the UI — `Scene.texts` has no route yet.
 
 ffmpeg renders once (h264) to `assembly_v<N>.mp4` next to the clips,
 with a provenance sidecar. **Every assembly is kept as a version**: play any, *Use for export*
@@ -535,7 +580,9 @@ being finished at 1080p.
 
 ## Command line
 
-`python -m vorch <command>` (or `vorch` once installed):
+`python -m vorch <command>` (or `vorch` once installed). Two flags are global and go before the
+command: `--log-level {debug,info,warning,error}` and `--log-file PATH` (empty = stderr only;
+the default is `~/vorch/logs/vorch.log`, rotated at 8 MiB).
 
 | Command | What |
 |---|---|
@@ -546,7 +593,10 @@ being finished at 1080p.
 | `export <job> [--force]` · `assemble <job> …` | deliverables |
 | `keyframe` · `animate` · `edit` · `faceswap` · `evaluate` | single steps (`--aspect`, `--workflow`, `--negative`, `--ref`) |
 | `run-scene` · `run-sequence scenes.yaml` | one scene, or a sequence with last-frame continuity (`continuous: true`, `--no-relock`) |
-| `vram [--free]` | GPU memory; reclaim ComfyUI's models |
+| `up [NAME…] [--dry-run] [--reclaim-orphans]` · `down [NAME…] [--phase-only] [--force]` | start the services in dependency order, adopting whatever is already running; stop what vorch started |
+| `status [--json] [--no-probe]` · `logs NAME [-n]` | which services are up, whose they are, who holds the GPU; tail a service's log |
+| `services list [--json]` | the manifest as parsed, **with the exact command for each service** so you can run it yourself |
+| `vram [--free] [--by-process] [--need MB]` | GPU memory; reclaim ComfyUI's models; who holds the card, and whether a step of that size would be admitted |
 | `serve [--host --port]` · `openapi` | the API server; the schema for the typed client |
 | `db init / status / import-sqlite <file>` | database |
 
@@ -562,12 +612,15 @@ All routes under `/api`; interactive docs at `/docs`. Errors use one envelope:
 | PUT | `/jobs/{id}/scenes` | edit prompts/negatives/mode/references, choose a variant |
 | POST | `/jobs/{id}/scenes/{i}/regenerate` | redo a keyframe or clip (optional edits, `apply_suggestion`) |
 | POST | `/jobs/{id}/approve/{gate}` | clear `storyboard` / `keyframes` |
+| POST / DELETE | `/jobs/{id}/scenes/{i}/speak` · `/scenes/{i}/narration` | speak this scene's line in the cloned voice (waits for the GPU lock); throw the take away (`keep_text=false` drops the line too) |
+| PUT | `/jobs/{id}/scenes/{i}/locks` | the regions of the frame the animator must not redraw |
 | GET | `/jobs/{id}/decisions` · `/provenance` | decision log; seed + prompt per file |
 | GET | `/jobs/{id}/events` · `/events` | SSE (named events, ids, `Last-Event-ID` replay) |
 | POST / GET | `/jobs/{id}/export` | run / inspect the export |
-| GET / POST | `/jobs/{id}/assemble` | status (clips, transitions, versions) / run |
+| GET / POST | `/jobs/{id}/assemble` | status (clips, transitions, caption effects, presets and installed fonts, versions) / run — the spec carries trims, speeds, audio, narration and `texts` |
 | POST / DELETE | `/jobs/{id}/assemble/versions/{n}/select` · `/versions/{n}` | make a version current / delete it |
 | GET | `/setup/env` · `/setup/config` | environment check; effective configuration |
+| GET | `/services` · `/services/{name}/logs` | every service with its state, identity and VRAM, plus the GPU holder table; the tail of one service's log |
 | GET | `/workflows` · `/workflows/{name}` | registry |
 | GET / POST / PUT / DELETE, POST `…/clone` | `/profiles[/{id}]` | profiles (built-ins read-only) |
 | GET / POST / PUT / DELETE | `/projects[/{id}]`, `/projects/{id}/assets[…]`, `/projects/{id}/jobs` | projects and assets (multipart upload) |
@@ -589,6 +642,18 @@ Environment variables (see `vorch/config.py`):
 | `VORCH_PROJECTS_ROOT` / `VORCH_EXPORT_ROOT` | `~/vorch/projects` / `~/vorch/export` | files |
 | `VORCH_RUN_TIMEOUT` / `VORCH_ASSEMBLE_TIMEOUT` | 600 s | per ComfyUI workflow / ffmpeg assembly |
 | `VORCH_VRAM_GUARD_MB` / `VORCH_VRAM_SETTLE_SEC` | 10000 / 3 | VRAM guard |
+| `VORCH_VRAM_RELEASE_TIMEOUT` | 20 s | how long to wait for the driver to hand back a stopped process's VRAM — a process exits before its allocation is reclaimed |
+| `VORCH_SERVICES_FILE` | `~/vorch/services.yaml` | the service manifest; overrides `vorch/services_builtin/services.yaml` per service, key by key |
+| `VORCH_RUN_DIR` / `VORCH_LOG_DIR` | `~/vorch/run` / `~/vorch/logs` | pidfiles for supervised services; vorch's log and one per service |
+| `VORCH_LOG_LEVEL` / `VORCH_LOG_FILE` | `info` / `<log dir>/vorch.log` | logging; an empty `VORCH_LOG_FILE` means stderr only |
+| `VORCH_LOG_MAX_BYTES` / `VORCH_LOG_BACKUPS` | 8 MiB / 5 | rotation, applied to vorch's own log and to each service's at start |
+| `VORCH_REAP_INTERVAL_SEC` | 60 s | how often `vorch serve` looks for a warm service gone idle |
+| `VORCH_API_URL` | `http://127.0.0.1:8000` | where the manifest expects `vorch serve` to answer |
+| `VORCH_TTS_URL` / `VORCH_OMNIVOICE_DIR` | `http://localhost:8002` / `~/WORK/OmniVoice` | the narration server and its checkout |
+| `VORCH_TTS_REF_AUDIO` / `VORCH_TTS_REF_TEXT_FILE` | `Viktoria/11s.wav` / `Viktoria/11s.txt` | **the cloned voice**: a reference clip and its exact transcript, relative to the OmniVoice checkout. The pair must match, and this is what vorch verifies a running server against |
+| `VORCH_TTS_REQUEST_TIMEOUT` / `VORCH_TTS_START_TIMEOUT` | 180 s / 300 s | one line; loading the model |
+| `VORCH_TTS_CHUNK_CHARS` / `VORCH_TTS_CHUNK_GAP` | 220 / 0.35 s | a long line is split at sentence boundaries and rejoined with a breath |
+| `VORCH_STATE_DB` | `runs/vorch.db` | legacy SQLite file from before PostgreSQL; only `vorch db import-sqlite` reads it |
 | `VORCH_UI_URL` / `VORCH_CORS_ORIGINS` | `http://localhost:3000` | UI origin (CORS only needed without the Next proxy) |
 
 Frontend: `API_ORIGIN` (server-side rewrite target, default `http://127.0.0.1:8000`) and
