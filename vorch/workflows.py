@@ -43,7 +43,10 @@ def __getattr__(name: str):
             spec.name: {
                 "template": spec.template.name,
                 "output_node": spec.output_nodes[0] if spec.output_nodes else None,
-                "params": {p: (ps.targets[0].node, ps.targets[0].field) for p, ps in spec.params.items()},
+                # Params with no targets (declared so a kind contract is met, wired nowhere —
+                # a hosted node with no seed) have no (node, field) to report.
+                "params": {p: (ps.targets[0].node, ps.targets[0].field)
+                           for p, ps in spec.params.items() if ps.targets},
             }
             for spec in reg.list()
         }

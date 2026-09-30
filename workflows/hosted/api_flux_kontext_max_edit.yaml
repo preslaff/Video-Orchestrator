@@ -1,0 +1,44 @@
+name: api_flux_kontext_max_edit
+kind: edit
+template: api_flux_kontext_max_edit.json
+description: Edit images with Flux.1 Kontext max image.
+tags:
+- api
+- edit
+- hosted
+inputs:
+  reference: image
+outputs:
+  type: image
+  nodes:
+  - '85'
+params:
+  reference:
+    node: '84'
+    field: image
+    type: str
+    required: true
+  positive:
+    node: '95'
+    field: prompt
+    type: str
+    required: true
+  filename_prefix:
+    node: '85'
+    field: filename_prefix
+    type: str
+  seed:
+    node: '95'
+    field: seed
+    type: int
+    required: true
+  steps:
+    node: '95'
+    field: steps
+    type: int
+cost:
+  min_usd: 0.08
+  max_usd: 0.12
+
+# cost: ComfyUI states no price; $0.08 is BFL's list rate, upper bound allows for proxy markup
+# Read from ComfyUI's price_badge on 2026-09-30 (api.comfy.org credits, not the provider's list price).

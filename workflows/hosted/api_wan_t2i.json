@@ -1,0 +1,21 @@
+{
+  "1": {
+    "class_type": "WanTextToImageApi",
+    "_meta": {"title": "Wan 2.5 text-to-image"},
+    "inputs": {
+      "model": "wan2.5-t2i-preview",
+      "prompt": "",
+      "negative_prompt": "",
+      "width": 1024,
+      "height": 1024,
+      "seed": 0,
+      "prompt_extend": true,
+      "watermark": false
+    }
+  },
+  "2": {
+    "class_type": "SaveImage",
+    "_meta": {"title": "Save"},
+    "inputs": {"images": ["1", 0], "filename_prefix": "ComfyUI"}
+  }
+}

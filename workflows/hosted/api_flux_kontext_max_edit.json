@@ -1,0 +1,50 @@
+{
+ "84": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "api_bfl_flux_1_kontext_max_image_style_ref.png"
+  }
+ },
+ "91": {
+  "class_type": "ImageStitch",
+  "inputs": {
+   "image1": [
+    "84",
+    0
+   ],
+   "image2": [
+    "90",
+    0
+   ],
+   "direction": "right",
+   "match_image_size": true,
+   "spacing_width": 8,
+   "spacing_color": "white"
+  }
+ },
+ "95": {
+  "class_type": "FluxKontextMaxImageNode",
+  "inputs": {
+   "input_image": [
+    "91",
+    0
+   ],
+   "prompt": "Using this style, a bunny, a dog and a cat are having a tea party seated around a small white table",
+   "aspect_ratio": "1:1",
+   "guidance": 3,
+   "steps": 50,
+   "seed": 1044116463319391,
+   "prompt_upsampling": false
+  }
+ },
+ "85": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "95",
+    0
+   ],
+   "filename_prefix": "ComfyUI"
+  }
+ }
+}

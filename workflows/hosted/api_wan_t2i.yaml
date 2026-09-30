@@ -1,0 +1,21 @@
+# Hosted keyframe: Wan 2.5 text-to-image through ComfyUI's API nodes (api.comfy.org proxy).
+# Needs a ComfyUI API key (platform.comfy.org). Constant price, $0.03 per image.
+# Takes literal width/height, so no from_aspect table — but its range is narrow: 768..1440
+# in steps of 32, which rules out vorch's default 1024x576 keyframe. Use e.g. 1440x800 for 16:9.
+name: api_wan_t2i
+kind: keyframe
+template: api_wan_t2i.json
+description: Wan 2.5 t2i via the ComfyUI API proxy — literal sizes, 768..1440 step 32
+tags: [api, wan, t2i, image, hosted]
+cost: {usd: 0.03}
+# cost: flat, stated as a literal by the node itself.
+# Read from ComfyUI's price_badge on 2026-09-30 (api.comfy.org credits).
+outputs: {type: image, nodes: ["2"]}
+params:
+  positive: {node: "1", field: prompt, type: str, required: true}
+  negative: {node: "1", field: negative_prompt, type: str}
+  seed:     {node: "1", field: seed, type: int, min: 0, max: 2147483647}
+  width:    {node: "1", field: width,  type: int, constraint: multiple_of_32, min: 768, max: 1440}
+  height:   {node: "1", field: height, type: int, constraint: multiple_of_32, min: 768, max: 1440}
+  model:    {node: "1", field: model, type: enum, enum_from: {class_type: WanTextToImageApi, input: model}}
+  filename_prefix: {node: "2", field: filename_prefix, type: str}

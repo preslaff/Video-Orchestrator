@@ -26,6 +26,7 @@ INPUT_CLASSES = {  # class_type -> (field, media type)
 }
 SAVE_CLASSES = {  # class_type -> output media type
     "SaveImage": "image",
+    "SaveImageAdvanced": "image",
     "SaveAnimatedWEBP": "image",
     "SaveAnimatedPNG": "image",
     "SaveVideo": "video",
@@ -228,14 +229,26 @@ def inspect_template(wf: dict, object_info: dict | None = None) -> list[NodeInfo
         # (CLIPTextEncode, Empty*Latent, samplers) never fire for it.
         is_api = bool(object_info) and bool((object_info.get(cls) or {}).get("api_node"))
         if is_api:
-            for fld, val in lits.items():
-                if fld in API_FIELD_PARAM:
-                    info.candidates[fld] = API_FIELD_PARAM[fld]
-            size_field = next((f for f in API_SIZE_FIELDS if f in lits), None)
-            if size_field and "width" not in lits:
-                # Size is one of the node's own labels; mark it so guess_spec can build the
-                # aspect table from the enum's options rather than inventing pixel params.
-                info.candidates[size_field] = "aspect_enum"
+            # Fields may be dotted when they come from a dynamic combo (`model.prompt`,
+            # `model.size_preset`), so match on the leaf rather than the whole key.
+            def leaf(f: str) -> str:
+                return f.rsplit(".", 1)[-1]
+
+            taken: set[str] = set()
+            for fld in lits:
+                param = API_FIELD_PARAM.get(leaf(fld))
+                if param and param not in taken:
+                    info.candidates[fld] = param
+                    taken.add(param)
+            if "width" not in taken:
+                # Size is one of the node's own labels. Mark *every* candidate: which field
+                # actually carries the aspect cannot be decided by name, because several nodes
+                # use `resolution` for a quality tier (Grok's 1K/2K) while `aspect_ratio` holds
+                # the shape. guess_spec picks the one whose options really describe aspects.
+                for want in API_SIZE_FIELDS:
+                    for f in lits:
+                        if leaf(f) == want:
+                            info.candidates[f] = "aspect_enum"
         for fld, val in lits.items():
             if fld in info.candidates:
                 continue
@@ -265,7 +278,7 @@ def inspect_template(wf: dict, object_info: dict | None = None) -> list[NodeInfo
                 info.candidates[fld] = "numeric"
         if object_info and cls in object_info:
             for fld in lits:
-                opts = registry._combo_options(object_info, cls, fld)
+                opts = combo_options(object_info, cls, fld)
                 if opts is not None:
                     info.options[fld] = opts
         rows.append(info)
@@ -313,13 +326,13 @@ def _nested_entries(spec: Any) -> list[tuple[str, Any]]:
     return out
 
 
-def _declared_type(declared: dict, field: str) -> str | None:
-    """The declared type of ``field``, which may be a dotted dynamic-combo path.
+def find_spec(declared: dict, field: str) -> Any | None:
+    """The schema entry for ``field``, which may be a dotted dynamic-combo path.
 
     A dynamic combo submits its selected option's inputs as flat dotted keys
-    (``model.images.image_1``), so the plain schema has no such key. Resolve by walking the
-    option trees for the leaf name — the nesting can be several levels deep and an autogrow
-    input invents numbered names, so searching beats reconstructing the exact path.
+    (``model.size_preset``, ``model.images.image_1``), so the plain schema has no such key.
+    Resolve by walking the option trees for the leaf name — the nesting goes several levels
+    deep and an autogrow invents numbered names, so searching beats reconstructing the path.
     """
     spec = declared.get(field)
     if spec is None and "." in field:
@@ -330,12 +343,32 @@ def _declared_type(declared: dict, field: str) -> str | None:
             name, candidate = queue.pop(0)
             seen += 1
             if name == leaf:
-                spec = candidate
-                break
+                return candidate
             queue += _nested_entries(candidate)
+    return spec
+
+
+def _declared_type(declared: dict, field: str) -> str | None:
+    """The declared type of ``field`` (dotted paths included)."""
+    spec = find_spec(declared, field)
     if not (isinstance(spec, (list, tuple)) and spec) or not isinstance(spec[0], str):
         return None
     return spec[0].split(",")[0].strip() or None   # some inputs accept a union of types
+
+
+def combo_options(object_info: dict, cls: str, field: str) -> list | None:
+    """A combo's options, reaching inside dynamic combos for a dotted ``field``."""
+    direct = registry._combo_options(object_info, cls, field)
+    if direct is not None or "." not in field:
+        return direct
+    inp = (object_info.get(cls) or {}).get("input") or {}
+    declared = {**(inp.get("required") or {}), **(inp.get("optional") or {})}
+    spec = find_spec(declared, field)
+    if isinstance(spec, (list, tuple)) and len(spec) > 1 and isinstance(spec[1], dict):
+        opts = spec[1].get("options")
+        if isinstance(opts, list) and all(not isinstance(o, dict) for o in opts):
+            return opts
+    return None
 
 
 def price_badge_cost(info: dict | None) -> "registry.Cost | None":
@@ -525,6 +558,7 @@ def guess_spec(wf: dict, *, name: str, kind: str | None = None, template: str = 
     fanout_meta: dict[str, dict] = {}
     n_img = n_vid = 0
     used_names: set[str] = set()
+    best_aspect: tuple[dict, Any, str] | None = None
 
     def add(pname: str, node: str, fld: str, **meta) -> None:
         if pname in used_names or pname in params:
@@ -569,12 +603,8 @@ def guess_spec(wf: dict, *, name: str, kind: str | None = None, template: str = 
                 add_fanout(role, info.node, fld, **meta)
             elif role == "aspect_enum":
                 table = aspect_table(info.options.get(fld) or [])
-                meta: dict[str, Any] = {"type": "enum"}
-                if info.class_type:
-                    meta["enum_from"] = {"class_type": info.class_type, "input": fld}
-                if table:
-                    meta["from_aspect"] = table
-                add("aspect", info.node, fld, **meta)
+                if table and len(table) > len(best_aspect[0] if best_aspect else {}):
+                    best_aspect = (table, info, fld)
             elif role == "length":
                 add("length", info.node, fld, type="int", constraint="4n+1", required=True)
             elif role in ("steps", "cfg", "denoise"):
@@ -604,6 +634,11 @@ def guess_spec(wf: dict, *, name: str, kind: str | None = None, template: str = 
             params[pname] = {**targets[0], **meta}
         else:
             params[pname] = {"targets": targets, **meta}
+    if best_aspect is not None:
+        table, info, fld = best_aspect
+        add("aspect", info.node, fld, type="enum",
+            enum_from={"class_type": info.class_type, "input": fld}, from_aspect=table)
+
     # Whatever the kind requires and the graph cannot offer is declared with no target: it
     # keeps the entry loadable and still type-checked, and is the honest record that this
     # model has no such control (a hosted node often has no seed, and none has pixel sizes

@@ -1,0 +1,51 @@
+name: api_seedream5_pro_edit
+kind: edit
+template: api_seedream5_pro_edit.json
+description: Edit images with precision using Seedream 5.0 Pro, targeting specific
+  regions while preserving lighting, depth, and texture. The workflow takes 1 input
+  image and produces 2 output images through an optional Painter node and preview.
+  Ideal for product photography edits, portrait consistency adjustmen
+tags:
+- api
+- edit
+- hosted
+inputs:
+  reference: image
+outputs:
+  type: image
+  nodes:
+  - '2'
+params:
+  positive:
+    node: '1'
+    field: prompt
+    type: str
+    required: true
+  filename_prefix:
+    node: '2'
+    field: filename_prefix
+    type: str
+  reference:
+    node: '3'
+    field: image
+    type: str
+    required: true
+  width:
+    node: '1'
+    field: model.width
+    type: int
+  height:
+    node: '1'
+    field: model.height
+    type: int
+  seed:
+    node: '1'
+    field: seed
+    type: int
+    required: true
+cost:
+  min_usd: 0.045
+  max_usd: 0.09
+
+# cost: 1K .045, above that .09
+# Read from ComfyUI's price_badge on 2026-09-30 (api.comfy.org credits, not the provider's list price).

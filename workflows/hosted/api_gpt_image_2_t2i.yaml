@@ -1,0 +1,52 @@
+name: api_gpt_image_2_t2i
+kind: keyframe
+template: api_gpt_image_2_t2i.json
+description: Create campaign-ready posters, product shots, and multilingual signage
+  using OpenAI's latest model. Upload an optional reference image, write a detailed
+  prompt, and generate high-quality, photorealistic outputs.
+tags:
+- api
+- hosted
+- keyframe
+outputs:
+  type: image
+  nodes:
+  - '269'
+params:
+  filename_prefix:
+    node: '269'
+    field: filename_prefix
+    type: str
+  positive:
+    node: '271'
+    field: prompt
+    type: str
+    required: true
+  seed:
+    node: '271'
+    field: seed
+    type: int
+    required: true
+  aspect:
+    node: '271'
+    field: model.size
+    type: enum
+    enum_from:
+      class_type: OpenAIGPTImageNodeV2
+      input: model.size
+    from_aspect:
+      '16:9': 3840x2160
+      '9:16': 2160x3840
+      '1:1': 2048x2048
+  height:
+    targets: []
+    type: int
+  width:
+    targets: []
+    type: int
+cost:
+  min_usd: 0.0058
+  max_usd: 0.0228
+
+# cost: quality=low; medium is ~.05-.20, high ~.20-.80
+# Read from ComfyUI's price_badge on 2026-09-30 (api.comfy.org credits, not the provider's list price).

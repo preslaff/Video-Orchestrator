@@ -1,0 +1,37 @@
+name: api_flux_erase
+kind: edit
+template: api_flux_erase.json
+description: Upload an image and paint a mask over the object to remove. The workflow
+  erases the masked area and reconstructs the background.
+tags:
+- api
+- edit
+- hosted
+inputs:
+  reference: image
+outputs:
+  type: image
+  nodes:
+  - '3'
+params:
+  filename_prefix:
+    node: '3'
+    field: filename_prefix
+    type: str
+  reference:
+    node: '10'
+    field: image
+    type: str
+    required: true
+  positive:
+    targets: []
+    type: str
+  seed:
+    targets: []
+    type: int
+cost:
+  min_usd: 0.03
+  max_usd: 0.06
+
+# cost: from the node's own price_badge
+# Read from ComfyUI's price_badge on 2026-09-30 (api.comfy.org credits, not the provider's list price).

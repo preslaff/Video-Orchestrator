@@ -1,0 +1,18 @@
+{
+  "1": {
+    "class_type": "OpenAIDalle3",
+    "_meta": {"title": "DALL·E 3"},
+    "inputs": {
+      "prompt": "",
+      "seed": 0,
+      "quality": "standard",
+      "style": "natural",
+      "size": "1024x1024"
+    }
+  },
+  "2": {
+    "class_type": "SaveImage",
+    "_meta": {"title": "Save"},
+    "inputs": {"images": ["1", 0], "filename_prefix": "ComfyUI"}
+  }
+}

@@ -1,0 +1,45 @@
+{
+ "3": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "8",
+    0
+   ],
+   "filename_prefix": "Flux_erase_image"
+  }
+ },
+ "4": {
+  "class_type": "ImageCompare",
+  "inputs": {
+   "image_a": [
+    "10",
+    0
+   ],
+   "image_b": [
+    "8",
+    0
+   ]
+  }
+ },
+ "8": {
+  "class_type": "FluxEraseNode",
+  "inputs": {
+   "image": [
+    "10",
+    0
+   ],
+   "mask": [
+    "10",
+    1
+   ],
+   "dilate_pixels": 10
+  }
+ },
+ "10": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "city_street_young_man.png"
+  }
+ }
+}

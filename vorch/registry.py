@@ -657,7 +657,18 @@ def _combo_options(object_info: dict, cls: str | None, fld: str | None) -> list 
 
 
 def _default_dirs() -> list[tuple[Path, bool]]:
-    return [(Path(config.WORKFLOW_DIR), True), (Path(config.USER_WORKFLOW_DIR), False)]
+    """Where workflows are loaded from, in increasing precedence.
+
+    ``workflows/hosted/`` holds the curated hosted-model entries. They ship separately from the
+    local ones so a ComfyUI built without ``comfy_api_nodes`` still has a clean registry: they
+    load fine either way (node availability is only checked by ``validate --online``), but
+    keeping them apart makes it obvious which entries spend money.
+    """
+    return [
+        (Path(config.WORKFLOW_DIR), True),
+        (Path(config.WORKFLOW_DIR) / "hosted", True),
+        (Path(config.USER_WORKFLOW_DIR), False),
+    ]
 
 
 def load_dirs(dirs: Iterable[tuple[Path, bool]]) -> Registry:

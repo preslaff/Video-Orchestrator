@@ -1,0 +1,32 @@
+# Hosted keyframe: OpenAI DALL·E 3 through ComfyUI's API nodes (api.comfy.org proxy).
+# Needs a ComfyUI API key (platform.comfy.org), not an OpenAI key. Billed as Comfy credits.
+name: api_dalle3_t2i
+kind: keyframe
+template: api_dalle3_t2i.json
+description: DALL·E 3 via the ComfyUI API proxy — size is an enum, so the aspect drives it
+tags: [api, openai, dalle3, t2i, image, hosted]
+cost: {min_usd: 0.04, max_usd: 0.12}
+# cost: 1024x1024 standard .04 / hd .08; the wide and tall sizes .08 / hd .12.
+# Read from ComfyUI's price_badge on 2026-09-30 (api.comfy.org credits, not OpenAI's list price).
+outputs: {type: image, nodes: ["2"]}
+params:
+  positive: {node: "1", field: prompt, type: str, required: true}
+  # The node has a seed input but its tooltip says "not implemented yet in backend", so it is
+  # wired for the record and must not be trusted to make a render reproducible.
+  seed:     {node: "1", field: seed, type: int, min: 0, max: 2147483647}
+  # DALL·E 3 offers three sizes only; width/height are accepted so the keyframe contract and the
+  # rest of the pipeline keep speaking pixels, but the graph takes the label below instead.
+  width:    {targets: [], type: int}
+  height:   {targets: [], type: int}
+  aspect:
+    node: "1"
+    field: size
+    type: enum
+    enum_from: {class_type: OpenAIDalle3, input: size}
+    from_aspect:
+      "1:1":  "1024x1024"
+      "16:9": "1792x1024"
+      "9:16": "1024x1792"
+  quality:  {node: "1", field: quality, type: enum, enum_from: {class_type: OpenAIDalle3, input: quality}}
+  style:    {node: "1", field: style, type: enum, enum_from: {class_type: OpenAIDalle3, input: style}}
+  filename_prefix: {node: "2", field: filename_prefix, type: str}

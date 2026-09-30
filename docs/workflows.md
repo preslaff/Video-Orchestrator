@@ -5,7 +5,35 @@ Every generation step is a ComfyUI **API-format** template (`*.json`) plus a sid
 live in `workflows/`; your own go in `~/vorch/workflows/` (`VORCH_USER_WORKFLOW_DIR`).
 A user entry with the same `name` overrides a built-in.
 
-## 0. Or import a hosted model in bulk
+## 0. The curated hosted models
+
+`workflows/hosted/` ships a small set, one model per provider, each with a price and each
+validating against a live ComfyUI:
+
+| workflow | kind | ~cost/call | why this one |
+|---|---|---|---|
+| `api_wan_t2i` | keyframe | $0.03 | the cheap workhorse; literal sizes 768–1440 |
+| `api_gpt_image_2_t2i` | keyframe | $0.006–0.02 | cheapest per image at `quality: low`; strong instruction-following |
+| `api_dalle3_t2i` | keyframe | $0.04–0.12 | three sizes only, but reliable |
+| `api_seedream5_pro_t2i` | keyframe | $0.045–0.09 | literal sizes up to 4K |
+| `api_qwen3_t2i` | keyframe | $0.057–0.107 | literal sizes, and a real negative prompt |
+| `api_ideogram_v4_t2i` | keyframe | $0.043–0.143 | by far the best at type **inside** the image, Cyrillic included |
+| `api_nano_banana2_t2i` | keyframe | $0.084–0.185 | Gemini; six aspects |
+| `api_flux_erase` | edit | $0.03–0.06 | erase a region; constant price |
+| `api_nano_banana2_edit` | edit | $0.041–0.185 | reference-locked edit |
+| `api_seedream5_pro_edit` | edit | $0.045–0.09 | SeedEdit |
+| `api_flux_kontext_max_edit` | edit | $0.08–0.12 | Kontext Max, the reference-locked standard |
+
+They need `VORCH_COMFY_API_KEY` (see the README). Prices were read from ComfyUI's own
+`price_badge` on 2026-09-30 and are what **api.comfy.org** bills, which is not the provider's
+list price; each file records where its figure came from. `api_flux_kontext_max_edit` is the one
+exception — ComfyUI states no price for it, so its figure is BFL's list rate with room for markup.
+
+They live apart from the local workflows so a ComfyUI built without `comfy_api_nodes` still has a
+clean registry, and none of them takes a local workflow's name — a hosted entry called `keyframe`
+would quietly send every job to a paid API.
+
+## 1. Or import any of the others in bulk
 
 ComfyUI ships an example workflow for every hosted provider it proxies (`api_*`), and serves them
 over HTTP. `import` converts them to API format and scaffolds a YAML for each:
@@ -30,13 +58,13 @@ postprocess import cleanly.
 A single UI export works too — `vorch registry add my_export.json` converts it automatically
 rather than telling you to re-export.
 
-## 1. Export the workflow from ComfyUI
+## 2. Export the workflow from ComfyUI
 
 Build and test the graph in the ComfyUI UI, then **Export (API)** (not the plain export —
 the API format is a flat dict keyed by node id and is what `/prompt` accepts). Save it as
 e.g. `gimm_interp.json`.
 
-## 2. Inspect it
+## 3. Inspect it
 
 ```bash
 python -m vorch registry inspect gimm_interp.json --online
@@ -46,7 +74,7 @@ Prints every node with its literal inputs and a role guess (`<- positive`, `<- s
 `<- width`, `<- loader:unet_name`, `-> output:video`, …). With `--online` each loader shows
 how many installed options it has and flags values that are not installed.
 
-## 3. Scaffold the YAML
+## 4. Scaffold the YAML
 
 ```bash
 python -m vorch registry add gimm_interp.json --kind postprocess
@@ -65,7 +93,7 @@ python -m vorch registry validate gimm_interp --online
 (not a link), that the kind's required params are present, and — online — that every node
 class is installed in ComfyUI and every model file named in the template is available.
 
-## 4. Use it
+## 5. Use it
 
 Reference the workflow from an **output profile**: `keyframe.workflow`, `video.workflow`,
 `face_swap.workflow`, `edit_workflow`, or as an entry in `post_steps`

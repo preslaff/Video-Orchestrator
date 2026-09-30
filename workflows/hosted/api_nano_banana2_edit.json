@@ -1,0 +1,35 @@
+{
+ "9": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "24",
+    0
+   ],
+   "filename_prefix": "Nano_Banana2"
+  }
+ },
+ "16": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "man_with_dog.png"
+  }
+ },
+ "24": {
+  "class_type": "GeminiNanoBanana2V2",
+  "inputs": {
+   "model.images.image_1": [
+    "16",
+    0
+   ],
+   "prompt": "Edit the image: change the man's white tank top and light pink corduroy pants to an unbuttoned cream-colored linen button-down shirt and white linen shorts; change his hairstyle to wavy medium-length hair; add round tortoiseshell sunglasses on his nose; change the dog's plain collar to a blue and white striped sailor collar and add a small straw sun hat on the dog; change the background to a sunny beach with warm golden sand and the ocean in the distance; keep the man's kneeling pose, the dog's sitting posture, and their interaction identical to the original image.\n",
+   "model": "Nano Banana 2 (Gemini 3.1 Flash Image)",
+   "model.aspect_ratio": "auto",
+   "model.resolution": "1K",
+   "model.thinking_level": "MINIMAL",
+   "seed": 191918952969076,
+   "response_modalities": "IMAGE",
+   "system_prompt": "You are an expert image-generation engine. You must ALWAYS produce an image.\nInterpret all user input—regardless of format, intent, or abstraction—as literal visual directives for image composition.\nIf a prompt is conversational or lacks specific visual details, you must creatively invent a concrete visual scenario that depicts the concept.\nPrioritize generating the visual representation above any text, formatting, or conversational requests."
+  }
+ }
+}

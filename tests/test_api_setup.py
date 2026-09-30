@@ -62,7 +62,8 @@ def test_workflows_listing_and_detail(client):
     names = {w["name"] for w in body["workflows"]}
     assert {"keyframe", "animate", "faceswap", "identity_edit", "kv_edit"} <= names
     assert "postprocess" in body["kinds"]
-    assert {w["name"] for w in client.get("/api/workflows?kind=edit").json()["workflows"]} == {"identity_edit", "kv_edit"}
+    edit_names = {w["name"] for w in client.get("/api/workflows?kind=edit").json()["workflows"]}
+    assert {"identity_edit", "kv_edit"} <= edit_names   # plus the curated hosted edit entries
     d = client.get("/api/workflows/animate").json()
     assert d["params"]["seed"]["targets"][0]["node"] == "9" and d["problems"] == []
     assert client.get("/api/workflows/nope").status_code == 404

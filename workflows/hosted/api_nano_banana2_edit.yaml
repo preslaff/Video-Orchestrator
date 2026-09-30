@@ -1,0 +1,56 @@
+name: api_nano_banana2_edit
+kind: edit
+template: api_nano_banana2_edit.json
+description: Upload an image and a text prompt to edit it. Generate a new image that
+  modifies the original based on your instructions, maintaining subject consistency
+  and high visual fidelity.
+tags:
+- api
+- edit
+- hosted
+inputs:
+  reference: image
+outputs:
+  type: image
+  nodes:
+  - '9'
+params:
+  filename_prefix:
+    node: '9'
+    field: filename_prefix
+    type: str
+  reference:
+    node: '16'
+    field: image
+    type: str
+    required: true
+  positive:
+    node: '24'
+    field: prompt
+    type: str
+    required: true
+  seed:
+    node: '24'
+    field: seed
+    type: int
+    required: true
+  aspect:
+    node: '24'
+    field: model.aspect_ratio
+    type: enum
+    enum_from:
+      class_type: GeminiNanoBanana2V2
+      input: model.aspect_ratio
+    from_aspect:
+      '16:9': '16:9'
+      '9:16': '9:16'
+      '1:1': '1:1'
+      '4:5': '4:5'
+      '4:3': '4:3'
+      '3:4': '3:4'
+cost:
+  min_usd: 0.0408
+  max_usd: 0.1848
+
+# cost: lite .0408; pro 1K .0835 / 2K .1217 / 4K .1848
+# Read from ComfyUI's price_badge on 2026-09-30 (api.comfy.org credits, not the provider's list price).

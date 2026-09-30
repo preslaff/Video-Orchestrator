@@ -1,0 +1,43 @@
+name: api_seedream5_pro_t2i
+kind: keyframe
+template: api_seedream5_pro_t2i.json
+description: Generate images from text prompts using Seedream 5.0 Pro, producing one
+  high-quality output. Ideal for creative concept art, marketing visual mockups, and
+  rapid ideation for design projects.
+tags:
+- api
+- hosted
+- keyframe
+outputs:
+  type: image
+  nodes:
+  - '2'
+params:
+  positive:
+    node: '1'
+    field: prompt
+    type: str
+    required: true
+  filename_prefix:
+    node: '2'
+    field: filename_prefix
+    type: str
+  width:
+    node: '1'
+    field: model.width
+    type: int
+  height:
+    node: '1'
+    field: model.height
+    type: int
+  seed:
+    node: '1'
+    field: seed
+    type: int
+    required: true
+cost:
+  min_usd: 0.045
+  max_usd: 0.09
+
+# cost: 1K .045, above that .09
+# Read from ComfyUI's price_badge on 2026-09-30 (api.comfy.org credits, not the provider's list price).
