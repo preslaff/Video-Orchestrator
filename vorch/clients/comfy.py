@@ -380,6 +380,37 @@ def upload_image(filepath: str | Path, *, backend: ComfyBackend | str | None = N
 _object_info_cache: dict[str, dict] = {}
 
 
+def workflow_templates(backend: ComfyBackend | str | None = None) -> list[dict]:
+    """ComfyUI's shipped example workflows, flattened from ``/templates/index.json``.
+
+    Fetched over HTTP rather than read from the ``comfyui_workflow_templates`` package, because
+    that package lives in ComfyUI's own interpreter — which is not vorch's, and for a remote
+    backend is not even on this machine. Each entry keeps its category, title and description,
+    which is what lets a generated YAML say something useful about itself.
+    """
+    b = _resolve(backend)
+    resp = _request(b, "GET", "/templates/index.json")
+    if resp.status_code != 200:
+        raise ComfyError(f"{b.name}: /templates/index.json returned {resp.status_code}")
+    out: list[dict] = []
+    for group in resp.json() or []:
+        if not isinstance(group, dict):
+            continue
+        for tpl in group.get("templates") or []:
+            if isinstance(tpl, dict) and tpl.get("name"):
+                out.append({**tpl, "category": group.get("category"), "group": group.get("title")})
+    return out
+
+
+def workflow_template(name: str, backend: ComfyBackend | str | None = None) -> dict:
+    """One shipped example workflow, as the UI-format document ComfyUI serves."""
+    b = _resolve(backend)
+    resp = _request(b, "GET", f"/templates/{name}.json")
+    if resp.status_code != 200:
+        raise ComfyError(f"{b.name}: template {name!r} returned {resp.status_code}")
+    return resp.json()
+
+
 def object_info(
     *, refresh: bool = False, timeout: float = 30, backend: ComfyBackend | str | None = None
 ) -> dict:

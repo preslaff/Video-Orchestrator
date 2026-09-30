@@ -836,6 +836,76 @@ def _cmd_services(args) -> int:
     raise ValueError(f"unknown services command {args.services_command!r}")
 
 
+def _registry_import(args) -> int:
+    """Bulk-convert ComfyUI's shipped UI templates into registry entries.
+
+    The templates are the only ready-made graphs for the hosted providers — there is no
+    API-format example for an ``api_node`` anywhere — and ComfyUI serves them over HTTP, so this
+    works whichever interpreter runs ComfyUI and against a remote backend too.
+    """
+    import yaml
+
+    from . import registry, registry_tools
+
+    info = comfy.object_info(backend=args.backend)
+    out_dir = Path(args.out) if args.out else config.USER_WORKFLOW_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.dir:
+        files = sorted(f for f in Path(args.dir).glob("*.json") if args.match in f.stem)
+        entries = [{"name": f.stem, "_path": f} for f in files]
+    else:
+        entries = [t for t in comfy.workflow_templates(args.backend) if args.match in t["name"]]
+    if not entries:
+        print(f"no templates matching {args.match!r}", file=sys.stderr)
+        return 1
+
+    wrote = skipped = failed = 0
+    for entry in entries:
+        name = args.prefix + entry["name"]
+        try:
+            raw = (registry.load_template_file(entry["_path"]) if entry.get("_path")
+                   else comfy.workflow_template(entry["name"], args.backend))
+            wf = registry_tools.ui_to_api(raw, info)
+            kind = args.kind or registry_tools.guess_kind(wf, info)
+            if args.kinds and kind not in args.kinds:
+                skipped += 1
+                continue
+            yaml_path, tpl_path = out_dir / f"{name}.yaml", out_dir / f"{name}.json"
+            if yaml_path.exists() and not args.force:
+                print(f"  {name:44} {kind:10} exists (use --force)")
+                skipped += 1
+                continue
+            doc, notes = registry_tools.guess_spec(wf, name=name, kind=kind,
+                                                   template=tpl_path.name, object_info=info)
+            # The index carries a real title and description; far better than the scaffold's TODO.
+            if entry.get("description"):
+                doc["description"] = " ".join(str(entry["description"]).split())[:300]
+            elif entry.get("title"):
+                doc["description"] = str(entry["title"])
+            doc["tags"] = sorted({t for t in ("api", "hosted", kind) if t})
+            if args.dry_run:
+                print(f"  {name:44} {kind:10} would write")
+                wrote += 1
+                continue
+            tpl_path.write_text(json.dumps(wf, indent=1, ensure_ascii=False), encoding="utf-8")
+            text = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+            if notes:
+                text += "\n# Unmapped numeric literals (promote to params if you want them):\n"
+                text += "".join(f"#   {n}\n" for n in notes)
+            yaml_path.write_text(text, encoding="utf-8")
+            print(f"  {name:44} {kind:10} written")
+            wrote += 1
+        except (registry_tools.ConversionError, registry.RegistryError, ValueError, OSError) as e:
+            print(f"  {name:44} {'-':10} skipped: {str(e).splitlines()[0][:88]}")
+            failed += 1
+    print(f"\n{wrote} written, {skipped} skipped, {failed} not convertible ({out_dir})")
+    if wrote and not args.dry_run:
+        print("next: `vorch registry validate --online`, then edit what you mean to use — "
+              "a hosted keyframe needs an `aspect`/`from_aspect` table and a `cost:`")
+    return 0
+
+
 def _cmd_registry(args) -> int:
     import yaml
 
@@ -875,13 +945,24 @@ def _cmd_registry(args) -> int:
             print(f"{name:<16} INVALID\n    - {err}")
             bad += 1
         return 1 if bad else 0
+    if args.registry_command == "import":
+        return _registry_import(args)
     wf = registry.load_template_file(Path(args.file))
-    if "nodes" in wf:
-        print("error: this is a UI export; use 'Export (API)' in ComfyUI", file=sys.stderr)
-        return 1
+    # A UI export ("Export") is convertible, but only against a live ComfyUI: widget order is
+    # not recorded in the file, so the node schemas are what line the values up.
+    from_ui = "nodes" in wf
+    info = None
+    if from_ui or getattr(args, "online", False):
+        info = comfy.object_info(backend=getattr(args, "backend", None))
+    if from_ui:
+        try:
+            wf = registry_tools.ui_to_api(wf, info)
+        except registry_tools.ConversionError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        print(f"converted UI export to API format ({len(wf)} nodes)", file=sys.stderr)
     if args.registry_command == "inspect":
-        info = comfy.object_info(backend=args.backend) if args.online else None
-        print(f"guessed kind: {registry_tools.guess_kind(wf)}")
+        print(f"guessed kind: {registry_tools.guess_kind(wf, info)}")
         print(registry_tools.format_inspect(registry_tools.inspect_template(wf, info)))
         return 0
     if args.registry_command == "add":
@@ -894,9 +975,13 @@ def _cmd_registry(args) -> int:
         if (yaml_path.exists() or (tpl_path.exists() and tpl_path.resolve() != src.resolve())) and not args.force:
             print(f"error: {yaml_path} or {tpl_path} exists (use --force)", file=sys.stderr)
             return 1
-        if tpl_path.resolve() != src.resolve():
+        if from_ui:
+            tpl_path = out_dir / f"{name}.json"  # the converted graph, not the UI export
+            tpl_path.write_text(json.dumps(wf, indent=1, ensure_ascii=False), encoding="utf-8")
+        elif tpl_path.resolve() != src.resolve():
             tpl_path.write_bytes(src.read_bytes())
-        doc, notes = registry_tools.guess_spec(wf, name=name, kind=args.kind, template=src.name)
+        doc, notes = registry_tools.guess_spec(wf, name=name, kind=args.kind,
+                                               template=tpl_path.name, object_info=info)
         text = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
         if notes:
             text += "\n# Unmapped numeric literals (promote to params if you want to control them):\n"
@@ -1159,7 +1244,7 @@ def build_parser() -> argparse.ArgumentParser:
     ex.add_argument("--force", action="store_true", help="export even if the job is not done")
     ex.set_defaults(func=_cmd_export)
 
-    rg = sub.add_parser("registry", help="workflow registry: list | validate | inspect | add")
+    rg = sub.add_parser("registry", help="workflow registry: list | validate | inspect | add | import")
     rgs = rg.add_subparsers(dest="registry_command", required=True)
     rl = rgs.add_parser("list", help="registered workflows (built-in + user)")
     rl.add_argument("--kind", default=None)
@@ -1176,7 +1261,20 @@ def build_parser() -> argparse.ArgumentParser:
     ra.add_argument("--name", default=None)
     ra.add_argument("--kind", default=None, choices=list(registry_kinds()))
     ra.add_argument("--out", default=None, help="directory (default: VORCH_USER_WORKFLOW_DIR)")
+    ra.add_argument("--backend", default=None, help="backend whose ComfyUI to ask when converting a UI export")
     ra.add_argument("--force", action="store_true")
+    rim = rgs.add_parser("import", help="bulk-convert ComfyUI's shipped UI templates (hosted API models)")
+    rim.add_argument("--dir", default=None, help="directory of UI exports (default: ComfyUI's template package)")
+    rim.add_argument("--match", default="", help="only templates whose file name contains this")
+    rim.add_argument("--kind", default=None, choices=list(registry_kinds()),
+                     help="force this kind instead of guessing per template")
+    rim.add_argument("--kinds", nargs="*", default=None, choices=list(registry_kinds()),
+                     help="only import templates guessed to be these kinds")
+    rim.add_argument("--prefix", default="", help="prepend this to every generated name")
+    rim.add_argument("--out", default=None, help="directory (default: VORCH_USER_WORKFLOW_DIR)")
+    rim.add_argument("--backend", default=None, help="backend whose ComfyUI to ask (default local)")
+    rim.add_argument("--dry-run", action="store_true", help="list what would be written")
+    rim.add_argument("--force", action="store_true")
     rg.set_defaults(func=_cmd_registry)
 
     upp = sub.add_parser("up", help="start the services, in dependency order (adopts what is running)")

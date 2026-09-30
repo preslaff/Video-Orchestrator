@@ -5,6 +5,31 @@ Every generation step is a ComfyUI **API-format** template (`*.json`) plus a sid
 live in `workflows/`; your own go in `~/vorch/workflows/` (`VORCH_USER_WORKFLOW_DIR`).
 A user entry with the same `name` overrides a built-in.
 
+## 0. Or import a hosted model in bulk
+
+ComfyUI ships an example workflow for every hosted provider it proxies (`api_*`), and serves them
+over HTTP. `import` converts them to API format and scaffolds a YAML for each:
+
+```bash
+vorch registry import --match api_ --kinds keyframe edit     # into ~/vorch/workflows
+vorch registry import --match api_openai --dry-run           # see first
+vorch registry validate --online
+```
+
+It needs ComfyUI running — widget *order* is not recorded in a UI export, so the node schemas from
+`/object_info` are what line the values up — but no API key and no credits: converting and
+registering costs nothing. The generated entry takes its description from ComfyUI's own template
+index, builds an `aspect`/`from_aspect` table from the node's size enum, and declares whatever the
+kind requires but the graph cannot offer (see `targets: []` below). What it cannot guess is the
+price, so add a `cost:` before running anything you care about.
+
+Hosted `animate` entries mostly do **not** validate yet: these APIs bill a clip in **seconds**
+(`duration`), while vorch's `animate` contract wants a frame `length` of 4n+1. Keyframe, edit and
+postprocess import cleanly.
+
+A single UI export works too — `vorch registry add my_export.json` converts it automatically
+rather than telling you to re-export.
+
 ## 1. Export the workflow from ComfyUI
 
 Build and test the graph in the ComfyUI UI, then **Export (API)** (not the plain export —
