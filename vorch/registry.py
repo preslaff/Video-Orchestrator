@@ -31,6 +31,7 @@ import copy
 import json
 import logging
 import os
+import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -106,7 +107,8 @@ class Contract:
 KIND_CONTRACTS: dict[str, Contract] = {
     "keyframe": Contract(
         frozenset({"positive", "seed", "width", "height"}),
-        frozenset({"negative", "steps", "cfg", "unet", "batch_size", "sampler", "filename_prefix"}),
+        frozenset({"aspect", "negative", "steps", "cfg", "unet", "batch_size", "sampler",
+                   "filename_prefix"}),
     ),
     "animate": Contract(
         frozenset({"start_image", "positive", "length"}),
@@ -153,8 +155,20 @@ class ParamSpec:
     min: float | None = None
     max: float | None = None
     enum_from: dict | None = None  # {class_type, input}
+    # Hosted API nodes usually express size as an enum of their own dialect ("1792x1024",
+    # "16:9", "1080:1920") rather than width/height ints. This maps the job's aspect onto
+    # whatever label this node uses; an aspect the table has no entry for is refused.
+    from_aspect: dict[str, str] | None = None
 
     def coerce(self, value: Any) -> Any:
+        if self.from_aspect is not None:
+            key = str(value)
+            if key not in self.from_aspect:
+                raise ValueError(
+                    f"param {self.name!r}: this workflow cannot render aspect {key!r} "
+                    f"(it offers {', '.join(sorted(self.from_aspect))})"
+                )
+            value = self.from_aspect[key]
         try:
             if self.type == "int":
                 if isinstance(value, bool):
@@ -233,6 +247,7 @@ class WorkflowSpec:
                     "min": p.min,
                     "max": p.max,
                     "enum_from": p.enum_from,
+                    "from_aspect": p.from_aspect,
                 }
                 for n, p in self.params.items()
             },
@@ -244,6 +259,9 @@ class WorkflowSpec:
                 ],
             },
         }
+
+
+_ASPECT_RE = re.compile(r"^\d+:\d+$")
 
 
 # --- parsing ---------------------------------------------------------------------
@@ -263,6 +281,18 @@ def _parse_param(name: str, raw: Any) -> ParamSpec:
     ptype = str(raw.get("type", "any"))
     if ptype not in PARAM_TYPES:
         raise RegistryError(f"param {name!r}: unknown type {ptype!r}")
+    from_aspect = raw.get("from_aspect")
+    if from_aspect is not None:
+        if not isinstance(from_aspect, dict) or not from_aspect:
+            raise RegistryError(f"param {name!r}: from_aspect must be a non-empty mapping")
+        # Keys are vorch aspects ("16:9"); values are this node's own labels. Checked by shape
+        # rather than against formats.ASPECTS, because formats imports this module.
+        for k, v in from_aspect.items():
+            if not _ASPECT_RE.match(str(k)):
+                raise RegistryError(f"param {name!r}: from_aspect key {k!r} is not an aspect (want W:H)")
+            if not isinstance(v, str) or not v.strip():
+                raise RegistryError(f"param {name!r}: from_aspect[{k!r}] must be a non-empty string")
+        from_aspect = {str(k): v for k, v in from_aspect.items()}
     return ParamSpec(
         name=name,
         targets=targets,
@@ -273,6 +303,7 @@ def _parse_param(name: str, raw: Any) -> ParamSpec:
         min=raw.get("min"),
         max=raw.get("max"),
         enum_from=raw.get("enum_from"),
+        from_aspect=from_aspect,
     )
 
 
@@ -476,9 +507,27 @@ class Registry:
                 opts = _combo_options(object_info, cls, fld)
                 if opts is not None and val not in opts:
                     problems.append(f"model file {val!r} ({cls}.{fld}, node {node}) is not installed")
+            classes: dict[str, str] | None = None
             for p in spec.params.values():
                 if p.enum_from and p.enum_from.get("class_type") not in object_info:
                     problems.append(f"param {p.name!r}: enum_from class {p.enum_from.get('class_type')!r} unknown")
+                if not p.from_aspect:
+                    continue
+                # A mistyped size label ("1972x1024") would otherwise surface as a paid API call
+                # that fails, or worse succeeds at the wrong size. Check it against the node's enum.
+                if classes is None:
+                    wf = load_template_file(spec.template)
+                    classes = {n: node.get("class_type", "") for n, node in wf.items()}
+                for t in p.targets:
+                    opts = _combo_options(object_info, classes.get(t.node, ""), t.field)
+                    if opts is None:
+                        continue
+                    for aspect, label in sorted(p.from_aspect.items()):
+                        if label not in opts:
+                            problems.append(
+                                f"param {p.name!r}: from_aspect[{aspect!r}] = {label!r} is not an "
+                                f"option of {classes.get(t.node, '')}.{t.field}"
+                            )
         return problems
 
     def requirements(self, name: str) -> dict:
@@ -496,13 +545,26 @@ class Registry:
 
 
 def _combo_options(object_info: dict, cls: str | None, fld: str | None) -> list | None:
+    """The installed options of a combo input, or None if it is not a combo.
+
+    /object_info encodes combos two ways. Local (V1) nodes inline the list:
+    ``[["a.safetensors", "b.safetensors"]]``. Newer schema (V3) nodes, which is every
+    ``api_node``, name the type and carry the list in the metadata:
+    ``["COMBO", {"options": ["1024x1024", ...]}]``. Both must be read, or an API node's
+    enums look empty and nothing can be checked against them."""
     node = object_info.get(cls or "")
     if not node:
         return None
     for section in ("required", "optional"):
         spec = (node.get("input") or {}).get(section, {}).get(fld)
-        if spec and isinstance(spec[0], list):
+        if not spec:
+            continue
+        if isinstance(spec[0], list):
             return spec[0]
+        if spec[0] == "COMBO" and len(spec) > 1 and isinstance(spec[1], dict):
+            opts = spec[1].get("options")
+            if isinstance(opts, list):
+                return opts
     return None
 
 

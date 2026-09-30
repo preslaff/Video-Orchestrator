@@ -70,6 +70,9 @@ class GenParams:
             "height": self.keyframe_size[1],
             "steps": self.steps,
             "cfg": self.cfg,
+            # For a workflow whose size is an enum rather than width/height (hosted API nodes),
+            # this is what it renders from; steps.keyframe drops it when undeclared.
+            "aspect": self.aspect,
         }
         if self.unet:
             kw["unet"] = self.unet
@@ -105,7 +108,7 @@ class GenParams:
 
     def validate(self) -> list[str]:
         """Raise ValueError on hard errors; return soft warnings."""
-        formats.validate_size(*self.keyframe_size)
+        formats.validate_keyframe_size(*self.keyframe_size, self.aspect, self.keyframe_workflow)
         if self.kind == "video":
             rules = formats.workflow_rules(self.animate_workflow)
             formats.validate_size(*self.wan_size, maximum=rules.size_max, multiple=rules.size_multiple)

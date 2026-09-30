@@ -47,7 +47,9 @@ class KeyframeSettings(BaseModel):
 
     @model_validator(mode="after")
     def _size(self) -> "KeyframeSettings":
-        formats.validate_size(self.width, self.height)
+        r = formats.keyframe_rules(self.workflow)
+        formats.validate_size(self.width, self.height,
+                              minimum=r.size_min, maximum=r.size_max, multiple=r.size_multiple)
         return self
 
 
@@ -131,6 +133,13 @@ class OutputProfile(BaseModel):
             raise ValueError(f"keyframe size {kf} does not match aspect {self.aspect}")
         if self.video is not None and not formats.aspects_match(kf, (self.video.width, self.video.height)):
             raise ValueError("keyframe and video sizes have different aspects")
+        # An enum-size keyframe workflow renders only the aspects its from_aspect table lists.
+        r = formats.keyframe_rules(self.keyframe.workflow)
+        if r.from_aspect and self.aspect not in r.aspects:
+            raise ValueError(
+                f"keyframe workflow {self.keyframe.workflow!r} cannot render aspect "
+                f"{self.aspect!r} (it offers {', '.join(r.aspects)})"
+            )
         return self
 
     # -- helpers ---------------------------------------------------------------

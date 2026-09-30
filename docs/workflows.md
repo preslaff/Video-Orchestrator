@@ -71,7 +71,8 @@ requires: {nodes: [GIMMVFI_interpolate, VHS_LoadVideo, VHS_VideoCombine]}   # op
 `~/vorch/backends.yaml` (see `docs/modal-backend.md`). Outputs of remote backends are downloaded
 into the local output layout with the backend name in the file name.
 
-Param fields: `node` + `field` (or `targets: [{node, field}, …]` to write several nodes),
+Param fields: `node` + `field` (or `targets: [{node, field}, …]` to write several nodes,
+or `targets: []` to declare a param that writes nowhere — see below),
 `type` (`int|float|str|bool|enum|any`), `required`, `min`/`max`, `constraint`
 (`4n+1` and `multiple_of_16` for Wan, `8n+1` and `multiple_of_32` for LTX-2.x, `multiple_of_8`, `positive`), `enum_from: {class_type, input}`
 (validated against `/object_info`). Loader model files (`unet_name`, `vae_name`,
@@ -90,6 +91,54 @@ Param fields: `node` + `field` (or `targets: [{node, field}, …]` to write seve
 
 The pipeline passes the optional names it knows; a workflow that does not declare one just
 ignores it. That is what lets a leaner or richer user workflow replace a built-in.
+
+The **required** names are different: a workflow of that kind which does not declare one fails to
+load (`RegistryError`), and a user YAML that fails to load is skipped and reported instead of
+registered. Some graphs genuinely cannot offer one — a hosted API node may have no seed input at
+all. For those, declare the param with an **empty target list**:
+
+```yaml
+params:
+  positive: {node: "58", field: prompt, type: str}
+  seed:     {targets: [], type: int}     # this graph has nowhere to put a seed
+```
+
+An empty `targets` satisfies the contract, is still type-checked and constraint-checked like any
+other param, and writes nothing into the template. Use it only when the graph really has no such
+field — not to silence a mapping you have not done yet, because the result is a value the user sets
+and the render ignores. Steps send a param only when the workflow declares it (`spec.accepts`), so
+a workflow may simply omit an *optional* name rather than declaring it targetless.
+
+### Size as an enum: `from_aspect`
+
+Local samplers take literal `width`/`height`. Many hosted models instead offer a fixed set of
+sizes, each in its own dialect — `"1792x1024"`, `"16:9"`, `"1080:1920"`, `"1440x2560 (9:16)"`.
+Declare an `aspect` param whose `from_aspect` table maps the job's aspect onto that node's label,
+and leave `width`/`height` targetless:
+
+```yaml
+params:
+  positive: {node: "58", field: prompt, type: str}
+  seed:     {targets: [], type: int}
+  width:    {targets: [], type: int}
+  height:   {targets: [], type: int}
+  aspect:
+    node: "58"
+    field: size
+    type: enum
+    from_aspect:            # vorch aspect -> this node's own label
+      "16:9": "1792x1024"
+      "9:16": "1024x1792"
+      "1:1":  "1024x1024"
+```
+
+The table is also the workflow's **declaration of what it can render**. An aspect it does not list
+is refused when the profile is saved and when the job is validated — not at render time — because
+the alternative is a 9:16 job silently coming back square, visible only in the picture.
+`registry validate --online` additionally checks every label against the node's real enum, so a
+typo is caught before a paid call. A workflow that genuinely takes ints just wires `width`/`height`
+as usual and declares no `from_aspect`; its own `min`/`max`/`constraint` then set the size limits
+(which is how a model that renders above the local 2048 ceiling becomes usable).
 
 ### Postprocess chains
 

@@ -61,6 +61,7 @@ def _cmd_keyframe(args) -> int:
         steps=args.steps,
         cfg=args.cfg,
         seed=args.seed,
+        aspect=args.aspect or None,
         unet=args.unet,
         negative=args.negative,
     )

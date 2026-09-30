@@ -155,6 +155,59 @@ def workflow_rules(workflow: str | None) -> WorkflowRules:
     return WorkflowRules(lc, mult, size_max, remote=spec.backend != backends.LOCAL)
 
 
+@dataclass(frozen=True)
+class KeyframeRules:
+    """What a keyframe workflow accepts, read from its registry YAML.
+
+    A local sampler takes literal width/height. A hosted API node usually takes a size or
+    aspect enum instead and declares ``aspect: {from_aspect: {...}}``, in which case only the
+    aspects in that table can be rendered at all."""
+
+    size_multiple: int = 16
+    size_min: int = 256
+    size_max: int = 2048
+    from_aspect: bool = False          # size comes from the aspect, not from width/height
+    aspects: tuple[str, ...] = ()      # the aspects it can render, when from_aspect
+    known: bool = True
+
+
+def keyframe_rules(workflow: str | None) -> KeyframeRules:
+    """Rules of ``workflow`` (a keyframe workflow name). Unknown names fall back to the local
+    defaults so a profile can be validated before its workflow is installed."""
+    if not workflow:
+        return KeyframeRules()
+    try:
+        spec = registry.load_registry().get(workflow)
+    except (KeyError, registry.RegistryError):
+        return KeyframeRules(known=False)
+    width = spec.params.get("width")
+    aspect = spec.params.get("aspect")
+    table = aspect.from_aspect if aspect and aspect.from_aspect else None
+    return KeyframeRules(
+        size_multiple=registry.SIZE_CONSTRAINTS.get(width.constraint, 16) if width and width.constraint else 16,
+        size_min=int(width.min) if width and width.min else 256,
+        size_max=int(width.max) if width and width.max else 2048,
+        # A declared-but-unwired width (``targets: []``) means the graph ignores it.
+        from_aspect=bool(table) and not (width and width.targets),
+        aspects=tuple(sorted(table)) if table else (),
+    )
+
+
+def validate_keyframe_size(w: int, h: int, aspect: str, workflow: str | None) -> None:
+    """Validate a keyframe size (and, for an enum-size workflow, the aspect itself).
+
+    Refusing an unrenderable aspect here is the point: otherwise a 9:16 job on a workflow whose
+    table has no 9:16 entry renders the node's default — square, silently, and only visible in
+    the picture."""
+    r = keyframe_rules(workflow)
+    validate_size(w, h, minimum=r.size_min, maximum=r.size_max, multiple=r.size_multiple)
+    if r.from_aspect and aspect not in r.aspects:
+        raise ValueError(
+            f"workflow {workflow!r} cannot render aspect {aspect!r} "
+            f"(it offers {', '.join(r.aspects)})"
+        )
+
+
 def clip_seconds(length: int, fps: int) -> float:
     return round(length / fps, 2) if fps else 0.0
 
