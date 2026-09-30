@@ -637,6 +637,7 @@ Environment variables (see `vorch/config.py`):
 | `VORCH_DATABASE_URL` / `VORCH_TEST_DATABASE_URL` | `postgresql:///vorch` / `…/vorch_test` | state |
 | `VORCH_WORKFLOW_DIR` / `VORCH_USER_WORKFLOW_DIR` | `workflows/` / `~/vorch/workflows` | registry |
 | `VORCH_BACKENDS_FILE` | `~/vorch/backends.yaml` | remote ComfyUI backends (e.g. Modal); see `docs/modal-backend.md` |
+| `VORCH_COMFY_API_KEY` | — | ComfyUI API key for hosted `api_node` workflows (DALL·E, Flux.2, Ideogram, …). Authenticates to **api.comfy.org on Comfy credits**, not to the provider — get it at platform.comfy.org. Put it in `vorch.env`, never in a workflow YAML. |
 | `VORCH_ENV_FILE` | `~/vorch/vorch.env` | `KEY=VALUE` secrets (Modal proxy token, `HF_TOKEN`) loaded into every vorch process at start; existing variables win |
 | `VORCH_COMFY_REQUEST_TIMEOUT` / `VORCH_COMFY_POLL_INTERVAL` / `VORCH_COMFY_COLD_START_GRACE` | 30 s / 2 s / 240 s | ComfyUI client: per-call timeout, history polling, cold-start tolerance for remote backends |
 | `VORCH_PROJECTS_ROOT` / `VORCH_EXPORT_ROOT` | `~/vorch/projects` / `~/vorch/export` | files |

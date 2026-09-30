@@ -96,6 +96,7 @@ COMFY_POLL_INTERVAL = float(os.environ.get("VORCH_COMFY_POLL_INTERVAL", "2"))
 COMFY_COLD_START_GRACE = float(os.environ.get("VORCH_COMFY_COLD_START_GRACE", "240"))
 # Remote ComfyUI backends (e.g. Modal): name -> url/auth/timeouts. Missing file = local only.
 BACKENDS_FILE = Path(os.environ.get("VORCH_BACKENDS_FILE", "~/vorch/backends.yaml")).expanduser()
+ENV_FILE = Path(os.environ.get("VORCH_ENV_FILE", "~/vorch/vorch.env")).expanduser()
 ASSEMBLE_TIMEOUT = int(os.environ.get("VORCH_ASSEMBLE_TIMEOUT", "600"))  # ffmpeg clip assembly
 # Narration. One line is about a second to synthesise; the model takes ~90 s to load, which is
 # why the phase opens the server once for a whole job. Chunking mirrors OmniVoice's own

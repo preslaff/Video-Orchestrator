@@ -341,6 +341,39 @@ def _check_workflows(
     return out
 
 
+def _hosted_workflows(reg: registry.Registry, infos: dict[str, dict | None]) -> list[str]:
+    """Workflows that call ComfyUI's hosted API nodes, so need a comfy.org key.
+
+    Decided by ``/object_info``'s ``api_node`` flag rather than by node-name guessing, and only
+    for backends that were actually probed — offline there is no way to tell."""
+    out: list[str] = []
+    for spec in reg.list():
+        oi = infos.get(spec.backend)
+        if not oi:
+            continue
+        if any((oi.get(c) or {}).get("api_node") for c in spec.requires_nodes):
+            out.append(spec.name)
+    return sorted(out)
+
+
+def _check_comfy_api_key(hosted: list[str], used: set[str]) -> CheckResult:
+    """Whether a ComfyUI API key is present, when a workflow in play needs one.
+
+    Only *presence* can be reported: api.comfy.org has no validation endpoint, and a missing key
+    and an invalid one both come back as the same 401 *after* the call. So an `ok` row here means
+    "a key is configured", never "the key works"."""
+    in_use = sorted(set(hosted) & used)
+    data = {"env": comfy.API_KEY_ENV, "workflows": hosted, "in_use": in_use}
+    if comfy.api_key() is None:
+        return CheckResult(
+            "comfy_api_key", "fail" if in_use else "warn",
+            f"not set ({comfy.API_KEY_ENV}) — {len(hosted)} hosted workflow(s) cannot run; "
+            f"get a key at platform.comfy.org and add it to {config.ENV_FILE}",
+            data,
+        )
+    return CheckResult("comfy_api_key", "ok", "set (validity is only known after a call)", data)
+
+
 def _check_profile(profile: Any | None, reg: registry.Registry) -> CheckResult:
     if profile is None:
         return CheckResult("profile", "ok", "no profile selected")
@@ -466,6 +499,8 @@ def run_checks(
         for name, res in comfy_res.items()
     }
     checks += _check_workflows(reg, used, infos, known)
+    if hosted := _hosted_workflows(reg, infos):
+        checks.append(_check_comfy_api_key(hosted, used))
     checks.append(_check_profile(profile, reg))
     checks.append(_check_dir("export_root", projects_mod.export_root(project)))
     checks.append(_check_dir("projects_root", config.PROJECTS_ROOT))

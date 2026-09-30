@@ -38,6 +38,41 @@ _clock = time.monotonic
 _RETRY_STATUS = frozenset({502, 503, 504})
 _LOCAL_POLL_RETRY = 30.0  # seconds a local /history hiccup is tolerated before failing
 
+# ComfyUI's built-in API nodes (OpenAIDalle3, Flux2ImageNode, …) do not talk to the provider
+# directly: they proxy through api.comfy.org and authenticate with a ComfyUI-org credential,
+# passed per request in the prompt's extra_data. It is a secret, so it is read from the
+# environment at the point of use and never stored in a workflow YAML or a provenance manifest.
+API_KEY_ENV = "VORCH_COMFY_API_KEY"
+
+# Those nodes raise a bare Exception whose *message* is the only diagnostic — exception_type is
+# the generic "Exception" for all of them. Worse, a missing key and an invalid key are
+# indistinguishable (both 401), and "Please login first" means nothing to someone running
+# headless. Rewrite the ones with an actionable cause.
+_API_NODE_HINTS: tuple[tuple[str, str], ...] = (
+    ("Unauthorized: Please login first",
+     f"no usable ComfyUI API key — set {API_KEY_ENV} in ~/vorch/vorch.env (get one at "
+     "platform.comfy.org); if it is set, it was rejected, so check it has not expired"),
+    ("Payment Required",
+     "the ComfyUI API key has no credits left — top up at platform.comfy.org"),
+    ("There is a problem with your account",
+     "api.comfy.org rejected the account (contact support@comfy.org)"),
+    ("Rate Limit Exceeded",
+     "api.comfy.org rate-limited this key after retrying — wait and run it again"),
+)
+
+
+def api_key() -> str | None:
+    """The ComfyUI API key, or None. Read per call so vorch.env changes need no restart."""
+    return (os.environ.get(API_KEY_ENV) or "").strip() or None
+
+
+def _explain_api_node_error(text: str) -> str:
+    """Append an actionable cause to one of the API proxy's opaque messages."""
+    for needle, hint in _API_NODE_HINTS:
+        if needle in text:
+            return f"{text} [{hint}]"
+    return text
+
 
 def _resolve(backend: ComfyBackend | str | None) -> ComfyBackend:
     return backend if isinstance(backend, ComfyBackend) else backends.get(backend)
@@ -184,7 +219,11 @@ def run(
 
     # Never retry the submit itself: a lost response after a successful POST
     # would run the workflow twice.
-    resp = _request(b, "POST", "/prompt", json={"prompt": wf, "client_id": client_id})
+    payload: dict = {"prompt": wf, "client_id": client_id}
+    if (key := api_key()) is not None:
+        # ComfyUI treats this as sensitive and keeps it out of /history (SENSITIVE_EXTRA_DATA_KEYS).
+        payload["extra_data"] = {"api_key_comfy_org": key}
+    resp = _request(b, "POST", "/prompt", json=payload)
     if resp.status_code != 200:
         # ComfyUI returns a detailed validation error body on 400 — surface it.
         raise ComfyError(f"{b.name}: /prompt rejected ({resp.status_code}): {resp.text}")
@@ -233,7 +272,7 @@ def _execution_errors(history_entry: dict) -> list[str]:
         if event in ("execution_error", "execution_interrupted"):
             node = data.get("node_type") or data.get("node_id") or "?"
             text = data.get("exception_message") or data.get("exception_type") or event
-            out.append(f"{node}: {text}")
+            out.append(f"{node}: {_explain_api_node_error(str(text))}")
     return out or ["execution error (no message)"]
 
 
