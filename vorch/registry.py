@@ -139,6 +139,71 @@ KIND_HOOKS: dict[str, Callable[["WorkflowSpec", dict], None]] = {}
 
 
 @dataclass(frozen=True)
+class Cost:
+    """What one call of a hosted workflow is expected to cost, in USD.
+
+    Declared per workflow rather than derived, because ComfyUI's own ``price_badge`` is a
+    JSONata expression for most nodes (megapixel maths, branching on the chosen model) and only
+    a third are plain literals. ``vorch registry import`` seeds this from the literal ones and
+    leaves the rest for a human to fill in from the provider's price list.
+
+    A range is not a nicety: several nodes upstream declare one (``range_usd``) because the
+    price depends on something not known until the call returns.
+    """
+
+    min_usd: float
+    max_usd: float
+
+    @property
+    def worst(self) -> float:
+        """What a budget must reserve: always the upper bound."""
+        return self.max_usd
+
+    def to_dict(self) -> dict:
+        if self.min_usd == self.max_usd:
+            return {"usd": self.min_usd}
+        return {"min_usd": self.min_usd, "max_usd": self.max_usd}
+
+    def describe(self) -> str:
+        if self.min_usd == self.max_usd:
+            return f"${self.min_usd:.4f}".rstrip("0").rstrip(".")
+        return f"${self.min_usd:.4f}".rstrip("0").rstrip(".") + "-" + f"${self.max_usd:.4f}".rstrip("0").rstrip(".")
+
+
+def parse_cost(name: str, raw: Any) -> Cost | None:
+    """A ``cost:`` block: ``{usd: 0.04}`` or ``{min_usd: .03, max_usd: .06}``."""
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        raw = {"usd": raw}
+    if not isinstance(raw, dict):
+        raise RegistryError(f"workflow {name!r}: cost must be a number or a mapping")
+    def num(key: str) -> float | None:
+        v = raw.get(key)
+        if v is None:
+            return None
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            raise RegistryError(f"workflow {name!r}: cost.{key} must be a number, got {v!r}") from None
+        if v < 0:
+            raise RegistryError(f"workflow {name!r}: cost.{key} must be >= 0")
+        return v
+    flat, lo, hi = num("usd"), num("min_usd"), num("max_usd")
+    if flat is not None:
+        if lo is not None or hi is not None:
+            raise RegistryError(f"workflow {name!r}: cost takes either usd or min_usd/max_usd")
+        return Cost(flat, flat)
+    if lo is None and hi is None:
+        raise RegistryError(f"workflow {name!r}: cost needs usd, or min_usd and max_usd")
+    lo = lo if lo is not None else hi
+    hi = hi if hi is not None else lo
+    if hi < lo:
+        raise RegistryError(f"workflow {name!r}: cost.max_usd is below cost.min_usd")
+    return Cost(lo, hi)
+
+
+@dataclass(frozen=True)
 class Target:
     node: str
     field: str
@@ -214,6 +279,7 @@ class WorkflowSpec:
     builtin: bool = True
     requires_nodes: set[str] = field(default_factory=set)      # all class_types in the template
     requires_models: list[tuple[str, str, str, str]] = field(default_factory=list)  # (node, class, field, value)
+    cost: Cost | None = None                                 # USD per call, for hosted models
 
     def image_inputs(self) -> list[str]:
         return [p for p, t in self.inputs.items() if t == "image"]
@@ -251,6 +317,7 @@ class WorkflowSpec:
                 }
                 for n, p in self.params.items()
             },
+            "cost": self.cost.to_dict() if self.cost else None,
             "requires": {
                 "nodes": sorted(self.requires_nodes),
                 "models": [
@@ -352,6 +419,7 @@ def parse_spec(doc: dict, *, source: Path | None = None, builtin: bool = True) -
         description=str(doc.get("description") or ""),
         timeout=int(doc["timeout"]) if doc.get("timeout") is not None else None,
         backend=backend,
+        cost=parse_cost(name, doc.get("cost")),
         source=source,
         builtin=builtin,
     )
@@ -507,6 +575,26 @@ class Registry:
                 opts = _combo_options(object_info, cls, fld)
                 if opts is not None and val not in opts:
                     problems.append(f"model file {val!r} ({cls}.{fld}, node {node}) is not installed")
+            # Hosted models spend money per call, so a declared price is part of being valid —
+            # and because it is hand-copied while the real one lives in an upstream expression,
+            # a literal badge that disagrees with it is reported as drift.
+            hosted = [c for c in sorted(spec.requires_nodes) if (object_info.get(c) or {}).get("api_node")]
+            if hosted:
+                from . import registry_tools
+
+                badge = next((b for c in hosted if (b := registry_tools.price_badge_cost(object_info.get(c)))), None)
+                if spec.cost is None:
+                    problems.append(
+                        f"hosted workflow has no `cost:` — every call is billed"
+                        + (f"; ComfyUI says {badge.describe()} per call" if badge else
+                           " and ComfyUI states its price as an expression, so copy it from the provider")
+                    )
+                elif badge and (abs(badge.min_usd - spec.cost.min_usd) > 1e-9
+                                or abs(badge.max_usd - spec.cost.max_usd) > 1e-9):
+                    problems.append(
+                        f"cost says {spec.cost.describe()} but ComfyUI now says {badge.describe()} "
+                        "per call — the declared price has drifted"
+                    )
             classes: dict[str, str] | None = None
             for p in spec.params.values():
                 if p.enum_from and p.enum_from.get("class_type") not in object_info:

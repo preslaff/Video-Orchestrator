@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .. import backends, provenance, registry
+from .. import backends, budget, provenance, registry
 from ..clients import comfy
 
 log = logging.getLogger("vorch.steps")
@@ -30,6 +30,12 @@ def run_step(step: str, *, timeout: int | None = None, **params) -> list[Path]:
     if timeout is None:
         timeout = spec.timeout
     backend = backends.for_spec(spec)
+    if spec.cost is not None:
+        # A priced workflow bills per call, retries included. Checked before submitting, so a
+        # call that would break the job's ceiling is never made. Scene and attempt come from the
+        # provenance context the orchestrator already sets, so nothing has to be threaded here.
+        ctx = provenance.context()
+        budget.account(step, spec.cost, scene=ctx.get("scene"), attempt=ctx.get("attempt", 1))
     descriptors = _select_outputs(spec, comfy.run(wf, timeout=timeout, backend=backend))
     if not descriptors:
         raise comfy.ComfyError(f"Step {step!r} produced no output files on {backend.name}")

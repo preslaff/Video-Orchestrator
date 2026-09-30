@@ -20,7 +20,7 @@ from .errors import ApiError
 from .public import job_to_public, media_url, provenance_rows
 from .projects import AssetOut, asset_out
 from .schemas import (
-    DecisionOut, Gate, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SaveSceneAsset, SceneEdits,
+    DecisionOut, Gate, JobBudget, JobPublic, JobSpec, JobSummaryOut, Page, ProvenanceOut, SaveSceneAsset, SceneEdits,
     SaveCut, SceneInsert, SceneLocks, SceneOrder, SceneRegenerate, VersionDetail,
 )
 
@@ -58,6 +58,7 @@ async def create_job(
             reference_asset_ids=spec.reference_asset_ids,
             reference_images=spec.reference_images,
             keyframe_asset_ids=spec.keyframe_asset_ids,
+            budget_usd=spec.budget_usd,
             force=spec.force,
         )
     except EnvironmentNotReady as e:
@@ -309,6 +310,27 @@ async def remove_narration(
         raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
     except RuntimeError as e:
         raise ApiError(409, "conflict", str(e))
+    return job_to_public(job, store, manager)
+
+
+@router.put("/{job_id}/budget", response_model=JobPublic)
+async def set_budget(
+    job_id: str,
+    body: JobBudget,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Set the ceiling for hosted (API) model spending; null lifts it.
+
+    A job paused on its budget needs this before its gate is approved — approving alone would
+    stop it again at the very next billed call.
+    """
+    try:
+        job = manager.set_budget(job_id, body.budget_usd)
+    except KeyError as e:
+        raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
+    except ValueError as e:
+        raise ApiError(400, "bad_request", str(e))
     return job_to_public(job, store, manager)
 
 

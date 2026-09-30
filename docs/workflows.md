@@ -134,6 +134,34 @@ field — not to silence a mapping you have not done yet, because the result is 
 and the render ignores. Steps send a param only when the workflow declares it (`spec.accepts`), so
 a workflow may simply omit an *optional* name rather than declaring it targetless.
 
+### `cost:` — what a hosted call is billed
+
+A workflow that calls a hosted model declares its price, and `validate --online` treats a
+missing one as a problem: every call spends money, and the evaluator's retry loop multiplies it.
+
+```yaml
+cost: {usd: 0.03}                          # a flat price
+cost: {min_usd: 0.04, max_usd: 0.12}       # when it depends on size or quality
+```
+
+A job carries `budget_usd`; the ceiling is checked **before** each billed call and reserves the
+**upper** bound, so a range never overshoots. Crossing it pauses the job on a `budget` gate with
+what it would have cost and what is left — raise the ceiling (`PUT /api/jobs/{id}/budget`) before
+approving, or it stops again at the very next call. Every call is logged on the job, retries
+included, so a scene the evaluator rejected twice shows three entries.
+
+`registry import` fills this in from the node's own `price_badge` when ComfyUI states a plain
+number — about 70 of 241 do. The rest express it as a JSONata expression (megapixel maths,
+branching on the chosen model) which vorch does not evaluate, so those need the figure copied
+from the provider. Where a literal *is* available, `validate --online` compares it with what the
+YAML claims and reports drift.
+
+Two honest limits. The figures are **estimates**: the real charge comes back from api.comfy.org
+as a header ComfyUI keeps in memory and emits only on its websocket, never in `/history`, which
+is vorch's only transport — so nothing reconciles estimate against actual. And a workflow with no
+`cost:` is counted as *unpriced* rather than free: it is never blocked, but it is not silently
+treated as costing nothing either.
+
 ### Size as an enum: `from_aspect`
 
 Local samplers take literal `width`/`height`. Many hosted models instead offer a fixed set of

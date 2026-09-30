@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backends, config, formats, vram
+from . import backends, config, formats, provenance, vram
 from .clients import comfy
 from .evaluator import Verdict, evaluate_image
 from .genparams import DEFAULT, GenParams
@@ -205,10 +205,44 @@ def generate_keyframe_evaluated(
     attempt_prompt = prompt
     kf_path: Path
     verdict: Verdict
+    # One token for the whole call: resetting it discards every per-attempt set below, so the
+    # attempt number cannot leak out of here into the next thing that writes a manifest.
+    ctx_token = provenance.set_context(attempt=1)
+    try:
+        return _keyframe_attempts(
+            prompt, task, seed=seed, max_attempts=max_attempts, on_attempt=on_attempt,
+            params=params, negative=negative, filename_prefix=filename_prefix, mode=mode,
+            references=references, on_start=on_start, identity_image=identity_image,
+        )
+    finally:
+        provenance.reset_context(ctx_token)
+
+
+def _keyframe_attempts(
+    prompt: str,
+    task: str,
+    *,
+    seed: int = config.SEED_RANDOM,
+    max_attempts: int = 2,
+    on_attempt: Callable[[int, Path, Verdict], None] | None = None,
+    params: GenParams = DEFAULT,
+    negative: str | None = None,
+    filename_prefix: str | None = None,
+    mode: str = "t2i",
+    references: Sequence[str] = (),
+    on_start: Callable[[int, int], None] | None = None,
+    identity_image: str | Path | None = None,
+) -> tuple[Path, Verdict]:
+    attempt_prompt = prompt
+    kf_path: Path
+    verdict: Verdict
     for attempt in range(1, max_attempts + 1):
         # seed 0 = random (each retry differs); a fixed seed is bumped per attempt.
         attempt_seed = config.derive_seed(seed, attempt=attempt)
         log.info("keyframe: attempt %d/%d (seed=%s, mode=%s)", attempt, max_attempts, attempt_seed, mode)
+        # Stamped into the manifest and, for a hosted model, into the spend log: a scene the
+        # evaluator rejects twice is billed three times, and that has to be visible.
+        provenance.set_context(attempt=attempt)
         if on_start is not None:
             on_start(attempt, attempt_seed)
         kf_path = _make_keyframe(

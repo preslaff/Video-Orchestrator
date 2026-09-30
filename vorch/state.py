@@ -216,6 +216,11 @@ class Job:
     kind: str = "video"                      # video | stills (copy of profile.kind)
     export: dict | None = None             # ExportRecord (handoff folder) once exported
     assembly: dict | None = None           # AssemblyRecord (clips joined with transitions)
+    # Hosted-model spending. `budget_usd` is the ceiling the job may not cross (None = no
+    # ceiling); `spend` is the running estimate, one entry per billed call including every
+    # retry, because a scene the evaluator rejects twice is billed three times.
+    budget_usd: float | None = None
+    spend: list[dict] = field(default_factory=list)   # {workflow, scene, attempt, min_usd, max_usd, at}
     status: JobStatus = JobStatus.PENDING
     scenes: list[Scene] = field(default_factory=list)
     created_at: str = ""
@@ -485,6 +490,8 @@ def job_to_dict(job: Job) -> dict:
         "kind": job.kind,
         "export": job.export,
         "assembly": job.assembly,
+        "budget_usd": job.budget_usd,
+        "spend": [dict(e) for e in job.spend],
         "status": job.status.value,
         "scenes": [_scene_to_dict(s) for s in job.scenes],
         "created_at": job.created_at,
@@ -513,6 +520,8 @@ def job_from_dict(d: dict) -> Job:
         kind=d.get("kind", "video"),
         export=d.get("export"),
         assembly=d.get("assembly"),
+        budget_usd=d.get("budget_usd"),
+        spend=[dict(e) for e in d.get("spend") or []],
         status=JobStatus(d.get("status", "pending")),
         scenes=[_scene_from_dict(s) for s in d.get("scenes", [])],
         created_at=d.get("created_at", ""),

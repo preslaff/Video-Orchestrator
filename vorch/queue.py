@@ -19,7 +19,7 @@ from collections import deque
 from pathlib import Path
 from collections.abc import Callable
 
-from . import assembly as assembly_mod
+from . import budget, assembly as assembly_mod
 from . import cancel
 from . import export as export_mod
 from . import projects as projects_mod
@@ -137,6 +137,7 @@ class JobManager:
         reference_asset_ids: list[str] | None = None,
         reference_images: list[str] | None = None,
         keyframe_asset_ids: list[str] | None = None,
+        budget_usd: float | None = None,
         force: bool = False,
     ) -> Job:
         """Resolve profile/project/assets, gate on the environment, create + run the job.
@@ -171,6 +172,8 @@ class JobManager:
             reference_images=sub.reference_images, keyframe_asset_ids=animate,
             project_id=sub.project_id,
         )
+        job.budget_usd = budget_usd
+        self.store.save_job(job)
         prev = self._start(job)
         self._spawn(self._execute(job, lambda o, j: o.run(j), prev))
         return job
@@ -536,6 +539,30 @@ class JobManager:
         job = self._editable_job(job_id)
         o = Orchestrator.from_job(self.store, job)
         o.set_locked_regions(job, index, regions)     # KeyError -> 404, ValueError -> 400
+        return job
+
+    def set_budget(self, job_id: str, budget_usd: float | None) -> Job:
+        """Raise (or lift) a job's hosted-spend ceiling.
+
+        Not an ``_editable_job``: the whole point is to unstick a job that is paused **on** its
+        budget, and approving that gate without raising the ceiling only stops it again at the
+        very next call.
+        """
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)                 # -> 404
+        if budget_usd is not None:
+            if budget_usd < 0:
+                raise ValueError("budget_usd must be >= 0")
+            spent = budget.spent(job).max_usd
+            if budget_usd < spent:
+                raise ValueError(
+                    f"budget_usd ${budget_usd:.2f} is below the ${spent:.2f} already spent"
+                )
+        job.budget_usd = budget_usd
+        self.store.save_job(job)
+        log.info("job %s: budget set to %s", job_id,
+                 "uncapped" if budget_usd is None else f"${budget_usd:.2f}")
         return job
 
     def reorder_scenes(self, job_id: str, scene_ids: list[str]) -> Job:

@@ -36,6 +36,9 @@ class JobSpec(BaseModel):
     max_attempts: int | None = None
     evaluate: bool | None = None
     face_swap: bool | None = None
+    # Ceiling in USD for hosted (API) models; null = uncapped. Estimated from each workflow's
+    # declared `cost:`, retries included, and checked before every billed call.
+    budget_usd: float | None = Field(default=None, ge=0)
     force: bool = False
 
 
@@ -272,6 +275,12 @@ class SceneLocks(BaseModel):
     regions: list[LockedRegion] = []
 
 
+class JobBudget(BaseModel):
+    """Raise (or lift) a job's ceiling for hosted-model spending."""
+
+    budget_usd: float | None = Field(default=None, ge=0)
+
+
 class JobPublic(BaseModel):
     id: str
     idea: str
@@ -291,6 +300,12 @@ class JobPublic(BaseModel):
     kind: str = "video"
     export: dict | None = None
     assembly: dict | None = None
+    # Hosted-model spending: the ceiling, the running estimate, and every billed call.
+    budget_usd: float | None = None
+    spend_usd: float = 0.0             # worst case of what has been billed so far
+    spend_calls: int = 0
+    spend: list[dict] = []
+    budget_reason: str = ""            # why the job is stopped on its budget, if it is
     status: str
     created_at: str
     updated_at: str

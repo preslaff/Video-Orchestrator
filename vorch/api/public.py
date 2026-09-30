@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .. import config, provenance
+from .. import budget, config, provenance
 from .. import versions as versions_mod
 from ..evaluator import Verdict
 from ..orchestrator import Orchestrator
@@ -105,6 +105,10 @@ def job_to_public(job: Job, store: Store, manager=None) -> JobPublic:
     d = job_to_dict(job)
     d["scenes"] = [scene_to_public(s, job.project_id) for s in job.scenes]
     d["pending_gate"] = Orchestrator.pending_gate(job, store)
+    _spend = budget.spent(job)
+    d["spend_usd"] = _spend.max_usd          # the worst case, which is what the ceiling reserves
+    d["spend_calls"] = _spend.calls
+    d["budget_reason"] = Orchestrator.budget_blocked(job, store) or ""
     d["edit_reference_slots"] = _edit_reference_slots(job, store)
     if manager is not None:
         d["active"] = manager.is_active(job.id)

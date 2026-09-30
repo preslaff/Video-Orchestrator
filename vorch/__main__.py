@@ -884,6 +884,12 @@ def _registry_import(args) -> int:
             elif entry.get("title"):
                 doc["description"] = str(entry["title"])
             doc["tags"] = sorted({t for t in ("api", "hosted", kind) if t})
+            # Seed the price from the node's own badge when it states a plain number; the rest
+            # need a human, and a hosted workflow with no cost cannot be budgeted.
+            for node in wf.values():
+                if (c := registry_tools.price_badge_cost(info.get(node.get("class_type", "")))):
+                    doc["cost"] = c.to_dict()
+                    break
             if args.dry_run:
                 print(f"  {name:44} {kind:10} would write")
                 wrote += 1

@@ -817,6 +817,59 @@
         }
       }
     },
+    "/api/jobs/{job_id}/budget": {
+      "put": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Set Budget",
+        "description": "Set the ceiling for hosted (API) model spending; null lifts it.\n\nA job paused on its budget needs this before its gate is approved — approving alone would\nstop it again at the very next billed call.",
+        "operationId": "set_budget_api_jobs__job_id__budget_put",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobBudget"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/scenes/{index}/locks": {
       "put": {
         "tags": [
@@ -3852,6 +3905,25 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "JobBudget": {
+        "properties": {
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
+          }
+        },
+        "type": "object",
+        "title": "JobBudget",
+        "description": "Raise (or lift) a job's ceiling for hosted-model spending."
+      },
       "JobPublic": {
         "properties": {
           "id": {
@@ -3976,6 +4048,41 @@
               }
             ],
             "title": "Assembly"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
+          },
+          "spend_usd": {
+            "type": "number",
+            "title": "Spend Usd",
+            "default": 0.0
+          },
+          "spend_calls": {
+            "type": "integer",
+            "title": "Spend Calls",
+            "default": 0
+          },
+          "spend": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Spend",
+            "default": []
+          },
+          "budget_reason": {
+            "type": "string",
+            "title": "Budget Reason",
+            "default": ""
           },
           "status": {
             "type": "string",
@@ -4186,6 +4293,18 @@
               }
             ],
             "title": "Face Swap"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
           },
           "force": {
             "type": "boolean",

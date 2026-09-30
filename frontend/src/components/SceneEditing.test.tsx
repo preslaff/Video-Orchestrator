@@ -15,7 +15,7 @@ const scene = (index: number, extra: Record<string, unknown> = {}) => ({
 })
 const job = (over: Record<string, unknown> = {}) => ({
   id: 'j1', idea: 'x', kind: 'video', face_swap: false, project_id: 'p1', status: 'done', active: false, stopping: false,
-  edit_reference_slots: 2, pending_gate: null, scenes: [scene(0)], ...over,
+  budget_usd: null, spend_usd: 0, spend_calls: 0, spend: [], budget_reason: '', edit_reference_slots: 2, pending_gate: null, scenes: [scene(0)], ...over,
 }) as unknown as JobPublic
 const asset = (id: string, label: string): AssetOut => ({
   id, kind: 'reference', name: `${id}.jpg`, label, label_source: 'human', note_caption: '', note_tags: [], note_text: '', describe_state: '', describe_error: '', thumb_url: `/api/projects/p1/assets/${id}/thumb`, sha256: '', created_at: '',

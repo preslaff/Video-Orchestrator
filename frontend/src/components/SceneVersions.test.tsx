@@ -26,7 +26,7 @@ const scene = (extra: Record<string, unknown> = {}) => ({
 })
 const job = (over: Record<string, unknown> = {}) => ({
   id: 'j1', idea: 'x', kind: 'video', face_swap: false, project_id: null, status: 'done', active: false,
-  stopping: false, edit_reference_slots: 2, pending_gate: null, profile: null, scenes: [scene()], ...over,
+  stopping: false, budget_usd: null, spend_usd: 0, spend_calls: 0, spend: [], budget_reason: '', edit_reference_slots: 2, pending_gate: null, profile: null, scenes: [scene()], ...over,
 }) as unknown as JobPublic
 
 type Call = { method: string; path: string; body: unknown }

@@ -9,6 +9,7 @@ names each kind expects (see ``registry.KIND_CONTRACTS``). Both are heuristics:
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -335,6 +336,39 @@ def _declared_type(declared: dict, field: str) -> str | None:
     if not (isinstance(spec, (list, tuple)) and spec) or not isinstance(spec[0], str):
         return None
     return spec[0].split(",")[0].strip() or None   # some inputs accept a union of types
+
+
+def price_badge_cost(info: dict | None) -> "registry.Cost | None":
+    """The price a node declares, but only when it declares a plain number.
+
+    ComfyUI expresses this as a JSONata expression evaluated by its own frontend. Roughly a
+    third are literals; the rest do megapixel maths or branch on the chosen model, and vorch has
+    no JSONata engine (adding one for price estimation would dwarf its six runtime deps). So the
+    literals are read and everything else is left for a human to declare — which is honest, and
+    is why a missing cost is a warning rather than a silent zero.
+    """
+    expr = ((info or {}).get("price_badge") or {}).get("expr")
+    if not isinstance(expr, str):
+        return None
+    text = expr.strip()
+    if any(tok in text for tok in ("widgets", "inputs", "$", "?")):
+        return None  # an expression, not a literal
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        if data.get("type") == "usd" and isinstance(data.get("usd"), (int, float)):
+            return registry.parse_cost("price_badge", {"usd": float(data["usd"])})
+        if data.get("type") == "range_usd":
+            lo, hi = data.get("min_usd"), data.get("max_usd")
+            if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+                return registry.parse_cost("price_badge", {"min_usd": float(lo), "max_usd": float(hi)})
+    except registry.RegistryError:
+        return None
+    return None
 
 
 API_FIELD_PARAM = {

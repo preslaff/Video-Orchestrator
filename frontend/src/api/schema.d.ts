@@ -236,6 +236,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Budget
+         * @description Set the ceiling for hosted (API) model spending; null lifts it.
+         *
+         *     A job paused on its budget needs this before its gate is approved — approving alone would
+         *     stop it again at the very next billed call.
+         */
+        put: operations["set_budget_api_jobs__job_id__budget_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/scenes/{index}/locks": {
         parameters: {
             query?: never;
@@ -1404,6 +1427,14 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * JobBudget
+         * @description Raise (or lift) a job's ceiling for hosted-model spending.
+         */
+        JobBudget: {
+            /** Budget Usd */
+            budget_usd?: number | null;
+        };
         /** JobPublic */
         JobPublic: {
             /** Id */
@@ -1457,6 +1488,30 @@ export interface components {
             assembly?: {
                 [key: string]: unknown;
             } | null;
+            /** Budget Usd */
+            budget_usd?: number | null;
+            /**
+             * Spend Usd
+             * @default 0
+             */
+            spend_usd: number;
+            /**
+             * Spend Calls
+             * @default 0
+             */
+            spend_calls: number;
+            /**
+             * Spend
+             * @default []
+             */
+            spend: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Budget Reason
+             * @default
+             */
+            budget_reason: string;
             /** Status */
             status: string;
             /** Created At */
@@ -1553,6 +1608,8 @@ export interface components {
             evaluate?: boolean | null;
             /** Face Swap */
             face_swap?: boolean | null;
+            /** Budget Usd */
+            budget_usd?: number | null;
             /**
              * Force
              * @default false
@@ -3059,6 +3116,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_budget_api_jobs__job_id__budget_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobBudget"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

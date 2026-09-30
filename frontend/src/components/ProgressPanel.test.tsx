@@ -14,7 +14,7 @@ const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) 
 const base = (over: Partial<JobPublic>): JobPublic => ({
   id: 'j', idea: 'x', style: '', master_face: '', autonomy: 'semi', n_scenes: 2, seed: 0, max_attempts: 2, evaluate: true,
   face_swap: true, mode: 't2i', reference_images: [], project_id: null, profile_id: null, profile: null, kind: 'video',
-  export: null, status: 'running', created_at: '', updated_at: '', scenes: [], pending_gate: null, active: true, stopping: false, edit_reference_slots: 2, ...over,
+  export: null, status: 'running', created_at: '', updated_at: '', scenes: [], pending_gate: null, active: true, stopping: false, budget_usd: null, spend_usd: 0, spend_calls: 0, spend: [], budget_reason: '', edit_reference_slots: 2, ...over,
 })
 
 describe('deriveProgress', () => {

@@ -27,7 +27,7 @@ from pathlib import Path
 
 import requests
 
-from . import cancel, config, formats, media, pipeline, profiles, provenance, storyboard
+from . import budget, cancel, config, formats, media, pipeline, profiles, provenance, storyboard
 from . import projects as projects_mod
 from . import scene_assets, versions
 from .clients import gemma as gemma_client
@@ -42,6 +42,10 @@ log = logging.getLogger("vorch.orchestrator")
 
 GATE_STORYBOARD = "storyboard"
 GATE_KEYFRAMES = "keyframes"
+# Unlike the two above this one is not part of a job's fixed itinerary: it fires wherever a
+# hosted call would take the job past its ceiling, so it is discovered from the decision log
+# rather than listed by `gates_for`.
+GATE_BUDGET = "budget"
 
 
 def _now() -> str:
@@ -216,9 +220,13 @@ class Orchestrator:
     def run(self, job: Job) -> Job:
         """Advance the job as far as autonomy allows; pause at unapproved gates."""
         token = provenance.set_context(job_id=job.id, profile=self.params.profile_name or None)
+        # The job is made ambient so `steps.run_step` can bill a hosted call against it without
+        # every step signature having to learn what a job is (same reasoning as provenance).
+        budget_token = budget.set_job(job)
         try:
             return self._run(job)
         finally:
+            budget.reset_job(budget_token)
             provenance.reset_context(token)
 
     def _run(self, job: Job) -> Job:
@@ -228,6 +236,14 @@ class Orchestrator:
 
         # Stop checkpoints sit between phases; there is none before DONE — once the last
         # phase returns, all the work is done and a late stop must not discard it.
+        try:
+            return self._run_phases(job)
+        except budget.BudgetExceeded as e:
+            # Every phase saves each scene as it finishes, so stopping here keeps the work
+            # already paid for and only refuses the call that would have broken the ceiling.
+            return self._budget_stop(job, e)
+
+    def _run_phases(self, job: Job) -> Job:
         if not job.scenes:
             cancel.check()
             if job.keyframe_asset_ids:
@@ -517,6 +533,28 @@ class Orchestrator:
         self.reopen_scene(job, index, what=what, edits=edits)
         log.info("job %s: regenerating %s of scene %d", job.id, what, index)
         return self.run(job)
+
+    def _budget_stop(self, job: Job, exc: Exception) -> Job:
+        """Pause the job on its spending ceiling, recorded so the gate can be found again."""
+        job.status = JobStatus.NEEDS_APPROVAL
+        self.store.save_job(job)
+        self.store.log_decision(Decision(
+            job_id=job.id, scene_index=None, phase=GATE_BUDGET, attempt=1,
+            action="blocked", reason=str(exc),
+        ))
+        log.warning("job %s: stopped on budget — %s", job.id, exc)
+        self._event(job, "gate", gate=GATE_BUDGET, status=job.status.value, reason=str(exc))
+        return job
+
+    @staticmethod
+    def budget_blocked(job: Job, store: Store) -> str | None:
+        """The reason this job is stopped on its budget, or None."""
+        reason = None
+        for d in store.decisions(job.id):
+            if d.phase != GATE_BUDGET:
+                continue
+            reason = d.reason or "budget exceeded" if d.action == "blocked" else None
+        return reason
 
     def approve(self, job: Job, gate: str) -> Job:
         """Clear a semi-auto gate (logged as a decision) and continue the run."""
@@ -1269,7 +1307,13 @@ class Orchestrator:
 
     @classmethod
     def next_gate(cls, job: Job, store: Store) -> str | None:
-        """The first gate not yet approved (regardless of the job's status)."""
+        """The first gate not yet approved (regardless of the job's status).
+
+        A budget stop outranks the itinerary: the job may be past its storyboard and halfway
+        through its keyframes, but what it is waiting on is money.
+        """
+        if cls.budget_blocked(job, store):
+            return GATE_BUDGET
         state: dict[str, bool] = {}
         for d in store.decisions(job.id):
             if d.action == "approved":
