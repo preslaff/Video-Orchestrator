@@ -11,6 +11,7 @@ import { EnvSummary } from '@/components/EnvSummary'
 import { ZoomButton, Zoomable } from '@/components/Lightbox'
 import { Button, Card, ErrorBox } from '@/components/ui'
 import { ASPECTS, SIZE_MULTIPLE, clipSeconds, clipSize, snapLength, snapSize, stillSize, type Aspect } from '@/lib/wan'
+import { costLabel } from '@/lib/cost'
 import { isImageAsset } from '@/lib/assetFilter'
 import { estimateClip, fmtDuration, fmtRange, vramWarning } from '@/lib/render'
 
@@ -68,6 +69,8 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
   // Output overrides: the model (a registered animate workflow, which also picks the backend)
   // and the size class. '' = whatever the profile says.
   const [clipWorkflow, setClipWorkflow] = useState('')
+  const [stillWorkflow, setStillWorkflow] = useState('')
+  const [budget, setBudget] = useState('')
   const [clipAspect, setClipAspect] = useState<Aspect | ''>('')
   const [clipClass, setClipClass] = useState<'' | '480' | '720'>('')
   const [clipLength, setClipLength] = useState<number | ''>('')
@@ -84,6 +87,9 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
   const profile = profiles.data?.find((p) => p.id === effectiveProfileId)
   const env = useEnv(effectiveProfileId, false, step === 3)
   const animateWorkflows = useWorkflows('animate').data?.workflows ?? []
+  const stillWorkflows = useWorkflows('keyframe').data?.workflows ?? []
+  // A hosted model bills per call, so the picked one's declared price drives the estimate.
+  const stillSpec = stillWorkflows.find((w) => w.name === (stillWorkflow || profile?.keyframe?.workflow))
   // What this job will actually render at, once the overrides are folded in.
   const output = (() => {
     const v = profile?.video
@@ -116,12 +122,34 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
       video.width = output.width
       video.height = output.height
     }
+    if (stillWorkflow) o.keyframe = { ...(o.keyframe as object ?? {}), workflow: stillWorkflow }
     if (Object.keys(video).length) o.video = video
     return Object.keys(o).length ? o : null
   })()
 
   // What this job will cost in GPU time, from measured runs — the scene count is the multiplier
   // that turns a comfortable size into an overnight render.
+  // A hosted still model bills per call, and the evaluator's retries multiply it — so the
+  // estimate has to count attempts and variants, not just scenes, or it reads far too low.
+  const spendEstimate = (() => {
+    const cost = stillSpec?.cost
+    if (!cost) return null
+    const scenes = source === 'animate' ? (animateIds.length || 0) : (nScenes === '' ? 0 : Number(nScenes))
+    const variants = profile?.stills?.variants ?? 1
+    const attempts = profile?.evaluate?.enabled ? (profile?.evaluate?.max_attempts ?? 2) : 1
+    const calls = Math.max(scenes, 1) * variants
+    const lo = cost.min_usd * calls
+    const hi = cost.max_usd * calls * attempts
+    const over = budget !== '' && hi > Number(budget)
+    return (
+      <span className={over ? 'text-amber-800' : undefined} data-testid="spend-estimate">
+        {costLabel({ min_usd: lo, max_usd: hi })} for {calls} image{calls === 1 ? '' : 's'}
+        {attempts > 1 ? ` (up to ${attempts} attempts each)` : ''}
+        {over ? ' — above the budget below, so the job will pause' : ''}
+      </span>
+    )
+  })()
+
   const renderCost = (() => {
     const v = profile?.video
     if (!v?.width || !v.height || !v.length) return null
@@ -190,6 +218,7 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
     keyframe_asset_ids: source === 'animate' ? animateIds : [],
     master_face: masterFace,
     face_swap: faceSwap === 'profile' ? null : faceSwap === 'on',
+    budget_usd: budget === '' ? null : Number(budget),
     evaluate: evaluate === 'profile' ? null : evaluate === 'on',
     force,
   }
@@ -303,6 +332,26 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
                     <option value="">profile default ({profile?.video?.workflow ?? 'animate'})</option>
                     {animateWorkflows.map((w) => (
                       <option key={w.name} value={w.name}>{w.name} — {w.backend}</option>
+                    ))}
+                  </select>
+                </label>
+                {stillSpec?.cost && (
+                  <label className="block text-sm sm:col-span-2">
+                    <span className="text-xs text-neutral-500">budget (USD, blank = no ceiling)</span>
+                    <input data-testid="job-budget" type="number" min={0} step="0.01" value={budget}
+                      onChange={(e) => setBudget(e.target.value)} placeholder="e.g. 2.00"
+                      className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1" />
+                  </label>
+                )}
+                <label className="block text-sm sm:col-span-2">
+                  <span className="text-xs text-neutral-500">still model</span>
+                  <select data-testid="still-workflow" value={stillWorkflow} onChange={(e) => setStillWorkflow(e.target.value)}
+                    className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1">
+                    <option value="">profile default ({profile?.keyframe?.workflow ?? 'keyframe'})</option>
+                    {stillWorkflows.map((w) => (
+                      <option key={w.name} value={w.name}>
+                        {w.name}{w.cost ? ` — ${costLabel(w.cost)}/image` : ` — ${w.backend}`}
+                      </option>
                     ))}
                   </select>
                 </label>
@@ -424,6 +473,10 @@ export function NewJobWizard({ initialProjectId = '' }: { initialProjectId?: str
                  : `${mode}${mode === 'edit' ? ` (${refIds.length} ref)` : ''}`}</dd>
             <dt className="text-neutral-500">face swap</dt><dd>{swapOn ? `on (${masterFace || masterAsset?.name || 'no face!'})` : 'off'}</dd>
             {renderCost && <><dt className="text-neutral-500">render time</dt><dd data-testid="job-cost">{renderCost}</dd></>}
+            {spendEstimate && (
+              <><dt className="text-neutral-500">API spend</dt>
+                <dd data-testid="job-spend">{spendEstimate}</dd></>
+            )}
           </dl>
           <div className="mt-3 space-y-2">
             {problems.map((p) => <ErrorBox key={p} message={p} />)}

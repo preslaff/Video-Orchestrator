@@ -55,6 +55,7 @@ class SceneEdit(BaseModel):
     # Which edit workflow this scene uses ("" = the profile's); `edit_base="keyframe"` starts the
     # edit from the scene's own frame, "" from the references alone.
     edit_workflow: str | None = None
+    keyframe_workflow: str | None = None
     edit_base: Literal["", "keyframe"] | None = None
     references: list[str] | None = None            # explicit paths (CLI / no project)
     reference_asset_ids: list[str] | None = None   # project asset ids -> resolved into `references`
@@ -108,6 +109,7 @@ class SceneRegenerate(BaseModel):
     animation_negative: str | None = None
     mode: Literal["t2i", "edit"] | None = None
     edit_workflow: str | None = None
+    keyframe_workflow: str | None = None
     edit_base: Literal["", "keyframe"] | None = None
     references: list[str] | None = None
     reference_asset_ids: list[str] | None = None
@@ -238,6 +240,7 @@ class ScenePublic(BaseModel):
     animation_negative: str = ""
     mode: str = "t2i"
     edit_workflow: str = ""        # "" = the profile's edit workflow
+    keyframe_workflow: str = ""    # "" = the profile's keyframe workflow
     edit_base: str = ""            # "keyframe" = the edit starts from this scene's own frame
     edit_base_path: str = ""       # that frame, as resolved when the edit was applied
     references: list[str] = []

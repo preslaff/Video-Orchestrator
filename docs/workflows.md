@@ -58,6 +58,24 @@ postprocess import cleanly.
 A single UI export works too — `vorch registry add my_export.json` converts it automatically
 rather than telling you to re-export.
 
+## 1a. Choosing a model per job and per scene
+
+A profile sets the keyframe workflow for every scene (`setup/profiles`). Two narrower choices sit
+on top:
+
+- **per job** — the new-job wizard's *still model*, folded into `profile_overrides` so the job's
+  snapshot records what it actually used. When the chosen model costs money the wizard also shows
+  the estimated spend (scenes × variants × attempts — the retries are what make it bite) and takes
+  a **budget**.
+- **per scene** — *render with*, at the keyframes gate, on t2i scenes. `Scene.keyframe_workflow`
+  (`""` = the profile's), the same shape as `Scene.edit_workflow`. This is the one worth having:
+  one shot needs type drawn inside the picture and can afford Ideogram, the rest do not and
+  should not pay for it.
+
+An unknown or wrong-kind name is a 400 when the scene is saved, not a failure halfway through the
+run. If the chosen model cannot render the job's aspect, the gate says so and names the aspects it
+does offer, rather than letting the render come back the wrong shape.
+
 ## 2. Export the workflow from ComfyUI
 
 Build and test the graph in the ComfyUI UI, then **Export (API)** (not the plain export —

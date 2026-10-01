@@ -280,7 +280,8 @@ class Orchestrator:
         return job
 
     SCENE_EDIT_FIELDS = ("description", "keyframe_prompt", "keyframe_negative", "animation_prompt",
-                         "animation_negative", "mode", "references", "edit_workflow", "edit_base")
+                         "animation_negative", "mode", "references", "edit_workflow",
+                         "keyframe_workflow", "edit_base")
 
     def reopen_scene(self, job: Job, index: int, *, what: str = "keyframe", edits: dict | None = None) -> Scene:
         """Discard a scene's keyframe (and everything built on it) or just its clip,
@@ -805,7 +806,12 @@ class Orchestrator:
         workflow (``pipeline.stage_references``), so a scene on another workflow must stage to
         that workflow's backend.
         """
-        return self.params.with_(edit_workflow=scene.edit_workflow) if scene.edit_workflow else self.params
+        changes: dict[str, str] = {}
+        if scene.edit_workflow:
+            changes["edit_workflow"] = scene.edit_workflow
+        if scene.keyframe_workflow:
+            changes["keyframe_workflow"] = scene.keyframe_workflow
+        return self.params.with_(**changes) if changes else self.params
 
     @staticmethod
     def edit_sources(scene: Scene) -> list[str]:

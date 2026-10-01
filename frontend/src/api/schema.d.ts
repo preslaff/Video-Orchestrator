@@ -2004,6 +2004,8 @@ export interface components {
             mode?: ("t2i" | "edit") | null;
             /** Edit Workflow */
             edit_workflow?: string | null;
+            /** Keyframe Workflow */
+            keyframe_workflow?: string | null;
             /** Edit Base */
             edit_base?: ("" | "keyframe") | null;
             /** References */
@@ -2147,6 +2149,11 @@ export interface components {
              */
             edit_workflow: string;
             /**
+             * Keyframe Workflow
+             * @default
+             */
+            keyframe_workflow: string;
+            /**
              * Edit Base
              * @default
              */
@@ -2269,6 +2276,8 @@ export interface components {
             mode?: ("t2i" | "edit") | null;
             /** Edit Workflow */
             edit_workflow?: string | null;
+            /** Keyframe Workflow */
+            keyframe_workflow?: string | null;
             /** Edit Base */
             edit_base?: ("" | "keyframe") | null;
             /** References */

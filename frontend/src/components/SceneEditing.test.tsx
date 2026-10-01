@@ -7,7 +7,7 @@ import type { AssetOut, JobPublic } from '@/api/types'
 
 const scene = (index: number, extra: Record<string, unknown> = {}) => ({
   index, id: `s${index}`, writing_prompts: false, description: 'd', character: '', setting: '', mood: '', continuous: false, status: 'complete',
-  keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', edit_workflow: '', edit_base: '', edit_base_path: '', references: [],
+  keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', edit_workflow: '', keyframe_workflow: '', edit_base: '', edit_base_path: '', references: [],
   keyframe_path: '/kf.png', keyframe_url: '/media/kf.png', keyframe_verdict: null, video_path: '/v.mp4', video_url: '/media/v.mp4',
   video_verdict: null, swapped_path: null, swapped_url: null, swap_verdict: null, variants: [], raw_video_path: '/v.mp4', post_paths: [],
   identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], keyframe_source: 'generated', keyframe_asset_id: null, clips: [], locked_regions: [], narration: '', narration_url: null, narration_seconds: 0, narration_stale: false, texts: [],
@@ -65,7 +65,7 @@ describe('editing scenes at any stage', () => {
     const user = userEvent.setup()
     renderPanel(job())
     expect(screen.getByText(/apply on Regenerate keyframe/)).toBeInTheDocument()
-    await user.selectOptions(screen.getByRole('combobox'), 'edit')
+    await user.selectOptions(screen.getByTestId('mode-0'), 'edit')
     await user.click(screen.getByTestId('refs-0-choose'))
     await user.click(screen.getByTestId('refs-0-tower'))
     await user.click(screen.getByTestId('refs-0-bela'))

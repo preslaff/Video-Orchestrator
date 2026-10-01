@@ -7,7 +7,7 @@ import type { AssetOut, JobPublic } from '@/api/types'
 
 const scene = (index: number, extra: Partial<JobPublic['scenes'][number]> = {}) => ({
   index, id: `s${index}`, writing_prompts: false, description: 'd', character: '', setting: '', mood: '', continuous: false, status: 'pending',
-  keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', edit_workflow: '', edit_base: '', edit_base_path: '', references: [],
+  keyframe_prompt: 'kf', animation_prompt: 'an', keyframe_negative: '', animation_negative: '', mode: 't2i', edit_workflow: '', keyframe_workflow: '', edit_base: '', edit_base_path: '', references: [],
   keyframe_path: null, keyframe_url: null, keyframe_verdict: null, video_path: null, video_url: null, video_verdict: null,
   swapped_path: null, swapped_url: null, swap_verdict: null, variants: [], raw_video_path: null, post_paths: [],
   identity: '', identity_asset_id: null, identity_url: null, reference_asset_ids: [], clips: [], locked_regions: [], narration: '', narration_url: null, narration_seconds: 0, narration_stale: false, texts: [], ...extra,
@@ -708,5 +708,87 @@ describe('GatePanel narration', () => {
     const silent = { ...spoken, scenes: [{ ...spoken.scenes[0], narration: '' }] } as unknown as JobPublic
     render(<QueryClientProvider client={new QueryClient()}><GatePanel job={silent} assets={assets} /></QueryClientProvider>)
     expect(screen.getByTestId('speak-0')).toBeDisabled()
+  })
+})
+
+describe('GatePanel per-scene keyframe model', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const WORKFLOWS = {
+    workflows: [
+      { name: 'keyframe', kind: 'keyframe', description: 'local Klein', cost: null,
+        params: { width: { targets: [{ node: '1', field: 'w' }] } } },
+      { name: 'api_ideogram_v4_t2i', kind: 'keyframe', description: 'type inside the picture',
+        cost: { min_usd: 0.0429, max_usd: 0.143 },
+        params: { width: { targets: [] }, aspect: { from_aspect: { '16:9': 'a', '9:16': 'b' } } } },
+      { name: 'api_square_only', kind: 'keyframe', description: 'square only',
+        cost: { min_usd: 0.02, max_usd: 0.02 },
+        params: { width: { targets: [] }, aspect: { from_aspect: { '1:1': 'x' } } } },
+    ],
+    errors: {}, kinds: ['keyframe'], user_dir: '',
+  }
+
+  function stub(puts: unknown[]) {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const url = new URL(raw, 'http://localhost')
+      const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+      if (url.pathname === '/api/workflows') {
+        return new Response(JSON.stringify(WORKFLOWS), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (method !== 'GET') {
+        puts.push(init?.body ? JSON.parse(String(init.body))
+          : input instanceof Request ? await input.json().catch(() => null) : null)
+      }
+      return new Response(JSON.stringify(job), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+  }
+
+  const t2i = {
+    ...job, face_swap: false, profile: { aspect: '9:16', keyframe: { workflow: 'keyframe' } },
+    scenes: [scene(0, { mode: 't2i' })],
+  } as unknown as JobPublic
+
+  it('lists the keyframe models with their price and sends the chosen one', async () => {
+    const puts: unknown[] = []
+    stub(puts)
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <GatePanel job={t2i} assets={assets} /></QueryClientProvider>)
+
+    const select = await screen.findByTestId('keyframe-workflow-0')
+    expect(select).toHaveValue('')
+    expect(screen.getByRole('option', { name: /profile default \(keyframe\)/ })).toBeInTheDocument()
+    // a paid model shows what a call costs; the local one has no price to show
+    expect(await screen.findByRole('option', { name: /api_ideogram_v4_t2i — \$0.043–\$0.143\/image/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'keyframe' })).toBeInTheDocument()
+
+    await user.selectOptions(select, 'api_ideogram_v4_t2i')
+    await user.click(screen.getByText('Save changes'))
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect((puts[0] as { scenes: { keyframe_workflow: string }[] }).scenes[0])
+      .toMatchObject({ keyframe_workflow: 'api_ideogram_v4_t2i' })
+  })
+
+  it('warns when the chosen model cannot render the job aspect', async () => {
+    stub([])
+    const user = userEvent.setup()
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <GatePanel job={t2i} assets={assets} /></QueryClientProvider>)
+
+    const select = await screen.findByTestId('keyframe-workflow-0')
+    await screen.findByRole('option', { name: /api_square_only/ })   // options have arrived
+    await user.selectOptions(select, 'api_ideogram_v4_t2i')
+    expect(screen.queryByTestId('keyframe-aspect-0')).toBeNull()   // offers 9:16
+
+    await user.selectOptions(select, 'api_square_only')
+    expect(screen.getByTestId('keyframe-aspect-0')).toHaveTextContent('cannot render 9:16')
+  })
+
+  it('is not offered for an edit scene, whose model is the edit workflow', async () => {
+    stub([])
+    const edit = { ...t2i, scenes: [scene(0, { mode: 'edit', reference_asset_ids: ['room'] })] } as unknown as JobPublic
+    render(<QueryClientProvider client={new QueryClient()}><GatePanel job={edit} assets={assets} /></QueryClientProvider>)
+    await waitFor(() => expect(screen.queryByTestId('keyframe-workflow-0')).toBeNull())
   })
 })

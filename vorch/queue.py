@@ -406,7 +406,7 @@ class JobManager:
             old_identity = (scene.identity, scene.identity_asset_id)
             for field in ("description", "keyframe_prompt", "animation_prompt",
                           "keyframe_negative", "animation_negative", "mode", "references",
-                          "edit_workflow", "edit_base", "narration"):
+                          "edit_workflow", "keyframe_workflow", "edit_base", "narration"):
                 if edit.get(field) is not None:
                     setattr(scene, field, edit[field])
             if edit.get("narration") is not None and not scene.narration.strip():

@@ -101,18 +101,22 @@ def validate_scene(scene: Any) -> None:
                    if not Path(r).expanduser().is_file()]
         if missing:
             raise ValueError(f"scene {scene.index}: reference image not found: {missing[0]}")
-    # A scene may use its own edit workflow; an unknown one must be a 400 here, not a KeyError
-    # inside the run segment (which fails the whole job).
-    if getattr(scene, "edit_workflow", ""):
+    # A scene may name its own edit or keyframe workflow; an unknown one must be a 400 here, not
+    # a KeyError inside the run segment (which fails the whole job).
+    for field, want in (("edit_workflow", "edit"), ("keyframe_workflow", "keyframe")):
+        name = getattr(scene, field, "")
+        if not name:
+            continue
         from . import registry  # local: registry pulls in the workflow templates
 
         try:
-            spec = registry.load_registry().get(scene.edit_workflow)
+            spec = registry.load_registry().get(name)
         except (KeyError, registry.RegistryError):
-            raise ValueError(f"scene {scene.index}: unknown edit workflow {scene.edit_workflow!r}") from None
-        if spec.kind != "edit":
-            raise ValueError(f"scene {scene.index}: workflow {scene.edit_workflow!r} is kind "
-                             f"{spec.kind!r}, not 'edit'")
+            raise ValueError(
+                f"scene {scene.index}: unknown {want} workflow {name!r}") from None
+        if spec.kind != want:
+            raise ValueError(f"scene {scene.index}: workflow {name!r} is kind "
+                             f"{spec.kind!r}, not {want!r}")
 
 
 def invalidate_after_identity_change(scene: Any, kind: str) -> None:

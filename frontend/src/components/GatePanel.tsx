@@ -10,12 +10,13 @@ import { LockRegions } from '@/components/LockRegions'
 import { VersionStrip } from '@/components/VersionStrip'
 import { profileSizes } from '@/components/SceneGrid'
 import { isImageAsset, isVideoAsset } from '@/lib/assetFilter'
+import { costLabel } from '@/lib/cost'
 import { estimateClip, fmtRange } from '@/lib/render'
 import { useApprove, useDeleteVersion, useRegenerateScene, useSaveSceneAsset, useSceneLocks, useSceneStructure, useRemoveNarration, useSpeakScene, useUpdateScenes } from '@/hooks/useJobs'
 import { useUploadAsset, useWorkflows } from '@/hooks/useSetup'
 import { Button, ErrorBox } from '@/components/ui'
 
-type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; edit_workflow: string; edit_base: '' | 'keyframe'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null; narration: string }
+type Draft = { description: string; keyframe_prompt: string; keyframe_negative: string; animation_prompt: string; animation_negative: string; mode: 't2i' | 'edit'; edit_workflow: string; keyframe_workflow: string; edit_base: '' | 'keyframe'; references: string; reference_asset_ids: string[]; identity_asset_id: string | null; narration: string }
 
 type PickerKind = 'refs' | 'identity' | 'image' | 'locks' | 'video'
 
@@ -142,7 +143,8 @@ function draftsFrom(job: JobPublic): Record<string, Draft> {
       description: s.description, keyframe_prompt: s.keyframe_prompt, keyframe_negative: s.keyframe_negative,
       animation_prompt: s.animation_prompt, animation_negative: s.animation_negative,
       narration: s.narration ?? '',
-      mode: s.mode as 't2i' | 'edit', edit_workflow: s.edit_workflow ?? '', edit_base: (s.edit_base ?? '') as '' | 'keyframe',
+      mode: s.mode as 't2i' | 'edit', edit_workflow: s.edit_workflow ?? '',
+      keyframe_workflow: s.keyframe_workflow ?? '', edit_base: (s.edit_base ?? '') as '' | 'keyframe',
       references: s.references.join('\n'), reference_asset_ids: [...(s.reference_asset_ids ?? [])],
       identity_asset_id: s.identity_asset_id ?? null,
     }
@@ -224,6 +226,9 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
   // The registered edit workflows, so the scene selector needs no hard-coded names.
   const editWorkflows = useWorkflows('edit').data?.workflows ?? []
   const profileEdit = String((job.profile as { edit_workflow?: string } | null)?.edit_workflow ?? 'identity_edit')
+  const stillWorkflows = useWorkflows('keyframe').data?.workflows ?? []
+  const profileStill = String(
+    (job.profile as { keyframe?: { workflow?: string } } | null)?.keyframe?.workflow ?? 'keyframe')
   // Which row is asking "delete — and the files too?", and where a new scene is being written.
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [addAt, setAddAt] = useState<number | null>(null)
@@ -270,6 +275,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
         animation_negative: video ? d.animation_negative : null,
         mode: what === 'keyframe' ? d.mode : null,
         edit_workflow: what === 'keyframe' ? d.edit_workflow : null,
+        keyframe_workflow: what === 'keyframe' ? d.keyframe_workflow : null,
         edit_base: what === 'keyframe' ? d.edit_base : null,
         references: what === 'keyframe' && !assetRefs ? d.references.split('\n').map((x) => x.trim()).filter(Boolean) : null,
         reference_asset_ids: what === 'keyframe' ? refsEdit(d) : null,
@@ -382,6 +388,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
         animation_negative: video ? d.animation_negative : null,
         mode: s.keyframe_path ? null : d.mode,
         edit_workflow: d.edit_workflow,
+        keyframe_workflow: d.keyframe_workflow,
         edit_base: d.edit_base,
         references: s.keyframe_path || assetRefs ? null : d.references.split('\n').map((x) => x.trim()).filter(Boolean),
         reference_asset_ids: s.keyframe_path ? null : refsEdit(d),
@@ -575,7 +582,43 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
                   {locked && <span className="block text-xs text-neutral-500">mode &amp; references apply on Regenerate keyframe</span>}
                   <div className="flex flex-wrap items-end gap-3">
                   <label className="block w-32 shrink-0"><span className="text-xs text-neutral-500">mode</span>
-                    <select value={d.mode} onChange={(e) => set(s.id, { mode: e.target.value as 't2i' | 'edit' })} className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1"><option value="t2i">t2i</option><option value="edit">edit</option></select></label>
+                    <select value={d.mode} data-testid={`mode-${s.index}`} onChange={(e) => set(s.id, { mode: e.target.value as 't2i' | 'edit' })} className="mt-0.5 block w-full rounded border border-neutral-300 bg-white px-2 py-1"><option value="t2i">t2i</option><option value="edit">edit</option></select></label>
+                  {d.mode === 't2i' && (() => {
+                    // Which model renders THIS scene. Worth per-scene because the reasons differ
+                    // shot by shot: one frame needs type drawn inside the picture, the rest do not
+                    // and should not pay for it.
+                    const chosen = stillWorkflows.find((w) => w.name === (d.keyframe_workflow || profileStill))
+                    const aspects = chosen?.params?.aspect?.from_aspect
+                    const jobAspect = String((job.profile as { aspect?: string } | null)?.aspect ?? '16:9')
+                    const cannot = aspects && !Object.keys(aspects).includes(jobAspect)
+                    return (
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <label className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs text-neutral-500">render with</span>
+                          <select value={d.keyframe_workflow} data-testid={`keyframe-workflow-${s.index}`}
+                            onChange={(e) => set(s.id, { keyframe_workflow: e.target.value })}
+                            className="rounded border border-neutral-300 bg-white px-2 py-1 text-sm">
+                            <option value="">profile default ({profileStill})</option>
+                            {stillWorkflows.map((w) => (
+                              <option key={w.name} value={w.name}>
+                                {w.name}{w.cost ? ` — ${costLabel(w.cost)}/image` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {cannot && (
+                          <p className="text-xs text-amber-700" data-testid={`keyframe-aspect-${s.index}`}>
+                            {chosen?.name} cannot render {jobAspect} — it offers {Object.keys(aspects).join(', ')}.
+                          </p>
+                        )}
+                        {chosen?.cost && (
+                          <p className="text-xs text-neutral-500">
+                            billed per image, retries included.
+                          </p>
+                        )}
+                      </div>
+                    )
+                  })()}
                   {d.mode === 'edit' && (() => {
                     // Which edit workflow this scene uses. identity_edit conditions a fresh render
                     // on the references; kv_edit keeps the base image and changes what you describe.
