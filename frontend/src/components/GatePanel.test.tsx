@@ -724,6 +724,11 @@ describe('GatePanel per-scene keyframe model', () => {
       { name: 'api_square_only', kind: 'keyframe', description: 'square only',
         cost: { min_usd: 0.02, max_usd: 0.02 },
         params: { width: { targets: [] }, aspect: { from_aspect: { '1:1': 'x' } } } },
+      // A flat-priced model: the API sends both bounds equal. This fixture used to carry only
+      // ranges, which is why a live flat price (api_wan_t2i, $0.03) crashed the panel.
+      { name: 'api_wan_t2i', kind: 'keyframe', description: 'the cheap one',
+        cost: { min_usd: 0.03, max_usd: 0.03 },
+        params: { width: { targets: [{ node: '1', field: 'width' }] } } },
     ],
     errors: {}, kinds: ['keyframe'], user_dir: '',
   }
@@ -760,8 +765,10 @@ describe('GatePanel per-scene keyframe model', () => {
     expect(select).toHaveValue('')
     expect(screen.getByRole('option', { name: /profile default \(keyframe\)/ })).toBeInTheDocument()
     // a paid model shows what a call costs; the local one has no price to show
-    expect(await screen.findByRole('option', { name: /api_ideogram_v4_t2i — \$0.043–\$0.143\/image/ })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: /api_ideogram_v4_t2i — \$0.0429–\$0.143\/image/ })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'keyframe' })).toBeInTheDocument()
+    // a flat price shows one figure, not a range of the same number twice
+    expect(screen.getByRole('option', { name: 'api_wan_t2i — $0.03/image' })).toBeInTheDocument()
 
     await user.selectOptions(select, 'api_ideogram_v4_t2i')
     await user.click(screen.getByText('Save changes'))

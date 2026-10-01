@@ -888,7 +888,7 @@ def _registry_import(args) -> int:
             # need a human, and a hosted workflow with no cost cannot be budgeted.
             for node in wf.values():
                 if (c := registry_tools.price_badge_cost(info.get(node.get("class_type", "")))):
-                    doc["cost"] = c.to_dict()
+                    doc["cost"] = c.to_yaml()
                     break
             if args.dry_run:
                 print(f"  {name:44} {kind:10} would write")

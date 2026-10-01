@@ -87,3 +87,22 @@ def test_hosted_entries_do_not_shadow_a_local_workflow():
     for spec in _hosted():
         assert spec.name not in local or spec.source.parent.name == "hosted", spec.name
     assert "keyframe" not in {s.name for s in _hosted()}
+
+
+def test_the_api_always_serves_both_cost_bounds():
+    """A flat price and a range must look the same to a client.
+
+    They did not: ``Cost.to_yaml`` keeps a flat price flat (``{usd: 0.03}``) because that is how
+    a human writes it, and the API reused that — so anything reading ``min_usd`` crashed on every
+    flat-priced workflow, which is most of the cheap ones.
+    """
+    flat, ranged = registry.parse_cost("w", {"usd": 0.03}), registry.parse_cost("w", {"min_usd": 0.04, "max_usd": 0.12})
+    assert flat.to_api() == {"min_usd": 0.03, "max_usd": 0.03}
+    assert ranged.to_api() == {"min_usd": 0.04, "max_usd": 0.12}
+    assert flat.to_yaml() == {"usd": 0.03}          # the YAML form stays human
+    assert ranged.to_yaml() == {"min_usd": 0.04, "max_usd": 0.12}
+
+    for spec in _hosted():
+        served = spec.to_dict()["cost"]
+        assert set(served) == {"min_usd", "max_usd"}, f"{spec.name} serves {served}"
+        assert all(isinstance(v, (int, float)) for v in served.values()), spec.name

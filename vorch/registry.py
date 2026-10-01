@@ -159,9 +159,16 @@ class Cost:
         """What a budget must reserve: always the upper bound."""
         return self.max_usd
 
-    def to_dict(self) -> dict:
+    def to_yaml(self) -> dict:
+        """The ``cost:`` block as a human would write it: a flat price stays flat."""
         if self.min_usd == self.max_usd:
             return {"usd": self.min_usd}
+        return {"min_usd": self.min_usd, "max_usd": self.max_usd}
+
+    def to_api(self) -> dict:
+        """Always both bounds. A client must not have to branch on which shape it got —
+        reusing the YAML form here served `{"usd": 0.03}` for a flat price and `{min_usd,
+        max_usd}` for a range, and anything reading `min_usd` crashed on the former."""
         return {"min_usd": self.min_usd, "max_usd": self.max_usd}
 
     def describe(self) -> str:
@@ -317,7 +324,7 @@ class WorkflowSpec:
                 }
                 for n, p in self.params.items()
             },
-            "cost": self.cost.to_dict() if self.cost else None,
+            "cost": self.cost.to_api() if self.cost else None,
             "requires": {
                 "nodes": sorted(self.requires_nodes),
                 "models": [
