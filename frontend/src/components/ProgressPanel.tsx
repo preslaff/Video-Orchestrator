@@ -75,7 +75,7 @@ export function ProgressPanel({ job, events, connected }: { job: JobPublic; even
   useTick(running)
   const paused = job.status === 'needs_approval'
   const failed = job.status === 'failed'
-  const stopped = job.status === 'cancelled'
+  const stopped = job.status === 'stopped'
   const lastError = failed ? findLast(events, (e) => e.type === 'error') : undefined
 
   return (

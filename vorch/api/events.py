@@ -28,7 +28,7 @@ from .errors import ApiError
 router = APIRouter(prefix="/api", tags=["events"])
 
 PING_SECONDS = 15
-_TERMINAL = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
+_TERMINAL = {JobStatus.DONE, JobStatus.FAILED, JobStatus.STOPPED, JobStatus.CANCELLED}
 
 
 def _after(request: Request) -> int:

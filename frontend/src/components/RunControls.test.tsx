@@ -45,7 +45,7 @@ describe('RunControls', () => {
   it('resumes a stopped job and reconnects the stream', async () => {
     const calls: string[] = []
     stub(calls)
-    const onStarted = renderWith(job({ status: 'cancelled', active: false }))
+    const onStarted = renderWith(job({ status: 'stopped', active: false }))
     expect(screen.queryByTestId('stop-job')).toBeNull()
     await userEvent.click(screen.getByTestId('resume-job'))
     await waitFor(() => expect(calls).toContain('POST /api/jobs/j1/retry'))
@@ -63,5 +63,64 @@ describe('RunControls', () => {
     await userEvent.click(screen.getByTestId('resume-job'))
     await waitFor(() => expect(calls).toContain('POST /api/jobs/j1/retry'))
     expect(confirm).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('RunControls cancel', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('cancels from a gate, which stop could not do, and asks first', async () => {
+    const calls: string[] = []
+    stub(calls)
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    const user = userEvent.setup()
+    renderWith(job({ status: 'needs_approval', active: false }))
+
+    expect(screen.queryByTestId('stop-job')).toBeNull()      // nothing is running to stop
+    await user.click(screen.getByTestId('cancel-job'))
+    await waitFor(() => expect(calls).toContain('POST /api/jobs/j1/cancel'))
+  })
+
+  it('does nothing if the confirmation is declined', async () => {
+    const calls: string[] = []
+    stub(calls)
+    vi.stubGlobal('confirm', vi.fn(() => false))
+    const user = userEvent.setup()
+    renderWith(job({ status: 'needs_approval', active: false }))
+
+    await user.click(screen.getByTestId('cancel-job'))
+    expect(calls.filter((c) => c.includes('/cancel'))).toHaveLength(0)
+  })
+
+  it('offers Cancel alongside Stop while a run is live', async () => {
+    stub([])
+    renderWith(job({ status: 'running', active: true }))
+    expect(screen.getByTestId('stop-job')).toBeInTheDocument()
+    expect(screen.getByTestId('cancel-job')).toBeInTheDocument()
+  })
+
+  it('offers Reopen instead of Resume once cancelled, and never Cancel again', async () => {
+    const calls: string[] = []
+    stub(calls)
+    const user = userEvent.setup()
+    renderWith(job({ status: 'cancelled', active: false }))
+
+    expect(screen.queryByTestId('resume-job')).toBeNull()    // terminal: not resumable as-is
+    expect(screen.queryByTestId('cancel-job')).toBeNull()
+    await user.click(screen.getByTestId('reopen-job'))
+    await waitFor(() => expect(calls).toContain('POST /api/jobs/j1/reopen'))
+  })
+
+  it('still offers Resume on a stopped job', async () => {
+    stub([])
+    renderWith(job({ status: 'stopped', active: false }))
+    expect(screen.getByTestId('resume-job')).toBeInTheDocument()
+    expect(screen.getByTestId('cancel-job')).toBeInTheDocument()
+  })
+
+  it('leaves a finished job alone', async () => {
+    stub([])
+    renderWith(job({ status: 'done', active: false }))
+    expect(screen.queryByTestId('cancel-job')).toBeNull()
   })
 })

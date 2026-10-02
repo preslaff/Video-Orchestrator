@@ -390,6 +390,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel
+         * @description Finish with a job for good: terminal, and it will not resume afterwards.
+         *
+         *     Works in any state, mid-run included — a running segment is asked to stop first. Nothing is
+         *     deleted: the keyframes, clips and export folder stay, and the job can still be viewed and
+         *     assembled. Undo with ``reopen``.
+         */
+        post: operations["cancel_api_jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reopen
+         * @description Undo a cancel: the job becomes stopped, so it can be resumed again.
+         */
+        post: operations["reopen_api_jobs__job_id__reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/approve/{gate}": {
         parameters: {
             query?: never;
@@ -1620,7 +1664,7 @@ export interface components {
          * JobStatus
          * @enum {string}
          */
-        JobStatus: "pending" | "running" | "needs_approval" | "done" | "failed" | "cancelled";
+        JobStatus: "pending" | "running" | "needs_approval" | "done" | "failed" | "stopped" | "cancelled";
         /** JobSummaryOut */
         JobSummaryOut: {
             /** Profile Name */
@@ -3357,6 +3401,68 @@ export interface operations {
         };
     };
     retry_api_jobs__job_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_api_jobs__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_api_jobs__job_id__reopen_post: {
         parameters: {
             query?: never;
             header?: never;

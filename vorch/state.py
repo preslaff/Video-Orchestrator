@@ -47,7 +47,8 @@ class JobStatus(str, Enum):
     NEEDS_APPROVAL = "needs_approval"  # paused at a semi-auto human gate
     DONE = "done"
     FAILED = "failed"
-    CANCELLED = "cancelled"
+    STOPPED = "stopped"      # paused at a safe point; finished work kept, resumable with retry
+    CANCELLED = "cancelled"  # terminal: the user is done with this job, `retry` refuses it
 
 
 class SceneStatus(str, Enum):

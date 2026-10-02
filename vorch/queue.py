@@ -12,6 +12,7 @@ GPU-free and framework-free: this is plain asyncio. The web layer is server.py.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import logging
 import threading
@@ -32,6 +33,12 @@ from .state import Decision, Job, JobStatus, SceneStatus, Store
 from .submission import resolve_submission
 
 log = logging.getLogger("vorch.queue")
+
+# How long a cancel waits for an in-flight worker to leave before recording itself anyway. The
+# worker owns the job's saves, so cancelling underneath it would simply be overwritten; but a
+# wedged ComfyUI call is exactly why cancel exists, so the wait cannot be unbounded.
+_CANCEL_WAIT_TICK = 0.25
+_CANCEL_WAIT_TICKS = 40          # 10 s
 
 
 class Broker:
@@ -199,7 +206,7 @@ class JobManager:
 
         The worker thread checks the signal between persisted units of work and in
         the ComfyUI poll loop, where it also withdraws the prompt from ComfyUI. The job
-        ends CANCELLED ("stopped") and can be edited and resumed with ``retry``.
+        ends STOPPED and can be edited and resumed with ``retry``.
         Raises RuntimeError when nothing stoppable is running (e.g. an assembly).
         """
         ev = self._stop.get(job_id)
@@ -212,6 +219,56 @@ class JobManager:
             ev.set()
             log.info("job %s: stop requested", job_id)
             self.broker.publish(job_id, {"job_id": job_id, "type": "stopping"})
+        return job
+
+    async def cancel(self, job_id: str) -> Job:
+        """Finish with a job for good: terminal, and ``retry`` refuses it afterwards.
+
+        Available in any state, which is the point — a job paused at a gate had no exit at all
+        before, so half-finished runs accumulated indefinitely. Nothing is deleted: the scenes,
+        clips and export folder stay, and the job can still be viewed, assembled and exported.
+
+        On a job whose segment is in flight this first asks it to stop and then waits for the
+        worker to actually leave, because that worker owns the job's saves — writing `cancelled`
+        underneath it would be overwritten the moment it persisted its own ending. If it will not
+        leave (a wedged ComfyUI call is the reason this exists), the cancel is still recorded, so
+        the job stops presenting itself as resumable even while the thread winds down.
+        """
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job.status is JobStatus.CANCELLED:
+            return job                                  # idempotent
+        if job_id in self._active:
+            with contextlib.suppress(RuntimeError):     # nothing stoppable: fall through
+                self.stop(job_id)
+            for _ in range(_CANCEL_WAIT_TICKS):
+                if job_id not in self._active:
+                    break
+                await asyncio.sleep(_CANCEL_WAIT_TICK)
+            else:
+                log.warning("job %s: still running after a stop; recording the cancel anyway", job_id)
+        job = self.store.load_job(job_id) or job        # the worker may have saved on its way out
+        job.status = JobStatus.CANCELLED
+        self.store.save_job(job)
+        self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="job", attempt=1,
+                                         action="cancelled", reason="cancelled by the user"))
+        log.info("job %s cancelled", job_id)
+        self.broker.publish(job_id, {"job_id": job_id, "type": "status", "status": job.status.value})
+        return job
+
+    def reopen(self, job_id: str) -> Job:
+        """Undo a cancel, so a mis-click costs nothing. The job becomes stopped, hence resumable."""
+        job = self.store.load_job(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        if job.status is not JobStatus.CANCELLED:
+            raise RuntimeError(f"job is {job.status.value}, not cancelled")
+        job.status = JobStatus.STOPPED
+        self.store.save_job(job)
+        self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="job", attempt=1,
+                                         action="reopened", reason="cancel undone"))
+        self.broker.publish(job_id, {"job_id": job_id, "type": "status", "status": job.status.value})
         return job
 
     def busy(self) -> bool:
@@ -263,7 +320,7 @@ class JobManager:
     async def retry(self, job_id: str) -> Job:
         """Resume a job from its persisted state; finished work is kept.
 
-        Accepts a **failed** job, a **stopped** one (CANCELLED), and an **orphaned**
+        Accepts a **failed** job, a **stopped** one, and an **orphaned**
         one — persisted as RUNNING but with no segment in this process, which is what a
         server restart mid-run leaves behind. There is deliberately no startup sweep
         that marks such jobs stopped: ``vorch run``/``vorch approve`` drive jobs
@@ -276,8 +333,10 @@ class JobManager:
         if job_id in self._active:
             log.info("job %s already running; ignoring duplicate retry", job_id)
             return job
-        reasons = {JobStatus.FAILED: "resumed after failure", JobStatus.CANCELLED: "resumed after stop",
+        reasons = {JobStatus.FAILED: "resumed after failure", JobStatus.STOPPED: "resumed after stop",
                    JobStatus.RUNNING: "resumed an orphaned run (no worker in this server)"}
+        if job.status is JobStatus.CANCELLED:
+            raise RuntimeError("job is cancelled; reopen it first if you want to carry on")
         if job.status not in reasons:
             raise RuntimeError(f"job is {job.status.value}; only failed, stopped or orphaned jobs resume")
         self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="job", attempt=1,
@@ -648,7 +707,7 @@ class JobManager:
                 if ev.is_set():
                     # Stopped while waiting for the GPU: nothing ran, put the job back as it
                     # was (a new job has no earlier state, so it becomes stopped).
-                    job.status = (JobStatus.CANCELLED if prev in (JobStatus.PENDING, JobStatus.RUNNING)
+                    job.status = (JobStatus.STOPPED if prev in (JobStatus.PENDING, JobStatus.RUNNING)
                                   else prev)
                     self.store.save_job(job)
                     self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="job", attempt=1,
@@ -664,7 +723,7 @@ class JobManager:
                     await self._maybe_export(loop, job)
             except cancel.JobStopped:
                 log.info("job %s stopped", job.id)
-                job.status = JobStatus.CANCELLED
+                job.status = JobStatus.STOPPED
                 self.store.save_job(job)
                 self.store.log_decision(Decision(job_id=job.id, scene_index=None, phase="job", attempt=1,
                                                  action="stopped", reason="stopped by the user"))

@@ -61,7 +61,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
       <ProgressPanel job={j} events={live.events} connected={live.connected} />
 
       {/* keyed on status only: remounting on every update would discard drafts and scroll */}
-      {(j.status === 'needs_approval' || j.status === 'done' || j.status === 'failed' || j.status === 'cancelled' || orphaned) && j.scenes.length > 0 && (
+      {(j.status === 'needs_approval' || j.status === 'done' || j.status === 'failed' || j.status === 'stopped' || j.status === 'cancelled' || orphaned) && j.scenes.length > 0 && (
         <GatePanel key={`${j.id}-${j.status}`} job={j} decisions={decisions.data} onStarted={live.reconnect} assets={project.data?.assets} />
       )}
 

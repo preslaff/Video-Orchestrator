@@ -244,7 +244,7 @@ export function GatePanel({ job, decisions = [], onStarted, assets = [] }: { job
     ? estimateClip({ width: clip[0], height: clip[1], length: video_.length, workflow: video_.workflow })
     : null
   const orphaned = job.status === 'running' && !job.active
-  const editable = job.status === 'needs_approval' || job.status === 'done' || job.status === 'failed' || job.status === 'cancelled' || orphaned
+  const editable = job.status === 'needs_approval' || job.status === 'done' || job.status === 'failed' || job.status === 'stopped' || job.status === 'cancelled' || orphaned
   if (!editable) return null
   const video = job.kind === 'video'
   const busy = update.isPending || approve.isPending || regen.isPending || upload.isPending || removeVersion.isPending || saveAsset.isPending

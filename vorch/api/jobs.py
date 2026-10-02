@@ -515,6 +515,43 @@ async def retry(
     return job_to_public(job, store, manager)
 
 
+@router.post("/{job_id}/cancel", response_model=JobPublic)
+async def cancel(
+    job_id: str,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Finish with a job for good: terminal, and it will not resume afterwards.
+
+    Works in any state, mid-run included — a running segment is asked to stop first. Nothing is
+    deleted: the keyframes, clips and export folder stay, and the job can still be viewed and
+    assembled. Undo with ``reopen``.
+    """
+    _load(store, job_id)
+    try:
+        job = await manager.cancel(job_id)
+    except KeyError:
+        raise ApiError(404, "not_found", "no such job")
+    return job_to_public(job, store, manager)
+
+
+@router.post("/{job_id}/reopen", response_model=JobPublic)
+async def reopen(
+    job_id: str,
+    manager: JobManager = Depends(get_manager),
+    store: Store = Depends(get_store),
+) -> JobPublic:
+    """Undo a cancel: the job becomes stopped, so it can be resumed again."""
+    _load(store, job_id)
+    try:
+        job = manager.reopen(job_id)
+    except KeyError:
+        raise ApiError(404, "not_found", "no such job")
+    except RuntimeError as e:
+        raise ApiError(409, "conflict", str(e))
+    return job_to_public(job, store, manager)
+
+
 @router.post("/{job_id}/approve/{gate}", response_model=JobPublic)
 async def approve(
     job_id: str,

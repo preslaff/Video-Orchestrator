@@ -11,7 +11,7 @@ import { useProjects } from '@/hooks/useSetup'
 import { useGlobalEvents } from '@/hooks/useGlobalEvents'
 import { Button, Card, Empty, ErrorBox, JobIdChip, StatusBadge, fmtTime } from '@/components/ui'
 
-const STATUSES: JobStatus[] = ['pending', 'running', 'needs_approval', 'done', 'failed', 'cancelled']
+const STATUSES: JobStatus[] = ['pending', 'running', 'needs_approval', 'done', 'failed', 'stopped', 'cancelled']
 const PAGE = 25
 
 const UNASSIGNED = '__unassigned'

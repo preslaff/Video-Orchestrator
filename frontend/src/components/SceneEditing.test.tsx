@@ -48,7 +48,7 @@ describe('editing scenes at any stage', () => {
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
   it('is available on a stopped job and on an orphaned one, not on a live run', () => {
-    const { unmount } = render(<QueryClientProvider client={new QueryClient()}><GatePanel job={job({ status: 'cancelled' })} assets={assets} /></QueryClientProvider>)
+    const { unmount } = render(<QueryClientProvider client={new QueryClient()}><GatePanel job={job({ status: 'stopped' })} assets={assets} /></QueryClientProvider>)
     expect(screen.getByText('Save changes')).toBeInTheDocument()
     unmount()
     const live = render(<QueryClientProvider client={new QueryClient()}><GatePanel job={job({ status: 'running', active: true })} assets={assets} /></QueryClientProvider>)

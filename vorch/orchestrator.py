@@ -760,7 +760,8 @@ class Orchestrator:
         resumed run continues mid-scene."""
         ref_cache: dict = {}  # reference path -> staged name (upload once per run)
         n = self.variants_per_scene
-        self._event(job, "phase", phase="keyframes", total=len(job.scenes), variants=n)
+        todo = sum(1 for s in job.scenes if self._scene_needs_keyframes(s, n))
+        self._event(job, "phase", phase="keyframes", total=todo or len(job.scenes), variants=n)
         for scene in job.scenes:
             if not self._scene_needs_keyframes(scene, n):
                 continue  # resume: already done
@@ -1107,7 +1108,11 @@ class Orchestrator:
         the projection of the active one, so re-animating keeps every earlier take.
         """
         face_cache: dict = {}  # (backend, face path) -> staged name; faces differ per scene
-        self._event(job, "phase", phase="videos", total=len(job.scenes),
+        # Count what is actually left to render, not every scene. Reporting the lot made a
+        # resumed job look as though it had started over: re-rendering one scene of forty-six
+        # announced itself as a forty-six scene phase, while the loop below skipped the rest.
+        todo = sum(1 for s in job.scenes if not s.video_path)
+        self._event(job, "phase", phase="videos", total=todo or len(job.scenes),
                     length=self.params.length, fps=self.params.fps)
         for scene in job.scenes:
             if scene.video_path:

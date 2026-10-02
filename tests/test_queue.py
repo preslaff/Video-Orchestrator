@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+from vorch import queue as queue_mod
 from vorch.queue import Broker, JobManager
 from vorch.state import JobStatus, Store, new_job
 
@@ -526,7 +527,7 @@ def _stoppable():
     StoppableOrch.started, StoppableOrch.proceed = threading.Event(), threading.Event()
 
 
-def test_stop_ends_the_segment_cancelled_and_blocks_edits_until_the_worker_returns(make_store):
+def test_stop_ends_the_segment_stopped_and_blocks_edits_until_the_worker_returns(make_store):
     _stoppable()
 
     async def go():
@@ -549,11 +550,11 @@ def test_stop_ends_the_segment_cancelled_and_blocks_edits_until_the_worker_retur
 
     store, mgr, job, events = asyncio.run(go())
     saved = store.load_job(job.id)
-    assert saved.status is JobStatus.CANCELLED
+    assert saved.status is JobStatus.STOPPED
     assert not mgr.is_active(job.id) and not mgr.is_stopping(job.id)
     types = [e["type"] for e in events]
     assert types.count("stopping") == 1 and types[-1] == "end"
-    assert any(e["type"] == "status" and e.get("status") == "cancelled" for e in events)
+    assert any(e["type"] == "status" and e.get("status") == "stopped" for e in events)
     assert [d.action for d in store.decisions(job.id)] == ["stopped"]
     store.close()
 
@@ -598,7 +599,7 @@ def test_stop_refuses_when_nothing_stoppable_runs(make_store):
     store.close()
 
 
-@pytest.mark.parametrize("status", [JobStatus.CANCELLED, JobStatus.RUNNING, JobStatus.FAILED])
+@pytest.mark.parametrize("status", [JobStatus.STOPPED, JobStatus.RUNNING, JobStatus.FAILED])
 def test_retry_resumes_stopped_orphaned_and_failed_jobs(make_store, status):
     async def go():
         store = make_store()
@@ -714,3 +715,153 @@ def test_speak_does_not_block_the_event_loop(make_store, monkeypatch):
 
     asyncio.run(go())
     assert ticks > 5, f"the loop only ticked {ticks} times; the blocking call was not offloaded"
+
+
+# --- cancel: terminal, unlike stop ------------------------------------------------
+
+def test_cancel_is_terminal_and_retry_refuses_it(make_store):
+    """`stopped` is a pause and resumes; `cancelled` means the user is done with the job.
+
+    These were one status called "cancelled" that behaved like a pause, which is why a job one
+    had finished with was indistinguishable from one merely interrupted.
+    """
+    async def go():
+        store = make_store()
+        job = new_job(idea="x")
+        job.status = JobStatus.NEEDS_APPROVAL
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: StoppableOrch(s, j), auto_export=False)
+
+        cancelled = await mgr.cancel(job.id)
+        assert cancelled.status is JobStatus.CANCELLED
+        assert store.load_job(job.id).status is JobStatus.CANCELLED
+
+        with pytest.raises(RuntimeError, match="reopen it first"):
+            await mgr.retry(job.id)
+
+        assert (await mgr.cancel(job.id)).status is JobStatus.CANCELLED   # idempotent
+
+        # reopen makes it a pause again, so a mis-click costs nothing
+        assert mgr.reopen(job.id).status is JobStatus.STOPPED
+        with pytest.raises(RuntimeError, match="not cancelled"):
+            mgr.reopen(job.id)
+        return store, job
+
+    store, job = asyncio.run(go())
+    assert [d.action for d in store.decisions(job.id)] == ["cancelled", "reopened"]
+    store.close()
+
+
+def test_cancel_works_from_a_gate_which_had_no_exit_before(make_store):
+    """A job paused at a gate could not be stopped at all — `stop` needs a live segment — so
+    half-finished runs accumulated with no way to close them."""
+    async def go():
+        store = make_store()
+        job = new_job(idea="x")
+        job.status = JobStatus.NEEDS_APPROVAL
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: StoppableOrch(s, j), auto_export=False)
+        with pytest.raises(RuntimeError):      # nothing running: stop cannot help
+            mgr.stop(job.id)
+        return (await mgr.cancel(job.id)).status, store
+
+    status, store = asyncio.run(go())
+    assert status is JobStatus.CANCELLED
+    store.close()
+
+
+def test_cancelling_a_running_job_stops_it_first_and_wins(make_store):
+    """The worker owns the job's saves, so a cancel written underneath it would be overwritten
+    by the worker's own ending. It must stop the segment and wait for the thread to leave."""
+    _stoppable()
+
+    async def go():
+        store = make_store()
+        job = new_job(idea="x")
+        job.status = JobStatus.NEEDS_APPROVAL
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: StoppableOrch(s, j), auto_export=False)
+        await mgr.approve(job.id, "storyboard")
+        await asyncio.get_running_loop().run_in_executor(None, StoppableOrch.started.wait, 2)
+        assert mgr.is_active(job.id)
+
+        # let the worker notice the stop while the cancel is waiting for it
+        async def release():
+            await asyncio.sleep(0.1)
+            StoppableOrch.proceed.set()
+        asyncio.get_running_loop().create_task(release())
+
+        job = await mgr.cancel(job.id)
+        return job, mgr, store
+
+    job, mgr, store = asyncio.run(go())
+    assert job.status is JobStatus.CANCELLED
+    assert store.load_job(job.id).status is JobStatus.CANCELLED, "the worker's save must not win"
+    assert not mgr.is_active(job.id)
+    actions = [d.action for d in store.decisions(job.id)]
+    assert "stopped" in actions and actions[-1] == "cancelled"
+    store.close()
+
+
+def test_cancel_records_itself_even_if_the_worker_will_not_leave(make_store, monkeypatch):
+    """A wedged ComfyUI call is the reason cancel exists, so the wait cannot be unbounded: the
+    job must stop presenting itself as resumable even while the thread winds down."""
+    _stoppable()
+    monkeypatch.setattr(queue_mod, "_CANCEL_WAIT_TICKS", 2)
+    monkeypatch.setattr(queue_mod, "_CANCEL_WAIT_TICK", 0.01)
+
+    async def go():
+        store = make_store()
+        job = new_job(idea="x")
+        job.status = JobStatus.NEEDS_APPROVAL
+        store.save_job(job)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: StoppableOrch(s, j), auto_export=False)
+        await mgr.approve(job.id, "storyboard")
+        await asyncio.get_running_loop().run_in_executor(None, StoppableOrch.started.wait, 2)
+        job = await mgr.cancel(job.id)            # the worker never proceeds
+        assert mgr.is_active(job.id), "the thread is still there, as expected"
+        StoppableOrch.proceed.set()               # let it finish so the test does not leak
+        await asyncio.sleep(0.2)
+        return job, store
+
+    job, store = asyncio.run(go())
+    assert job.status is JobStatus.CANCELLED
+    store.close()
+
+
+def test_a_resumed_phase_counts_only_what_is_left(make_store, monkeypatch):
+    """Reporting every scene made a resumed job look as though it had started over: one scene
+    of forty-six to re-render announced itself as a forty-six scene phase. It was the reason a
+    resume was mistaken for a full regeneration."""
+    from vorch import pipeline, profiles
+    from vorch.orchestrator import Orchestrator
+    from vorch.state import Scene, SceneStatus
+
+    store = make_store()
+    try:
+        events: list[dict] = []
+        prof = profiles.apply_overrides(profiles.default_profile(), {"face_swap": {"enabled": False}})
+        o = Orchestrator(store, profile=prof)
+        o.emit = events.append
+        job = o.create_job("idea")
+        job.scenes = [Scene(index=i, keyframe_path=f"/kf{i}.png") for i in range(5)]
+        for sc in job.scenes[:4]:                     # four already rendered
+            sc.video_path, sc.raw_video_path = f"/clip{sc.index}.mp4", f"/raw{sc.index}.mp4"
+            sc.status = SceneStatus.COMPLETE
+        store.save_job(job)
+
+        # stop at the first real render: the phase event has already been emitted by then
+        class _Stop(RuntimeError):
+            pass
+
+        def boom(*a, **k):
+            raise _Stop
+
+        monkeypatch.setattr(pipeline, "animate_frame", boom)
+        with pytest.raises(_Stop):
+            o._phase_videos(job)
+
+        phase = [e for e in events if e.get("type") == "phase" and e.get("phase") == "videos"][-1]
+        assert phase["total"] == 1, f"only scene 4 is left to render, got {phase['total']}"
+    finally:
+        store.close()

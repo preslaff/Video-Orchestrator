@@ -1203,6 +1203,92 @@
         }
       }
     },
+    "/api/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Cancel",
+        "description": "Finish with a job for good: terminal, and it will not resume afterwards.\n\nWorks in any state, mid-run included — a running segment is asked to stop first. Nothing is\ndeleted: the keyframes, clips and export folder stay, and the job can still be viewed and\nassembled. Undo with ``reopen``.",
+        "operationId": "cancel_api_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/reopen": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Reopen",
+        "description": "Undo a cancel: the job becomes stopped, so it can be resumed again.",
+        "operationId": "reopen_api_jobs__job_id__reopen_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/approve/{gate}": {
       "post": {
         "tags": [
@@ -4327,6 +4413,7 @@
           "needs_approval",
           "done",
           "failed",
+          "stopped",
           "cancelled"
         ],
         "title": "JobStatus"

@@ -59,7 +59,7 @@ describe('ProgressPanel', () => {
     expect(screen.getByText('stopping…')).toBeInTheDocument()
     expect(screen.getByText(/Stopping — finishing the current step/)).toBeInTheDocument()
     unmount()
-    const stopped = render(<ProgressPanel job={base({ status: 'cancelled', active: false })} events={[]} connected={false} />)
+    const stopped = render(<ProgressPanel job={base({ status: 'stopped', active: false })} events={[]} connected={false} />)
     expect(screen.getByText('stopped')).toBeInTheDocument()
     expect(screen.getByText(/Edit any scene below, then Resume/)).toBeInTheDocument()
     stopped.unmount()
