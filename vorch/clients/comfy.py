@@ -37,6 +37,7 @@ _clock = time.monotonic
 
 _RETRY_STATUS = frozenset({502, 503, 504})
 _LOCAL_POLL_RETRY = 30.0  # seconds a local /history hiccup is tolerated before failing
+_POLL_HEARTBEAT = 60.0    # how often a wait says it is still waiting
 
 # ComfyUI's built-in API nodes (OpenAIDalle3, Flux2ImageNode, …) do not talk to the provider
 # directly: they proxy through api.comfy.org and authenticate with a ComfyUI-org credential,
@@ -231,12 +232,18 @@ def run(
 
     poll_retry = b.cold_start_grace if b.remote else _LOCAL_POLL_RETRY
     deadline = _clock() + timeout
+    said = _clock()
     while True:
         remaining = deadline - _clock()
         if remaining <= 0:
             break
         try:
-            resp = _request(b, "GET", f"/history/{prompt_id}", retry_for=min(poll_retry, remaining))
+            # Cap the socket timeout by what is left of the budget as well. Without this a
+            # single stuck request can outlive the whole deadline — the loop only checks the
+            # clock between calls, so it never gets the chance to give up.
+            resp = _request(b, "GET", f"/history/{prompt_id}",
+                            timeout=max(1.0, min(b.request_timeout, remaining)),
+                            retry_for=min(poll_retry, remaining))
         except cancel.JobStopped:  # stopped while riding out a network hiccup
             _stop_prompt(b, prompt_id)
             raise
@@ -249,12 +256,20 @@ def run(
             if problems:
                 raise ComfyError(f"{b.name}: workflow {prompt_id} failed: " + "; ".join(problems))
             return _extract_outputs(entry)
+        # A long render is silent by nature, and silence is indistinguishable from a hang: a Wan
+        # prompt once sat wedged for thirteen hours with nothing in the log between submitting it
+        # and the user noticing the fans. Say so periodically, with how much budget is left.
+        if _clock() - said >= _POLL_HEARTBEAT:
+            said = _clock()
+            log.info("comfy %s: still waiting on %s (%.0fs elapsed, %.0fs of %ss left)",
+                     b.name, prompt_id, timeout - remaining, max(deadline - _clock(), 0), timeout)
         # Checked only after a response showing the prompt unfinished, so a result
         # that already arrived is never thrown away.
         if cancel.requested():
             _stop_prompt(b, prompt_id)
             cancel.check()
         _sleep(min(b.poll_interval, max(deadline - _clock(), 0)))
+    log.warning("comfy %s: %s did not finish within %ss; interrupting", b.name, prompt_id, timeout)
     interrupt(b, prompt_id)
     raise ComfyError(f"{b.name}: workflow {prompt_id} did not finish within {timeout}s (interrupted)")
 

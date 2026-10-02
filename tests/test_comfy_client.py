@@ -4,6 +4,7 @@ scripted fake session and a fake clock (no network, no sleeping)."""
 
 from __future__ import annotations
 
+import logging
 import requests
 import pytest
 
@@ -361,3 +362,83 @@ def test_interrupt_and_free_still_send_while_stopped(session, clock):
 
     _stopped_after(run)  # neither raises JobStopped
     assert session.paths() == ["POST /interrupt", "POST /free"]
+
+
+def test_a_single_stuck_request_cannot_outlive_the_deadline(monkeypatch):
+    """The loop only checks the clock between calls, so the socket timeout must be capped by
+    what is left of the budget — otherwise one wedged request sits there past the deadline.
+
+    This is the shape of a real incident: a Wan prompt wedged with ComfyUI still answering
+    other connections, and vorch waited thirteen hours on a 2387 s budget.
+    """
+    seen: list[float] = []
+
+    class _R:
+        status_code, text = 200, "{}"
+
+        def json(self):
+            return {}
+
+    def fake_request(b, method, path, **kw):
+        if path == "/prompt":
+            return _R_prompt()
+        seen.append(kw["timeout"])
+        return _R()
+
+    class _R_prompt:
+        status_code, text = 200, ""
+
+        def json(self):
+            return {"prompt_id": "p"}
+
+    now = [0.0]
+    monkeypatch.setattr(comfy, "_clock", lambda: now[0])
+    monkeypatch.setattr(comfy, "_sleep", lambda s: now.__setitem__(0, now[0] + max(s, 0.5)))
+    monkeypatch.setattr(comfy, "_request", fake_request)
+    monkeypatch.setattr(comfy, "interrupt", lambda *a, **k: None)
+
+    with pytest.raises(comfy.ComfyError, match="did not finish within 5s"):
+        comfy.run({"1": {}}, timeout=5)
+
+    assert seen, "no /history call was made"
+    # the backend's own request_timeout is 30 s; none of these may exceed the budget
+    assert max(seen) <= 5.0, seen
+    assert seen[-1] <= 1.5, f"the last call should be clamped to what was left: {seen}"
+
+
+def test_a_long_wait_says_it_is_still_waiting(monkeypatch, caplog):
+    """Thirteen hours of silence was itself the defect: a hang looked exactly like a slow render."""
+    class _R:
+        status_code, text = 200, "{}"
+
+        def json(self):
+            return {"prompt_id": "p"} if False else {}
+
+    posted = {"n": 0}
+
+    def fake_request(b, method, path, **kw):
+        if path == "/prompt":
+            posted["n"] += 1
+
+            class _P:
+                status_code, text = 200, ""
+
+                def json(self):
+                    return {"prompt_id": "p"}
+            return _P()
+        return _R()
+
+    now = [0.0]
+    monkeypatch.setattr(comfy, "_clock", lambda: now[0])
+    monkeypatch.setattr(comfy, "_sleep", lambda s: now.__setitem__(0, now[0] + max(s, 10.0)))
+    monkeypatch.setattr(comfy, "_request", fake_request)
+    monkeypatch.setattr(comfy, "interrupt", lambda *a, **k: None)
+
+    with caplog.at_level(logging.INFO, logger="vorch.comfy"):
+        with pytest.raises(comfy.ComfyError):
+            comfy.run({"1": {}}, timeout=300)
+
+    beats = [r for r in caplog.records if "still waiting" in r.getMessage()]
+    assert beats, "a long wait logged nothing"
+    assert "of 300s left" in beats[0].getMessage()
+    assert any("did not finish within 300s" in r.getMessage() for r in caplog.records)
