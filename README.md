@@ -684,9 +684,15 @@ strategy, decisions), [`DESIGN.md`](DESIGN.md) (architecture, stack, build order
 [`docs/workflows.md`](docs/workflows.md) (registering workflows),
 [`docs/modal-backend.md`](docs/modal-backend.md) (optional Modal cloud backend),
 [`docs/sequential-continuity-plan.md`](docs/sequential-continuity-plan.md),
+[`docs/blender-integration.md`](docs/blender-integration.md) (Blender as the 3D stage: research, nothing decided),
 [`SKILL.md`](SKILL.md) + `skills/` (operational how-tos), [`CLAUDE.md`](CLAUDE.md) (working
 rules for coding sessions).
 
 ## License
 
-Not yet specified.
+MIT — see [`LICENSE`](LICENSE). Copyright (c) 2026 Preslav Penev.
+
+The license covers vorch itself: the Python core, the UI and the workflow sidecars. It says
+nothing about the models and servers vorch drives — llama.cpp, Gemma, ComfyUI, FLUX.2 Klein,
+Wan 2.2, ReActor and OmniVoice-BG each carry their own terms, and the model weights in
+particular are **not** MIT. Check them before shipping anything you generate commercially.

@@ -2,6 +2,7 @@
 name = "vorch"
 version = "0.1.0"
 description = "Local, self-contained AI video-production orchestrator (Gemma 4 + ComfyUI)"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 # Core: HTTP client, structured-output validation, YAML scene specs, PostgreSQL state.
 dependencies = [
