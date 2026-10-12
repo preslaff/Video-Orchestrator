@@ -1,9 +1,19 @@
 # Blender as the 3D stage (research, v0)
 
-> Status: researched 2026-10-05, **nothing implemented and nothing decided**. Written from Georgi's
-> Local Video Studio package (`PRESLAV_LOCAL_VIDEO_STUDIO_2026-10-05`, 05.10.2026), from two
-> external sources, and from measurements taken on this machine the same day. The recommendation
-> here is a proposal for Georgi to accept or reject, not a plan of record.
+> Status: researched 2026-10-05; **the five open questions were answered 2026-10-06** and the
+> direction below is now decided, though **nothing is implemented yet**. Written from Georgi's Local
+> Video Studio package (`PRESLAV_LOCAL_VIDEO_STUDIO_2026-10-05`), from two external sources, and from
+> measurements taken on this machine.
+>
+> **Decided 2026-10-06:** Blender is invoked rather than resident (C and D rejected) · the `.blend`
+> files live locally beside vorch · **OpenPose control is kept** — no depth, no Wan 2.2 VACE · **S2V is
+> kept** — Wan-Animate-2 motion transfer is parked · photogrammetry (§9) is parked. Consequence: the
+> S2V set was installed locally and hash-verified on 2026-10-06 (§10).
+>
+> **Decided 2026-10-12:** the Blender side is **its own app in its own repository**, handing vorch a
+> **shot package** on disk — media plus a `manifest.json` sidecar. vorch never runs Blender, which
+> drops `vorch/blender.py` before it was written and makes the GPL/MIT boundary structural (§10,
+> decision 6).
 
 ## Context
 
@@ -121,13 +131,22 @@ FLUX, scripted). **Nothing in this document rests on it.** If it matters, paste 
 | **C. Blender resident as a service** (the `blender-mcp` shape, port 9876) | vorch talks to a live Blender over a socket | symmetry with ComfyUI/Gemma; Georgi already has it running | holds GPU and a process; `bpy` is not reentrant; precisely the class of service `docs/services.md` says vorch will never manage | **no** |
 | **D. `bpy` as a library inside `.venv`** | `pip install bpy` in the API process | simplest code | pins Python to 3.13, ~1 GB wheel, and one segfault in `bpy` takes FastAPI down with it | **no** |
 
-**Proposal: A as the spine, B as the interface, never C, never D.**
+**Decided 2026-10-06: never C, never D.** **Superseded in part on 2026-10-12** (§10, decision 6): the
+Blender side becomes its own application in its own repository, and vorch **never runs Blender at
+all** — it reads a shot package off disk. So option A survives as "Blender produces assets", but its
+subprocess wrapper does not: there is no Blender path in vorch's config and no `vorch/blender.py`.
+Option B (an add-on that POSTs to the API) is moot for the same reason — a folder is the handoff.
 
-A and B are not rivals — they are the two directions of one contract. A is how vorch asks for a
-shot; B is how Georgi offers one. The shared vocabulary already exists and is `ShotCard`
-(`parity-contract/schemas/shot-card.schema.json`): `camera_movement`, `camera_speed`, `framing`,
-`angle`, `lens_fov`, `start_end`, `duration_fps`, `identity_refs`, `resource_refs`. That is very
-nearly a description of a Blender camera, which is not a coincidence and is the place to join.
+What the table above still settles is C and D. A resident Blender holds a process and the card for no
+benefit, and `bpy` inside the venv would put a non-reentrant library in the API process **and** pull a
+GPL dependency into an MIT codebase. Two repositories make that boundary structural rather than a
+convention someone has to remember.
+
+The shared vocabulary is `ShotCard` (`parity-contract/schemas/shot-card.schema.json`):
+`camera_movement`, `camera_speed`, `framing`, `angle`, `lens_fov`, `start_end`, `duration_fps`,
+`identity_refs`, `resource_refs`. That is very nearly a description of a Blender camera, which is not a
+coincidence — it is what the shot package's manifest should align its field names to, so the two
+contracts do not drift.
 
 ## 4. What Blender should supply, ranked by measured payoff
 
@@ -181,7 +200,7 @@ Collection "vorch_subjects"
 Custom properties are set in Blender's Object Properties panel with no scripting, so Georgi tags what
 matters and `previz.py` only walks the collection. He decides; vorch measures.
 
-### ② A driving video for motion transfer — the door that is already designed
+### ② A driving video for motion transfer — **parked 2026-10-06** (S2V kept instead)
 
 `docs/motion-transfer-plan.md` (planned 2026-09-05, **not started**) specifies `Scene.driving_video`:
 a project asset of `kind: video` supplies movement to Wan-Animate-2 while identity comes from the
@@ -192,14 +211,27 @@ fought each other in SHOT_02, because Animate-2 takes motion from a video and id
 by design, rather than asking one S2V pass for both. The plan was written for phone-shot reference
 footage; Blender is the same input, directed. Note Animate-2 is deployed on Modal, i.e. paid.
 
-### ③ Depth previz instead of OpenPose — the one experiment worth running now
+### ③ OpenPose kept — and the retargeting problem dissolves
 
-It is the only hypothesis that explains 0.350 without condemning the method, and depth carries no
-retargeting error: no hand-placed keypoints, no `MANUAL_ESTIMATE`.
+**Decided 2026-10-06: keep OpenPose, drop depth and Wan 2.2 VACE.** No 15 GB download.
 
-The registry already expresses a second image input with no Python at all — `identity_edit.yaml`
-declares `inputs: {reference: image, reference_2: image}`, and a control input is the same shape.
-The blocker is the model, not vorch: **Wan 2.2 VACE is not in Georgi's ComfyUI catalogue** (§2).
+That looked like it needed a pose detector to replace the hand-placed anchors — and it does not, if
+**the keyframe is generated from the previz.** Render the Blender blocking, make the Klein keyframe
+from that frame in edit mode, and the reference image's pose *is* the rig's pose. The 2D control
+keypoints then come from projecting the same armature — the identical four API calls as ①.
+
+```
+Blender blocking ─┬─► previz frame ─► Klein edit-mode keyframe   (composition locked to the rig)
+                 └─► projected 2D keypoints ─► OpenPose control
+                                              └─► S2V   ← every correspondence exact by construction
+```
+
+No detector, no `MANUAL_ESTIMATE`, no retargeting step at all. Note this is the one place where
+`identity_edit` **locking composition — normally the reason invariant 6 warns against it — is exactly
+what is wanted**, because the composition should be pinned to the blocking.
+
+The registry already expresses the second image input with no Python: `identity_edit.yaml` declares
+`inputs: {reference: image, reference_2: image}`, and a control input is the same shape.
 
 ### ④ Consistency — the actual answer to the original question
 
@@ -303,28 +335,43 @@ the process is up (§8). Therefore:
   keyframe phase.** Blender exits, then ComfyUI loads. Same shape as "all keyframes, then all
   clips" (`NOTES.md` §5).
 
+**Decision 6 moves who enforces that.** Since vorch no longer invokes Blender, it cannot sequence it
+either — the phasing becomes the operator's discipline: export the package, close Blender, then
+submit. vorch's side of it is unchanged and already built: a step declares what it needs, VRAM is
+arbitrated, `/setup/services` attributes the card per process including processes vorch cannot name,
+and a render that will not fit is refused by name. So a Blender left open does not corrupt anything —
+it shows up as foreign VRAM and can cost you a refused render. That is the arbitration working, with
+a cause that lives in another window.
+
 ## 7. Smallest first step
 
-Not an add-on. Not a new registry kind. One script and one gate:
+> Revised 2026-10-12 for decision 6. The work now splits across two repositories; the first step on
+> each is small and they can proceed independently.
+
+**In the Blender app** (its own repo): the exporter, shipping the manifest before the media.
 
 ```
-vorch/blender.py    — subprocess wrapper: blender -b <.blend> -P previz.py -- <args>
-scripts/previz.py   — inside Blender, per camera/marker range:
-                      (a) metadata.json — lens, resolution, frame range, and per tagged
-                                          subject: kind, projected px, frame rect
-                      (b) previz.mp4    — EEVEE at the profile's resolution and fps
-                      (c) depth.mp4     — normalised Z pass
+previz.py / the add-on — per camera or marker range, emit a shot package:
+   manifest.json          lens, sensor, resolution, fps, frame range, and per tagged
+                          subject: kind, projected px, frame rect   ← ship this first
+   s00_first_frame.png    the composition reference
+   s00_previz.mp4         EEVEE at the profile's resolution and fps
+   s00_control_*.mp4      OpenPose keypoints projected from the same armature
+   s00_regions.ndjson     one rect per frame, for locked_regions
 ```
 
-Ship **(a)** first: the subject pixel budget. One projection answers both of the project's known
-generation failures — a face too small to hold identity and type too small to survive a video VAE —
-and its rectangle is also the `locked_regions` path (§4 ⑤). Nothing else is touched.
+**In vorch**: a package importer plus the budget check. No Blender dependency of any kind.
+
+Ship the **manifest** first, on both sides. One projection answers both of the project's known
+generation failures — a face too small to hold identity, and type too small to survive a video VAE —
+and the same rectangle is the `locked_regions` path (§4 ⑤). It needs no renders, no GPU and no models,
+so it is testable on either side alone.
 
 Then the experiment, under Georgi's own rule — *едно променено нещо на пуск, същият seed и ref*:
-SHOT_02, seed 77, same reference, **depth instead of OpenPose**, which first requires downloading
-Wan 2.2 VACE. Falsifiable: if 0.350 was retargeting, depth should land at ≥ 0.486 with the gesture
-still obeyed. If it falls again, control genuinely costs identity and the answer is Animate-2, not
-control.
+SHOT_02, seed 77, same audio, **OpenPose control with the keyframe generated from the previz** so the
+pose correspondence is exact by construction (§4 ③). Falsifiable: if 0.350 was retargeting, this
+should land at ≥ 0.486 with the gesture still obeyed. If it falls again, control costs identity on
+this model and S2V should run uncontrolled while Blender supplies framing instead.
 
 ## 8. Timing plan for the experiment
 
@@ -345,21 +392,27 @@ one** — an S2V run is 100× its cost.
 
 ### Two tracks, different machines, genuinely parallel
 
-| | track A — the face-size gate | track B — the control experiment |
+| | track A — the subject budget | track B — the control experiment |
 |---|---|---|
-| machine | this one (vorch) | Georgi's (SHOT_02, S2V, the `.blend`) |
-| blocked on | nothing | a decision, then possibly a download |
+| repo | the Blender app + vorch's importer | vorch |
+| blocked on | nothing | the `.blend` arriving |
 | GPU needed | none | yes |
 | gives | a pre-generation refusal | whether control costs identity |
 
-They do not queue behind each other. Track A can start now; track B needs Georgi.
+They do not queue behind each other. Track A can start now; track B needs the `.blend`.
 
-### Track A — the gate (no GPU, no models, no Georgi)
+> **Revised 2026-10-06.** Both tracks run on this machine. Track B lost its depth/VACE branch
+> entirely, and its pose-detector dependency dissolved — see §4 ③. The S2V set is installed (§10).
+>
+> **Revised 2026-10-12** for decision 6: track A now spans two repositories, and A2 changed from a
+> subprocess wrapper to a package importer. Same effort, less coupling.
+
+### Track A — the subject budget (no GPU, no models, nothing from Georgi)
 
 | step | work | effort |
 |---|---|---|
-| A1 | `scripts/previz.py`: walk the `vorch_subjects` collection, emit `metadata.json` — lens, resolution, frame range, and per subject its `kind`, projected px and frame rect | 3 h |
-| A2 | `vorch/blender.py`: subprocess wrapper (`blender -b … -P … --`), Blender path from config, no `bpy` in the venv | 2 h |
+| A1 | **Blender app:** walk the `vorch_subjects` collection, emit `manifest.json` — lens, sensor, resolution, fps, frame range, and per subject its `kind`, projected px and frame rect | 3 h |
+| A2 | **vorch:** read a shot package — install the first frame as the scene's keyframe, the previz as `driving_video`, the rects as `locked_regions`. No Blender dependency | 3 h |
 | A3 | Wire the budget into submit as a refusal with a reason, following the `envcheck` pattern, + tests | 4 h |
 | A4 | Measure the per-frame previz rate on a real textured set | 30 min |
 | A5 | Emit the per-frame rect as `locked_regions` and compare against the tracker on the verified push-in clip (§4 ⑤) | 4 h |
@@ -377,32 +430,29 @@ Roughly **a day and a half**, and nothing in it can fail in a way that costs GPU
 
 Georgi's rule holds: *едно променено нещо на пуск, същият seed и ref.* So the runs are serial.
 
-**B1 first, because it is far cheaper than depth and tests the same hypothesis.** Hypothesis ③ (§1)
-says the 0.350 came from hand-placed keypoints, not from control as such. The cheapest way to
-discriminate that is to **keep OpenPose and fix the retargeting** — automated keypoint placement on
-`ref.png` instead of `MANUAL_ESTIMATE` — which changes exactly one variable and needs **no new
-diffusion model at all**.
+Hypothesis ③ (§1) says the 0.350 came from hand-placed keypoints, not from control as such. The
+retargeting is fixed **by construction** rather than by a detector: the keyframe is generated from the
+previz, so the reference pose is the rig's pose and the control keypoints are a projection of the same
+armature (§4 ③). One variable changes against `base_control`, and no new diffusion model is needed.
 
 | step | work | wall clock |
 |---|---|---|
-| B1a | A pose detector for `ref.png` (dwpose/openpose preprocessor). **Not confirmed in Georgi's node inventory** — check before planning on it | 1 h, or a custom-node install |
-| B1b | Replace the manual anchors in `20_s2v_inputs.py` with detected ones | 2 h |
-| B1c | **Run:** S2V, depth-free, OpenPose control, auto-retargeted, seed 77, 20/6 | **~21 min** |
-| B1d | Metrics: ArcFace + the null distribution already built in `23_face_metrics.py` | minutes |
+| B1 | Register an S2V workflow with a YAML sidecar (control video + audio + reference) | 2 h |
+| B2 | Previz frame → Klein edit-mode keyframe, so the reference pose is the rig's | 2 h |
+| B3 | Project the armature to 2D OpenPose keypoints → control video. Reuses ①'s projection | 2 h |
+| B4 | **Run:** S2V, OpenPose control, seed 77, 20/6, same audio | **~21 min** |
+| B5 | Metrics: ArcFace + the null distribution already built in `23_face_metrics.py` | minutes |
 
-Read-out, falsifiable: **≥ 0.486 with the gesture still obeyed** means retargeting was the problem
-and Blender control is sound. **Still ~0.35** means control genuinely costs identity, and the answer
-is Wan-Animate-2, not better control — which makes B2 unnecessary and saves the download.
+Read-out, falsifiable: **≥ 0.486 with the gesture still obeyed** means retargeting was the problem and
+Blender control is sound. **Still ~0.35** means control genuinely costs identity on this model, and the
+honest conclusion is that S2V should run without control while Blender supplies framing and
+composition instead — ①, ④ and ⑤ all stand regardless of how this lands.
 
-**B2 only if B1 is inconclusive** (the gesture degrades, or the number lands between):
+**No B2 branch.** Depth and Wan 2.2 VACE were dropped on 2026-10-06, so the plan's largest unknown —
+a download of unknown size — is gone.
 
-| step | work | wall clock |
-|---|---|---|
-| B2a | Download Wan 2.2 VACE — **absent from Georgi's catalogue**; comparable fp8 models there are ~15 GB, so size and time are unknown until the file is picked | unknown — the plan's largest unknown |
-| B2b | Register it with a YAML sidecar (a second image input is already expressible — `identity_edit.yaml` does it) | 1–2 h |
-| B2c | Blender Z-pass export over SHOT_02's existing blocking, normalised | 1 h |
-| B2d | **Run:** depth control, everything else identical | **~21 min** |
-| B2e | Metrics | minutes |
+**Prerequisites, both settled or in hand:** the S2V set is installed locally (§10), and the `.blend`
+with the bar and the rigged character has to arrive from Georgi's `D:` once.
 
 A faster variant exists if a run must be cheap: 4 steps / cfg 1 + LoRA was **150–711 s** rather than
 ~21 min, and scored *higher* on identity (0.508–0.545). It is a different sampler regime, so it
@@ -411,14 +461,14 @@ cannot be compared against the 20/6 baseline — use it to iterate, then confirm
 ### Critical path and total
 
 ```
-A1 → A2 → A3 ──────────────── gate shipped        ~1.5 days, this machine, no GPU
-B1a → B1b → B1c → B1d ─────── hypothesis answered ~3 h setup + 21 min GPU, Georgi's machine
+A1 → A2 → A3 ──────────────── gate shipped        ~1.5 days, no GPU
+B1 → B2 → B3 → B4 → B5 ────── hypothesis answered ~6 h setup + 21 min GPU, needs the .blend
                 └─ if inconclusive → B2a…B2e      + unknown download + ~2 h + 21 min GPU
 ```
 
-**Total GPU time for the whole experiment is under an hour.** Everything else is setup, and the
-single largest schedule risk is not compute but **B2a, a download of unknown size that B1 may make
-unnecessary.** Which is the argument for running B1 first.
+**Total GPU time for the whole experiment is under an hour.** Everything else is setup. The schedule's
+former largest risk — a VACE download of unknown size — was removed by the 2026-10-06 decisions; what
+remains is a one-off dependency on the `.blend` arriving.
 
 ### What not to schedule
 
@@ -427,10 +477,13 @@ unnecessary.** Which is the argument for running B1 first.
 - **A resident Blender.** §3 option C. No step here needs one.
 - **Previz as a phase to budget.** 0.127 s per frame. Render it, let Blender exit, move on.
 
-## 9. Asset preparation: a real place into Blender (COLMAP)
+## 9. Asset preparation: a real place into Blender (COLMAP) — **parked 2026-10-06**
 
-> Status: COLMAP is a **source checkout, not an installation** — `~/WORK/colmap`, `3.12.0-621-g5e548461`,
-> no binary under `build/`, no `pycolmap` in either Python. Licence is **new BSD**, so no friction with
+> Status: **parked by decision on 2026-10-06** — the set will be modelled rather than photographed.
+> Kept here because the reasoning does not expire and the permanent studio may want it later.
+>
+> COLMAP is a **source checkout, not an installation** — `~/WORK/colmap`, `3.12.0-621-g5e548461`, no
+> binary under `build/`, no `pycolmap` in either Python. Licence is **new BSD**, so no friction with
 > vorch being MIT.
 
 §4 ⑥ answers "keyframe → scene". COLMAP answers a different and better-founded question: **real place
@@ -533,17 +586,102 @@ per job. That placement matters because:
 Honest sequence: build it, shoot one test location **with a scale reference**, run sparse only, get it
 into Blender, and judge whether the proxy is good enough before investing in dense or in tooling.
 
-## 10. Open questions — for Georgi, not for the code
+## 10. Decisions
 
-1. **Who holds the `.blend` files?** vorch is here, the pilot is on `D:` there. Option A needs vorch
-   to read a `.blend`. A project asset, or a shared folder?
-2. **Is `blender-mcp` on :9876 already option C in practice?** If something is working there, this
-   recommendation conflicts with it and that should be known before defending it.
-3. **S2V or Animate-2?** Georgi measured S2V (holds identity 2× better than I2V). The motion-transfer
-   plan targets Animate-2, on Modal, i.e. paid. A Blender previz enters the two differently.
-4. **Is Wan 2.2 VACE worth downloading** for experiment ③, or is Animate-2 the better bet outright?
-5. **Is a real location available to photograph?** §9 is the best foundation for a permanent studio,
-   but it is a shoot, not a script — and it needs a scale reference in frame.
+The five open questions were answered on 2026-10-06; a sixth decision followed on 2026-10-12.
+
+| # | question | answer | consequence |
+|---|---|---|---|
+| 1 | Blender resident, or invoked? | **invoked, not resident** | C and D rejected (§3); refined by decision 6 |
+| 2 | OpenPose, or depth via VACE? | **keep OpenPose** | no 15 GB download; retargeting solved by construction (§4 ③) |
+| 3 | where do the `.blend` files live? | **locally, beside vorch** | no cross-machine transfer per job — but the bar/rig `.blend` must arrive from Georgi's `D:` once |
+| 4 | S2V or Wan-Animate-2? | **keep S2V** | §4 ② parked; no Modal cost; Blender supplies a *control* video, not a driving video |
+| 5 | photograph a real location? | **parked for now** | §9 parked; the set gets modelled |
+| 6 | where does the Blender tooling live? | **its own app, its own repository**, handing vorch a shot package on disk | vorch never runs Blender; `vorch/blender.py` is dropped before it was written |
+
+### Decision 6 — a separate app, and a shot package as the contract (2026-10-12)
+
+The Blender side becomes its own application in its own directory and repository. vorch does not
+invoke it, does not know its path, and has no Blender dependency: it reads a folder.
+
+**Why this is better than the subprocess wrapper it replaces.** The GPL/MIT boundary stops being a
+convention and becomes two repositories — the Blender app imports `bpy` and is therefore GPL, while
+vorch stays MIT and only reads files (§5). Each side is testable without the other. And vorch's
+surface shrinks rather than grows.
+
+**The interface is a package, not two files.** "First frame plus clip" was the starting proposal and
+it covers composition lock and motion reference, but it silently drops the two highest-value findings
+in this document, because both are *data* rather than pixels: the subject pixel budget (§4 ①) needs
+the lens, the resolution and the subject's projected size, and the analytic `locked_regions` (§4 ⑤)
+needs the rectangle's path per frame. Keeping OpenPose (decision 2) also requires a third media file.
+So:
+
+```
+shot-package/
+  manifest.json                 what the pixels cannot carry
+  s00_first_frame.png           composition reference / the installed keyframe
+  s00_previz.mp4                motion reference
+  s00_control_openpose.mp4      control for S2V, projected from the same armature
+  s00_regions.ndjson            one rect per frame → locked_regions
+```
+
+```json
+{ "format":   "vorch-shot-package/1",
+  "scene_id": "S00",
+  "camera":   { "lens_mm": 85, "sensor_mm": 36, "resolution": [832, 480], "fps": 16, "frames": 77 },
+  "subjects": [ { "name": "face_georgi",  "kind": "face", "px_h": 239.1, "rect": [0.40, 0.25, 0.20, 0.50] },
+                { "name": "label_flower", "kind": "text", "px_h": 24.5,  "rect": [0.44, 0.49, 0.12, 0.03] } ],
+  "source":   { "blend": "bar_v07.blend", "sha256": "…", "exporter": "0.1.0" } }
+```
+
+This mirrors two patterns the codebase already uses: the workflow registry is a template plus a YAML
+sidecar that is the executable source of truth (`docs/workflows.md`), and `vorch/export.py` hands off
+a folder of numbered media plus `manifest.json` and `provenance/`. An **import** package shaped like
+the export package is idiomatic here rather than novel.
+
+Three things the sidecar buys beyond the media: the budget gate works without vorch ever opening
+Blender; the locked regions stay analytic instead of tracked; and a clip is traceable to the `.blend`
+that produced it, which is the provenance discipline vorch already keeps for seeds and prompts.
+
+Field names should align with `ShotCard` (`parity-contract/schemas/shot-card.schema.json`) so the two
+contracts do not drift — it already carries `lens_fov`, `framing`, `camera_movement`, `duration_fps`.
+
+**Unsettled:** the app's name. `format: "vorch-shot-package/1"` is a placeholder too — it is the
+actual contract between two repositories, so it wants a version field from the first commit, which
+is cheap now and painful to retrofit.
+
+### What was installed as a consequence
+
+Keeping S2V while running everything locally required the model set, which was absent here. Fetched
+2026-10-06 from the URLs in Georgi's own download receipt and **verified against his SHA-256**, so the
+two machines run byte-identical weights:
+
+| file | bytes | into | status |
+|---|---|---|---|
+| `wan2.2_s2v_14B_fp8_scaled.safetensors` | 16394832474 | `models/diffusion_models/` | **verified** |
+| `wav2vec2_large_english_fp16.safetensors` | 630997322 | `models/audio_encoders/` | **verified** |
+| `wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors` | 1226977424 | `models/loras/` | **verified** |
+
+All three match the receipt's SHA-256, so the two machines run byte-identical weights. The LoRA
+matters only for the fast 4-step variants (Georgi's `fast_bg` / `fast_en`), not for the 20/6 baseline.
+Observed throughput on this link was about **2.4 MB/s** and it dropped twice mid-transfer, which is
+worth remembering before committing to the 11 GB fp16 text encoder.
+
+Already present and reused: `wan_2.1_vae.safetensors`, and a umt5 text encoder. **Note a parity
+caveat:** Georgi runs `umt5_xxl_fp16` (11.4 GB); this machine has fp8-scaled and a Q5_K_M GGUF. That
+is a different text-encoder precision, so expect small numeric differences against his baseline before
+blaming anything else. Pulling the fp16 encoder is 11 GB and only worth it if the baseline fails to
+reproduce.
+
+ComfyUI here is 0.34.0 (Georgi: 0.28.0) and ships the S2V nodes natively — `comfy_extras/nodes_wan.py`
+and `comfy_extras/nodes_audio_encoder.py` — so no custom node is needed.
+
+### Still open
+
+1. **The `.blend` transfer.** The bar, the rigged character and SHOT_02's blocking are on Georgi's
+   `D:`. Everything in track B waits on that one copy.
+2. **Three unmeasured timings** that are not Blender's fault but sit in the same critical path: Gemma's
+   storyboard latency on CPU, one vision verdict, and a local Klein keyframe.
 
 ## Sources
 
