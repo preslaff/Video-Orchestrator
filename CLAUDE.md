@@ -47,6 +47,7 @@ Working rules: keep changes surgical, keep `pytest -q` green, regenerate `fronte
 - **`docs/services.md`** — the five external services vorch drives, their **measured** VRAM cost (total 16303 MiB; gemma 1838 even with `--n-gpu-layers 0`; comfy 222 idle / ~22000 with Wan; tts **11268**), why OmniVoice and a Wan render cannot coexist, and what vorch will deliberately never manage. Read before touching anything that starts or stops a service.
 - **`docs/workflows.md`** — how to register a newly installed ComfyUI workflow (YAML sidecar, kinds, contracts, post-process chains).
 - **`docs/modal-backend.md`** — the optional per-workflow cloud backend (Modal): `backends.yaml`, the download seam in the ComfyUI client, deployment, model comparison, cost and risks. Local stays the default.
+- **`docs/model-tuning-options.md`** — whether to fine-tune or stay frozen (LoRA, IC-LoRA control adapters, video LoRA on Modal), compared against the failures this project actually has. Read before anyone proposes training anything: it records that **text fidelity is a VAE problem, not a weights problem**, that two LTX motion-control IC-LoRAs are already on disk unused, and where a LoRA would plug into the registry.
 - **`SKILL.md`** — router skill + architectural invariants. Points to:
   - `skills/comfyui-api.md` — load template, replace params, POST `/prompt`, poll `/history`, extract outputs
   - `skills/gemma-evaluate.md` — vision evaluation, image + video (frame extraction), JSON verdict parsing
