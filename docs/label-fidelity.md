@@ -118,6 +118,11 @@ Rule 2 still matters, for a different reason than it first appeared: tracking ke
 slightly soft. Keeping the camera off the label means it is both correct **and** sharp. Tracking
 is what makes the feature usable when a shot does move — not a licence to zoom into type.
 
+> **The rectangle is a limitation, not the design.** A label on a curved bottle is not a
+> rectangle. [`layered-compositing-plan.md`](layered-compositing-plan.md) is the staged plan for
+> replacing it with a per-pixel matte — the box survives as the *placement* anchor (and as what
+> `_relight` measures its ring against) while the matte supplies the shape.
+
 ## What not to try
 
 - **Green screen**: keying an olive jacket out of a green screen fails; `despill` browns it, and
