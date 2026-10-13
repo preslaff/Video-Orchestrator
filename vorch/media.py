@@ -277,6 +277,15 @@ class MediaInfo:
     nb_frames: int | None
     codec: str
     has_audio: bool
+    pix_fmt: str = ""        # "yuv420p", "gray", "rgb24"…; "" when ffprobe did not say
+    # "tv" (limited) | "pc" (full) | "" or "unknown" when the stream is untagged, which is what
+    # ComfyUI's SaveVideo produces. Untagged YUV *is* stored limited — a white mask lands as 235,
+    # measured — but reading it back through ffmpeg (`-pix_fmt gray`, as `_lock_tracked` does)
+    # already expands it to 255, and restating `in_range=tv:out_range=pc` is idempotent, not a
+    # second expansion. So these two fields describe the file; they are not a correction anyone
+    # has to apply. They would matter only to code that took the Y plane straight from a
+    # `-pix_fmt yuv420p` pipe, which nothing here does.
+    color_range: str = ""
 
     @property
     def frame_duration(self) -> float:
@@ -284,6 +293,7 @@ class MediaInfo:
         if self.nb_frames and self.fps:
             return self.nb_frames / self.fps
         return self.duration
+
 
 
 @dataclass(frozen=True)
@@ -295,14 +305,16 @@ class Cut:
 
 
 def probe(path: str | Path) -> MediaInfo:
-    """One ffprobe call: size, fps, duration, frame count, codec, audio presence."""
+    """One ffprobe call: size, fps, duration, frame count, codec, audio presence, pixel format
+    and colour range."""
     path = Path(path).expanduser()
     if not path.is_file():
         raise FileNotFoundError(f"media not found: {path}")
     try:
         out = subprocess.check_output(
             ["ffprobe", "-v", "error", "-show_entries",
-             "stream=codec_type,codec_name,width,height,r_frame_rate,nb_frames,duration",
+             "stream=codec_type,codec_name,width,height,r_frame_rate,nb_frames,duration,"
+             "pix_fmt,color_range",
              "-show_entries", "format=duration", "-of", "json", str(path)],
             stderr=subprocess.STDOUT, timeout=60,
         )
@@ -324,6 +336,8 @@ def probe(path: str | Path) -> MediaInfo:
         duration=duration, nb_frames=int(nb) if nb and str(nb).isdigit() else None,
         codec=str(video.get("codec_name", "")),
         has_audio=any(s.get("codec_type") == "audio" for s in streams),
+        pix_fmt=str(video.get("pix_fmt", "")),
+        color_range=str(video.get("color_range", "")),
     )
 
 

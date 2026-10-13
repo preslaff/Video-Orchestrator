@@ -321,18 +321,39 @@ problems = reg.validate(spec, object_info=comfy.object_info(backend=spec.backend
 fires only when an incoming region asks for a matte, cannot be skipped by a run that bypassed
 preflight, and reports at the moment of the request.
 
-## P1.4 — `probe` learns `pix_fmt` and `color_range`
+## P1.4 — `probe` learns `pix_fmt` and `color_range` (done; the feared bug is not real)
 
-Small, independent, and it prevents the quietest bug in the whole plan.
+This section was written to prevent "the quietest bug in the whole plan": an h264 matte stores
+limited-range luma, so a white mask lands as 235, alpha tops out at 0.92, and 8 % of the render
+ghosts through the middle of the lock — a faintly transparent brand label that reads as a bad
+relight rather than a bug. The planned fix was to decode the matte with
+`-vf scale=in_range=tv:out_range=pc`, chosen from the file.
 
-A ComfyUI `SaveVideo` writing h264/yuv420p almost certainly writes **tv-range** luma: mask 255 is
-stored as 235, and swscale's default yuv→gray hands back ~235. Alpha then tops out at 0.92 and
-**8 % of the render ghosts through the middle of the lock** — a faintly transparent brand label that
-reads as a bad relight, not as a bug.
+**Measured instead of assumed, and the conclusion flipped.** Half the premise is true and half is
+not:
 
-So add `pix_fmt,color_range` to the `-show_entries stream=` list (`media.py:304-306`) and two fields
-to `MediaInfo`, then decode the matte with `-vf scale=in_range=tv:out_range=pc` chosen **from the
-file** rather than assumed. One place, trivially testable, and it answers the gap noted above.
+| | measured |
+|---|---|
+| a white mask stored in an untagged yuv420p stream | **235** — the range *is* compressed |
+| that file read back with `-pix_fmt gray` | **255** — ffmpeg's yuv→gray expands it itself |
+| the same read with `scale=in_range=tv:out_range=pc` | **255** — idempotent, not a second expansion |
+| mid-grey: stored / naive / with the filter | 126 / **128** / **128** |
+
+So swscale already treats untagged YUV as limited and `gray` as full, and does the expansion on
+the way out. `_lock_tracked` reads exactly that way, so **the naive read is correct and no range
+correction is needed.** Worse, a `MediaInfo.full_range` property — which this plan originally
+specified — would have invited exactly the correction that is already applied.
+
+What shipped, therefore, is narrower than planned and honest about why: `pix_fmt` and
+`color_range` on `MediaInfo`, fed by `pix_fmt,color_range` in `probe`'s `-show_entries` list, as
+**description of the file rather than a correction anybody applies**. They would matter only to
+code that took the Y plane straight from a `-pix_fmt yuv420p` pipe, which nothing here does. No
+`full_range` property.
+
+The test that records this is the valuable artefact
+(`test_a_mask_survives_h264_even_though_it_is_stored_limited_range`): it pins all four numbers
+above, so nobody "fixes" the non-bug by adding an expansion, and it fails loudly if a future
+ffmpeg stops expanding on its own — the case in which masks really would go translucent.
 
 ## P1.5 — composite with the matte
 

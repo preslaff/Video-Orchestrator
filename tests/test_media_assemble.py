@@ -80,6 +80,48 @@ def test_probe_reports_size_fps_duration_frames(tmp_path):
 
 
 @needs_ffmpeg
+def test_probe_reports_the_pixel_format_and_leaves_an_untagged_range_unsaid(tmp_path):
+    """What an h264 clip actually says about itself — and what it leaves unsaid."""
+    info = media.probe(_clip(tmp_path, "pf", "red"))
+    assert info.pix_fmt == "yuv420p"
+    # ffprobe reports no usable range for a stream that does not tag one, which is what
+    # ComfyUI's SaveVideo produces. The field must not pretend otherwise.
+    assert info.color_range in ("", "unknown")
+
+
+@needs_ffmpeg
+def test_a_mask_survives_h264_even_though_it_is_stored_limited_range(tmp_path):
+    """Measured, because the plausible-sounding opposite would have cost a day.
+
+    An untagged yuv420p stream **does** store a white mask as 235, not 255 — so reading its Y
+    plane directly would cap alpha at 0.92 and let 8% of the render through the middle of a lock.
+    But ffmpeg's own yuv->gray conversion already expands limited to full, which is the path
+    ``_lock_tracked`` uses, so the naive read is correct and needs no `in_range` correction.
+    Restating the expansion is idempotent rather than a second application.
+
+    This test exists to stop someone "fixing" the non-bug by adding an expansion, and to catch it
+    if a future ffmpeg stops expanding on its own — in which case masks silently go translucent.
+    """
+    clip = tmp_path / "mask.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+                    "-i", "color=c=white:s=32x32:rate=8:duration=1",
+                    "-pix_fmt", "yuv420p", "-crf", "0", str(clip)],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def first_byte(pix_fmt, *vf):
+        cmd = ["ffmpeg", "-v", "error", "-i", str(clip)]
+        if vf:
+            cmd += ["-vf", *vf]
+        cmd += ["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", pix_fmt, "-"]
+        return int(np.frombuffer(subprocess.run(cmd, capture_output=True).stdout, np.uint8)[0])
+
+    assert first_byte("yuv420p") == 235, "white is stored limited-range; that part is real"
+    assert first_byte("gray") == 255, "ffmpeg expands yuv->gray itself, so a mask reads full"
+    assert first_byte("gray", "scale=in_range=tv:out_range=pc") == 255, "idempotent, not doubled"
+    assert media.probe(clip).color_range in ("", "unknown")
+
+
+@needs_ffmpeg
 def test_assemble_xfade_and_hard_cut_duration(tmp_path):
     clips = [_clip(tmp_path, n, c) for n, c in (("a", "red"), ("b", "green"), ("c", "blue"), ("d", "yellow"))]
     out = media.assemble(clips, [Cut("fade", 0.5), Cut("none"), Cut("wipeleft", 0.3)], tmp_path / "out" / "assembly.mp4")
