@@ -484,11 +484,14 @@ def test_scene_locks_route(client, monkeypatch):
     job.scenes = [Scene(index=0, keyframe_path="/k.png", video_path="/v.mp4", raw_video_path="/v.mp4")]
     client.store.save_job(job)
 
+    # Posted without `matte` on purpose: it has a default, so it is not in the schema's `required`
+    # and an existing client keeps working. The *response* carries it, because ScenePublic
+    # validates the stored dict through LockedRegion and the default is filled in there.
     label = {"x": 0.41, "y": 0.35, "w": 0.2, "h": 0.1}
     r = client.put(f"/api/jobs/{job.id}/scenes/0/locks", json={"regions": [label]})
     assert r.status_code == 200
     scene = r.json()["scenes"][0]
-    assert scene["locked_regions"] == [label]
+    assert scene["locked_regions"] == [{**label, "matte": False}]
     assert scene["video_path"] == "/v_locked.mp4"
 
     assert client.put(f"/api/jobs/{job.id}/scenes/0/locks", json={"regions": []}).status_code == 200

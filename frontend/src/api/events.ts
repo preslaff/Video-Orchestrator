@@ -10,6 +10,12 @@ export const EVENT_TYPES = [
   'variant',
   'video',
   'postprocess',
+  // Restoring locked regions on a finished clip. `locked` was emitted by the backend from the
+  // start but was missing here, so nothing ever received it; `locking` is its "started" half,
+  // which matters because a region locked by shape costs a pass over the clip rather than a
+  // paste. Subscribing is additive — an unlisted type simply never arrives.
+  'locking',
+  'locked',
   'stills',
   'gate',
   'export',
@@ -71,6 +77,14 @@ export const DELIVERABLE_EVENTS = new Set<string>(['export', 'assembly', 'end', 
 
 export function describeEvent(e: JobEvent): string {
   switch (e.type) {
+    case 'locking':
+      return `scene ${Number(e.index) + 1}: finding the marked shape in every frame`
+    case 'locked': {
+      const n = Number(e.regions)
+      const shaped = Number(e.mattes) || 0
+      return `scene ${Number(e.index) + 1}: ${n} region${n === 1 ? '' : 's'} restored`
+        + (shaped ? ` (${shaped} by shape)` : '')
+    }
     case 'status':
       return `status → ${String(e.status)}`
     case 'phase':

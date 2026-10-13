@@ -193,14 +193,15 @@ describe('GatePanel locked regions', () => {
 
     await waitFor(() => expect(puts).toHaveLength(1))
     expect(puts[0].url).toBe('/api/jobs/j1/scenes/0/locks')
-    expect(puts[0].body).toEqual({ regions: [{ x: 0.4, y: 0.3, w: 0.2, h: 0.1 }] })
+    // `matte` is always sent explicitly, even when off, so the posted shape is unambiguous.
+    expect(puts[0].body).toEqual({ regions: [{ x: 0.4, y: 0.3, w: 0.2, h: 0.1, matte: false }] })
   })
 
   it('says how many regions a scene already has', () => {
     const marked = {
       ...withClip,
       scenes: [scene(0, { keyframe_url: '/media/k0.png', video_url: '/media/v0.mp4',
-                          locked_regions: [{ x: 0.4, y: 0.3, w: 0.2, h: 0.1 }] })],
+                          locked_regions: [{ x: 0.4, y: 0.3, w: 0.2, h: 0.1, matte: false }] })],
     } as unknown as JobPublic
     render(<QueryClientProvider client={new QueryClient()}><GatePanel job={marked} assets={assets} /></QueryClientProvider>)
     expect(screen.getByTestId('lock-regions-0')).toHaveTextContent('Locked: 1 region')

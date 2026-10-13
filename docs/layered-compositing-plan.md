@@ -1,9 +1,15 @@
 # Layered compositing — can we build the layered architecture tool?
 
-> Status: in progress, 2026-10-13. **P1.0 and P1.1 are done** (the lock endpoint runs off the
-> event loop; SAM2 is installed and the VRAM gate passed — see the gate result below). P1.2 onward
-> is specified; phases 2+ are sketched with their cost, not designed. Machine facts were checked on
-> the box and are marked as measured; anything estimated says so.
+> Status: **phase 1 complete**, 2026-10-13. All of P1.0–P1.7 is built and validated against a
+> running ComfyUI; the sections below are kept as the record of why each decision went the way it
+> did, with the two places measurement overruled the plan marked as such. Phases 2+ remain
+> sketched with their cost, not designed. Machine facts were checked on the box and are marked as
+> measured; anything estimated says so.
+>
+> Live end-to-end, a circle marked with a square box, 25 frames, object moving 96 px:
+> the circle's centre came from the keyframe, a pixel inside the box but outside the circle stayed
+> as rendered, and 6375–6625 px were locked per frame against an ideal disc of 6648 and a prompted
+> box of 11664. Matte 4.1 s, composite 0.8 s.
 
 ## The question, and the answer
 

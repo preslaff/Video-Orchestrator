@@ -4552,6 +4552,11 @@
             "maximum": 1.0,
             "exclusiveMinimum": 0.0,
             "title": "H"
+          },
+          "matte": {
+            "type": "boolean",
+            "title": "Matte",
+            "default": false
           }
         },
         "type": "object",

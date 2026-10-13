@@ -20,20 +20,25 @@ then animating (Klein -> ReActor -> Wan), since the ReActor template is image-ba
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import shutil
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
-from . import budget, cancel, config, formats, media, pipeline, profiles, provenance, storyboard
+from . import backends, budget, cancel, config, formats, media, pipeline, profiles, provenance
+from . import registry, storyboard, vram
 from . import projects as projects_mod
 from . import scene_assets, versions
 from .clients import gemma as gemma_client
 from .clients import tts
 from .genparams import DEFAULT, GenParams
 from .steps.edit import reference_slots
+from .clients import comfy
+from .steps import run_step
 from .steps.postprocess import run_chain
 from .state import (Clip, Decision, Job, JobStatus, ReferenceSuggestion, Scene, SceneStatus, Store, Variant,
                     new_job)
@@ -46,6 +51,15 @@ GATE_KEYFRAMES = "keyframes"
 # hosted call would take the job past its ceiling, so it is discovered from the decision log
 # rather than listed by `gates_for`.
 GATE_BUDGET = "budget"
+
+# A locked region can be a shape instead of a rectangle: `matte_sam2` segments the marked object
+# on frame 0 and propagates it over the clip (`comfy_nodes/vorch_matte`). These are deliberately
+# constants, not user settings: they go into the matte cache key, so a knob in the UI would mean
+# every nudge re-ran the segmentation. Defaults match the node's own.
+MATTE_WORKFLOW = "matte_sam2"
+MATTE_THRESHOLD = 0.5
+MATTE_DILATE = 2        # cover the object's edge rather than leaving a seam of render around it
+MATTE_FEATHER = 4       # a soft edge is what the blend wants, and it compresses cleanly
 
 
 def _now() -> str:
@@ -983,13 +997,76 @@ class Orchestrator:
             return keyframe                  # the asset was cropped to fit: the fractions differ
         return str(asset.path) if a.width > k.width else keyframe
 
-    def _lock_regions(self, job: Job, scene: Scene, *, force: bool = False) -> None:
+    def _matte_for(self, job: Job, scene: Scene, region: dict, base: Path) -> Path:
+        """The matte for one region of one clip, generated once and cached by content.
+
+        The cache key is a digest of the clip, the rectangle and every setting that shapes the
+        result — **not** the region's position in the list. That matters: identity in
+        ``Scene.locked_regions`` is positional, so deleting the first mark renumbers the rest, and
+        a name like ``_matte_r0.mp4`` would then describe the wrong box. `force` would not save
+        it either, since force bypasses the ``_locked.mp4`` short-circuit and knows nothing about
+        a matte. With a digest there is nothing to invalidate: a different box is a different
+        file, re-drawing the same box is a free hit, and a re-rendered clip has a new stem and so
+        a new key.
+        """
+        key = "|".join(str(v) for v in (
+            base.name, region["x"], region["y"], region["w"], region["h"],
+            MATTE_WORKFLOW, MATTE_THRESHOLD, MATTE_DILATE, MATTE_FEATHER))
+        digest = hashlib.sha1(key.encode()).hexdigest()[:8]
+        dest = base.with_name(f"{base.stem}_matte_{digest}.mp4")
+        if dest.is_file():
+            return dest
+
+        reg = registry.load_registry()
+        spec = reg.get(MATTE_WORKFLOW)                       # KeyError -> 404 at the edge
+        backend = backends.for_spec(spec)
+        vram.reclaim(backend=backend)
+        self._event(job, "locking", index=scene.index, regions=1)
+        staged = comfy.upload_image(base, backend=backend)
+        outs = run_step(
+            MATTE_WORKFLOW,
+            input_video=staged,
+            box_x=float(region["x"]), box_y=float(region["y"]),
+            box_w=float(region["w"]), box_h=float(region["h"]),
+            threshold=MATTE_THRESHOLD, dilate=MATTE_DILATE, feather=MATTE_FEATHER,
+            offload=True,
+            filename_prefix=f"{output_prefix(job, scene.index, 'matte')}_{digest}",
+        )
+        # ComfyUI numbers its own outputs, so the run's file is copied to the deterministic name
+        # the digest predicts. The original and its provenance manifest are left where they are.
+        shutil.copy2(outs[0], dest)
+        return dest
+
+    def _matte_preflight(self) -> None:
+        """Refuse a matte request before anything is staged, if it cannot possibly work.
+
+        ``envcheck`` never sees this workflow — it is not in ``profiles.workflows_used()`` — so
+        without this the first sign of a missing custom node or checkpoint would be a failed paste
+        on a job the user was watching. Checking here reports it where they are standing, and it
+        cannot be skipped by a run that bypassed preflight.
+        """
+        reg = registry.load_registry()
+        spec = reg.get(MATTE_WORKFLOW)
+        try:
+            info = comfy.object_info(backend=spec.backend)    # process-cached
+        except Exception as e:                                # ComfyUI down: say so plainly
+            raise ValueError(f"a matte needs ComfyUI running ({MATTE_WORKFLOW}): {e}") from e
+        problems = reg.validate(spec, object_info=info)
+        if problems:
+            raise ValueError(f"{MATTE_WORKFLOW} cannot run: " + "; ".join(problems))
+
+    def _lock_regions(self, job: Job, scene: Scene, *, force: bool = False,
+                      strict: bool = False) -> None:
         """Restore the scene's locked regions on the finished clip, from its own keyframe.
 
         A video model redraws every frame from an 8x-compressed latent, so small printed type
         has nowhere to live: it is wrong in frame 0 and worse from there. Marking the label
         once takes it out of the model's hands entirely. A failure here is logged and the
         unlocked clip kept — losing the whole render over a paste would be the worse trade.
+
+        ``strict`` reverses that trade for a request the user made directly: during a run,
+        keeping the unlocked render is right, but on ``PUT .../locks`` a swallowed failure would
+        return 200 with a decision nobody reads, so there it raises instead.
         """
         # Always paste onto the *unlocked* render, never onto a previous paste, so changing the
         # rectangles re-does the work from clean pixels instead of layering patch on patch.
@@ -1006,9 +1083,15 @@ class Orchestrator:
             scene.video_path = str(dest)
             return
         try:
+            mattes = [self._matte_for(job, scene, r, src) if r.get("matte") else None
+                      for r in regions]
             out = media.lock_regions(src, self.lock_source(job, scene),
-                                     [media.Region(**r) for r in regions], dest)
-        except (media.MediaError, FileNotFoundError, ValueError, TypeError) as e:
+                                     [media.Region(**r) for r in regions], dest,
+                                     mattes=mattes if any(mattes) else None)
+        except (media.MediaError, FileNotFoundError, ValueError, TypeError, KeyError,
+                OSError, requests.RequestException) as e:
+            if strict:
+                raise ValueError(f"the regions could not be restored: {e}") from e
             log.warning("job %s: scene %d locked regions failed: %s", job.id, scene.index, e)
             self.store.log_decision(Decision(
                 job_id=job.id, scene_index=scene.index, phase="video", attempt=1, action="warning",
@@ -1020,7 +1103,9 @@ class Orchestrator:
             job_id=job.id, scene_index=scene.index, phase="video", attempt=1, action="locked",
             reason=f"{len(regions)} region(s) restored from the keyframe",
         ))
-        self._event(job, "locked", index=scene.index, path=str(out), regions=len(regions))
+        shaped = sum(1 for r in regions if r.get("matte"))
+        self._event(job, "locked", index=scene.index, path=str(out), regions=len(regions),
+                    mattes=shaped)
 
     def set_locked_regions(self, job: Job, index: int, regions: list[dict]) -> Scene:
         """Mark (or clear) the regions of a scene the animator must not redraw, and re-apply
@@ -1032,14 +1117,22 @@ class Orchestrator:
         scene = next((s for s in job.scenes if s.index == index), None)
         if scene is None:
             raise KeyError(f"scene {index}")
-        clean = [{"x": float(r["x"]), "y": float(r["y"]), "w": float(r["w"]), "h": float(r["h"])}
-                 for r in regions]
+        # `matte` is written only when asked for, so a job that uses none stores exactly the shape
+        # it always did and nothing re-reads differently after an upgrade.
+        clean = []
+        for r in regions:
+            c = {"x": float(r["x"]), "y": float(r["y"]), "w": float(r["w"]), "h": float(r["h"])}
+            if r.get("matte"):
+                c["matte"] = True
+            clean.append(c)
         for r in clean:
             media.Region(**r)                    # ValueError for a rectangle off the frame
+        if any(r.get("matte") for r in clean):
+            self._matte_preflight()              # ValueError -> 400, before anything is staged
         scene.locked_regions = clean
         was = scene.video_path
         if scene.raw_video_path or scene.post_paths:
-            self._lock_regions(job, scene, force=True)
+            self._lock_regions(job, scene, force=True, strict=True)
             if scene.video_path != was:
                 for clip in scene.clips:
                     if clip.video_path == was:

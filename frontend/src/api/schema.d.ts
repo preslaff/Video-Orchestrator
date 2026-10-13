@@ -1735,6 +1735,11 @@ export interface components {
             w: number;
             /** H */
             h: number;
+            /**
+             * Matte
+             * @default false
+             */
+            matte: boolean;
         };
         /** OutputProfile */
         OutputProfile: {

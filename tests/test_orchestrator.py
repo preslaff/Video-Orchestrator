@@ -858,7 +858,7 @@ def test_an_impossible_rectangle_is_refused_and_nothing_is_stored(wired):
         o.set_locked_regions(job, 7, [{"x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}])
 
 
-def test_a_failed_paste_keeps_the_clip_and_says_so(wired, monkeypatch):
+def test_a_failed_paste_during_a_run_keeps_the_clip_and_says_so(wired, monkeypatch):
     """Losing a whole render because a paste failed would be the worse trade."""
     from vorch import media
 
@@ -868,10 +868,56 @@ def test_a_failed_paste_keeps_the_clip_and_says_so(wired, monkeypatch):
     o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
     job = o.create_job("idea", master_face="", autonomy="full")
     o.run(job)
-    o.set_locked_regions(job, 0, [{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}])
-    assert job.scenes[0].video_path == job.scenes[0].raw_video_path
+    scene = job.scenes[0]
+    scene.locked_regions = [{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}]
+    o._lock_regions(job, scene, force=True)          # the run path: degrade, do not raise
+    assert scene.video_path == scene.raw_video_path
     warned = [d for d in store.decisions(job.id) if d.action == "warning"]
     assert warned and "ffmpeg said no" in warned[-1].reason
+
+
+def test_a_failed_paste_the_user_asked_for_is_an_error_not_a_quiet_warning(wired, monkeypatch):
+    """The same failure, the opposite trade — because this one was a direct request.
+
+    During a run, keeping the unlocked render is right: nobody is watching that one step. On
+    ``PUT .../locks`` the user pressed Save, so swallowing it would return 200 with a decision
+    nobody reads and a clip that silently still has the smeared label. ``api/jobs.py`` already
+    maps ValueError to 400.
+    """
+    from vorch import media
+
+    store, _master, _ = wired
+    monkeypatch.setattr(media, "lock_regions",
+                        lambda *a, **kw: (_ for _ in ()).throw(media.MediaError("ffmpeg said no")))
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)
+    with pytest.raises(ValueError, match="could not be restored"):
+        o.set_locked_regions(job, 0, [{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}])
+
+
+def test_a_matte_is_only_stored_when_it_is_asked_for(wired, monkeypatch):
+    """The persisted shape must not change for a job that asks for no matte.
+
+    `Scene.locked_regions` is a list of bare dicts inside the job's JSONB, so writing
+    ``matte: False`` into every mark would rewrite every existing row to say nothing, and the two
+    tests above that compare the stored list to the posted one would have had to be loosened.
+    A matte is also never stored as a *path*: only the intent, because the artefact is derived
+    and cached by content (`Orchestrator._matte_for`).
+    """
+    from vorch import media
+
+    store, _master, _ = wired
+    monkeypatch.setattr(media, "lock_regions", lambda vid, src, regions, dest, **kw: Path(dest))
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)
+
+    o.set_locked_regions(job, 0, [{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}])
+    stored = job.scenes[0].locked_regions
+    assert stored == [{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2}], "no matte key when unasked"
+    assert media.Region(**stored[0]).matte is False
+    assert not any("matte" in str(v) for r in stored for v in r.values())
 
 
 def test_an_unknown_asset_stops_the_job_before_it_renders(wired, tmp_path, monkeypatch):
@@ -1079,3 +1125,89 @@ def test_removing_a_take_that_never_existed_is_not_an_error(wired, _spoken):
     assert o.clear_narration(job, 0).narration_path is None
     with pytest.raises(KeyError):
         o.clear_narration(job, 9)
+
+
+def test_a_matte_is_generated_once_and_cached_by_content_not_by_position(wired, monkeypatch, tmp_path):
+    """The matte cache is keyed by the clip and the box, never by the region's index.
+
+    Identity in ``Scene.locked_regions`` is positional, so deleting the first mark renumbers the
+    rest: a name like ``_matte_r0.mp4`` would then describe a different rectangle, and ``force``
+    would not catch it because force only bypasses the ``_locked.mp4`` short-circuit. Keyed by
+    content there is nothing to invalidate — the same box is a free hit and a different box is a
+    different file.
+    """
+    from vorch import media
+
+    store, _master, _ = wired
+    runs: list[dict] = []
+
+    def fake_run_step(name, **params):
+        runs.append({"workflow": name, **params})
+        out = tmp_path / f"matte_{len(runs)}.mp4"
+        out.write_bytes(b"matte")
+        return [out]
+
+    passed: list[list] = []
+    monkeypatch.setattr(orch_mod, "run_step", fake_run_step)
+    monkeypatch.setattr(orch_mod.comfy, "upload_image", lambda p, **kw: Path(p).name)
+    monkeypatch.setattr(orch_mod.comfy, "object_info", lambda **kw: {})
+    monkeypatch.setattr(orch_mod.registry.Registry, "validate", lambda self, spec, **kw: [])
+    monkeypatch.setattr(media, "lock_regions",
+                        lambda vid, src, regions, dest, **kw:
+                        passed.append(kw.get("mattes")) or Path(dest))
+
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)
+    # The fixture's clip paths are synthetic; the cache is a real `dest.is_file()` check, so point
+    # the clip at a real file and let the test exercise the cache rather than fake it away.
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"clip")
+    job.scenes[0].raw_video_path = str(clip)
+
+    box = {"x": 0.4, "y": 0.3, "w": 0.2, "h": 0.1, "matte": True}
+    o.set_locked_regions(job, 0, [box])
+    assert len(runs) == 1, "the matte must be generated"
+    assert runs[0]["workflow"] == orch_mod.MATTE_WORKFLOW
+    assert (runs[0]["box_x"], runs[0]["box_y"]) == (0.4, 0.3)
+    assert runs[0]["offload"] is True, "742 MiB instead of 1747, at the same speed"
+    assert passed[-1] and passed[-1][0] is not None, "the matte must reach lock_regions"
+    first = passed[-1][0]
+
+    o.set_locked_regions(job, 0, [box])                    # the same box again
+    assert len(runs) == 1, "an identical box must hit the cache, not re-segment"
+    assert passed[-1][0] == first
+
+    o.set_locked_regions(job, 0, [{**box, "x": 0.41}])     # nudged
+    assert len(runs) == 2, "a different box must be a different matte"
+    assert passed[-1][0] != first
+
+    o.set_locked_regions(job, 0, [{"x": 0.4, "y": 0.3, "w": 0.2, "h": 0.1}])  # matte off
+    assert len(runs) == 2, "a plain rectangle must not segment anything"
+    assert passed[-1] is None, "no matte means lock_regions is called the way it always was"
+
+
+def test_a_matte_request_is_refused_when_the_workflow_cannot_run(wired, monkeypatch):
+    """Reported where the user is standing, not as a failed paste on a job they were watching.
+
+    ``envcheck`` never sees ``matte_sam2`` — it is not in ``profiles.workflows_used()`` — so this
+    preflight is the only thing between a missing custom node and a confusing warning decision.
+    """
+    store, _master, _ = wired
+    monkeypatch.setattr(orch_mod.comfy, "object_info", lambda **kw: {})
+    monkeypatch.setattr(orch_mod.registry.Registry, "validate",
+                        lambda self, spec, **kw: ["ComfyUI has no node class 'VorchSAM2BoxMatte'"])
+    o = Orchestrator(store, n_scenes=1, evaluate=False, face_swap=False)
+    job = o.create_job("idea", master_face="", autonomy="full")
+    o.run(job)
+
+    with pytest.raises(ValueError, match="VorchSAM2BoxMatte"):
+        o.set_locked_regions(job, 0, [{"x": 0.4, "y": 0.3, "w": 0.2, "h": 0.1, "matte": True}])
+    assert job.scenes[0].locked_regions == [], "nothing is stored when the preflight refuses"
+
+    # ComfyUI down is the same answer, phrased so it is actionable.
+    def boom(**kw):
+        raise OSError("connection refused")
+    monkeypatch.setattr(orch_mod.comfy, "object_info", boom)
+    with pytest.raises(ValueError, match="needs ComfyUI running"):
+        o.set_locked_regions(job, 0, [{"x": 0.4, "y": 0.3, "w": 0.2, "h": 0.1, "matte": True}])

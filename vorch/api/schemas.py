@@ -222,6 +222,11 @@ class LockedRegion(BaseModel):
     y: float = Field(ge=0, le=1)
     w: float = Field(gt=0, le=1)
     h: float = Field(gt=0, le=1)
+    # Lock the *shape* inside this rectangle rather than the rectangle itself — a label on a
+    # curved bottle is not a rectangle. The matte is segmented from the clip's own frames and
+    # tracked through it; the box still decides which keyframe pixels are used and at what scale.
+    # Costs a SAM2 pass per box (~7.5 s for 81 frames), so saving is no longer instant.
+    matte: bool = False
 
 
 class ScenePublic(BaseModel):

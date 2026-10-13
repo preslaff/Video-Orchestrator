@@ -912,6 +912,11 @@ class Region:
     y: float
     w: float
     h: float
+    # Ask for a per-pixel matte inside this rectangle, so a label on a curved bottle is locked by
+    # its shape and not by the box around it. Only the *intent* is stored: the matte itself is
+    # derived, cached by content, and never persisted as a path — see
+    # ``Orchestrator._matte_for`` and ``docs/layered-compositing-plan.md``.
+    matte: bool = False
 
     def __post_init__(self) -> None:
         if not (self.w > 0 and self.h > 0):
