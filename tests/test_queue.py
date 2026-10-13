@@ -717,6 +717,92 @@ def test_speak_does_not_block_the_event_loop(make_store, monkeypatch):
     assert ticks > 5, f"the loop only ticked {ticks} times; the blocking call was not offloaded"
 
 
+# --- locking regions is a paste over every frame, not a field edit ----------------------
+
+
+def _fake_orch_with_locks(monkeypatch, fn):
+    monkeypatch.setattr(
+        "vorch.orchestrator.Orchestrator.from_job",
+        classmethod(lambda cls, s, j: type("O", (), {"set_locked_regions": staticmethod(fn)})()))
+
+
+def test_locking_regions_waits_for_the_gpu_lock_instead_of_running_beside_a_render(
+        make_store, monkeypatch):
+    """Same bug as ``speak_scene`` had, in the same shape.
+
+    ``set_locked_regions`` used to be a plain ``def`` with ``_editable_job`` as its only guard —
+    which refuses when *this* job is running and says nothing about another job holding the card.
+    The paste is a tracked pass over every frame today and will segment on the GPU once the matte
+    lands (``docs/layered-compositing-plan.md``), so waiting for the lock is the correct behaviour.
+    """
+    order: list[str] = []
+    release = threading.Event()
+
+    class SlowRender:
+        def __init__(self, s, j):
+            self.store, self.emit = s, lambda e: None
+
+        def run(self, job):
+            order.append("render-start")
+            release.wait(5)
+            order.append("render-end")
+            job.status = JobStatus.DONE
+            self.store.save_job(job)
+
+    async def go():
+        store = make_store()
+        rendering, locking = new_job(idea="render"), new_job(idea="lock")
+        for j in (rendering, locking):
+            store.save_job(j)
+        mgr = JobManager(store, orchestrator_factory=lambda s, j: SlowRender(s, j))
+        _fake_orch_with_locks(monkeypatch, lambda job, index, regions: order.append("lock"))
+
+        mgr._spawn(mgr._execute(rendering, lambda o, j: o.run(j)))
+        while "render-start" not in order:
+            await asyncio.sleep(0.01)
+
+        # A different job entirely, so _editable_job has nothing to say about it.
+        task = asyncio.create_task(mgr.set_locked_regions(locking.id, 0, []))
+        await asyncio.sleep(0.15)
+        waiting = list(order)
+
+        release.set()
+        await task
+        store.close()
+        return waiting, order
+
+    waiting, order = asyncio.run(go())
+    assert waiting == ["render-start"], "the paste must be waiting, not running beside the render"
+    assert order == ["render-start", "render-end", "lock"]
+
+
+def test_locking_regions_does_not_block_the_event_loop(make_store, monkeypatch):
+    """An 81-frame tracked paste must not freeze the API and every SSE stream while it runs."""
+    ticks = 0
+
+    async def go():
+        nonlocal ticks
+        store = make_store()
+        job = new_job(idea="lock")
+        store.save_job(job)
+        mgr = JobManager(store)
+        _fake_orch_with_locks(monkeypatch, lambda j, index, regions: time.sleep(0.3))
+
+        async def heartbeat():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        beat = asyncio.create_task(heartbeat())
+        await mgr.set_locked_regions(job.id, 0, [])
+        beat.cancel()
+        store.close()
+
+    asyncio.run(go())
+    assert ticks > 5, f"the loop only ticked {ticks} times; the blocking call was not offloaded"
+
+
 # --- cancel: terminal, unlike stop ------------------------------------------------
 
 def test_cancel_is_terminal_and_retry_refuses_it(make_store):

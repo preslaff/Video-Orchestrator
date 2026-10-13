@@ -345,7 +345,7 @@ async def set_scene_locks(
     """Mark the parts of this scene's frame the animator must not redraw — a brand label, a
     monogram — and restore them on the clip that already exists. A paste, not a render."""
     try:
-        job = manager.set_locked_regions(job_id, index, [r.model_dump() for r in body.regions])
+        job = await manager.set_locked_regions(job_id, index, [r.model_dump() for r in body.regions])
     except KeyError as e:
         raise ApiError(404, "not_found", f"no such {str(e).strip(chr(39))}")
     except RuntimeError as e:

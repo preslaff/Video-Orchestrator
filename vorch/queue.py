@@ -592,12 +592,27 @@ class JobManager:
         o.clear_narration(job, index, keep_text=keep_text)   # KeyError -> 404
         return job
 
-    def set_locked_regions(self, job_id: str, index: int, regions: list[dict]) -> Job:
+    async def set_locked_regions(self, job_id: str, index: int, regions: list[dict]) -> Job:
         """Mark the parts of a scene's frame the animator must not redraw — a brand label,
-        a monogram — and put them back on the clip that already exists."""
+        a monogram — and put them back on the clip that already exists.
+
+        Under the GPU lock, off the event loop, for the same two reasons as ``speak_scene``:
+        the paste is a tracked ffmpeg/numpy pass over every frame of the clip, so running it
+        inline in an ``async def`` route froze the whole API and every SSE stream for its
+        duration; and ``_editable_job`` refuses only when *this* job is running, which says
+        nothing about another job holding the card.
+
+        Taking the lock costs this request a wait behind an in-flight render, which is the
+        right trade: today's paste is CPU-only, but the matte that is about to replace the
+        rectangle segments on the GPU (``docs/layered-compositing-plan.md``), and a lock
+        acquired only once that lands would be a lock nobody remembered to add.
+        """
         job = self._editable_job(job_id)
-        o = Orchestrator.from_job(self.store, job)
-        o.set_locked_regions(job, index, regions)     # KeyError -> 404, ValueError -> 400
+        loop = asyncio.get_running_loop()
+        async with self._lock:
+            o = Orchestrator.from_job(self.store, job)
+            # KeyError -> 404, ValueError -> 400 (see api/jobs.py)
+            await loop.run_in_executor(None, o.set_locked_regions, job, index, regions)
         return job
 
     def set_budget(self, job_id: str, budget_usd: float | None) -> Job:
