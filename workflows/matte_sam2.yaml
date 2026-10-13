@@ -1,0 +1,49 @@
+# Built-in: a per-pixel matte for one locked region, from SAM 2.1 video propagation.
+#
+# The user draws a rectangle on the keyframe (`Scene.locked_regions`); this turns it into a
+# *shape* that is found again in every frame, so a label on a curved bottle can be locked and not
+# just a rectangle of it. The matte comes back as a greyscale video — luma, not alpha — which is
+# deliberate: nothing in vorch can persist an alpha channel, and it does not have to, because the
+# compositor consumes the matte and flattens in one pass (docs/layered-compositing-plan.md).
+#
+# kind `custom`, not `postprocess`, although the postprocess contract would accept it. A
+# postprocess workflow is offered in the profile editor's post-step picker and would be run by
+# `run_chain` with the YAML's default box — replacing the deliverable clip with a grey matte and
+# handing it to the next step. `custom` is invoked by name and by nothing else.
+#
+# Called directly through `run_step`, because the box is per-scene-per-region and cannot come from
+# a profile's static params.
+name: matte_sam2
+kind: custom
+template: matte_sam2.json
+description: SAM 2.1 matte for one locked region — a box on frame 0, propagated over the clip, out as a greyscale video
+tags: [sam2, matte, locked-regions, video, custom]
+# Measured: 7.5 s of propagation for 81 frames at 742 MiB (offload on, the node's default), plus
+# decode and re-encode. Independent of the clip's resolution.
+timeout: 600
+inputs: {input_video: video}
+outputs:
+  type: video
+  # Node 6 explicitly: `LoadVideo` *also* reports an output descriptor — the input file it read —
+  # so without this vorch could resolve the matte step to the clip it was given.
+  nodes: ["6"]
+params:
+  input_video:     {node: "1", field: file, type: str, required: true}
+  # The box as `media.Region` stores it: fractions of the frame, so a mark survives any change of
+  # render size. Defaults cover the whole frame, which is wrong for any real use and is why the
+  # caller always passes all four.
+  box_x:           {node: "3", field: box_x, type: float, min: 0, max: 1}
+  box_y:           {node: "3", field: box_y, type: float, min: 0, max: 1}
+  box_w:           {node: "3", field: box_w, type: float, min: 0, max: 1}
+  box_h:           {node: "3", field: box_h, type: float, min: 0, max: 1}
+  threshold:       {node: "3", field: threshold, type: float, min: 0, max: 1}
+  dilate:          {node: "3", field: dilate, type: int, min: 0, max: 64}
+  feather:         {node: "3", field: feather, type: int, min: 0, max: 64}
+  offload:         {node: "3", field: offload, type: bool}
+  # The node calls this input `ckpt_name` on purpose: that name is in `registry.MODEL_FIELDS`, so
+  # the template's literal becomes a derived model requirement and `registry validate --online`
+  # reports an uninstalled checkpoint by name. `enum_from` is what offers the list in the UI —
+  # on its own it only checks the node class exists, not that any checkpoint is actually there.
+  ckpt_name:       {node: "3", field: ckpt_name, type: enum, enum_from: {class_type: VorchSAM2BoxMatte, input: ckpt_name}}
+  filename_prefix: {node: "6", field: filename_prefix, type: str}
+requires: {nodes: [VorchSAM2BoxMatte]}

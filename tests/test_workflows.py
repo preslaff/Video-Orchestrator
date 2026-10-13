@@ -67,3 +67,50 @@ def test_legacy_workflows_shim():
     assert legacy["keyframe"]["params"]["seed"] == ("75:73", "noise_seed")
     assert legacy["animate"]["output_node"] == "13"
     assert workflows.output_node("faceswap") == "4"
+
+
+def test_the_matte_workflow_reports_a_missing_custom_node_and_checkpoint():
+    """`comfy_nodes/README.md` tells the user `registry validate --online` is the install check.
+
+    This is that claim, tested. `_finalize` puts every template `class_type` into
+    `requires_nodes`, so a missing symlink surfaces as a named missing node class rather than as a
+    render-time failure — and the `ckpt` enum does the same for an absent checkpoint, which is the
+    other half of the install.
+    """
+    reg = registry.load_registry()
+    spec = reg.get("matte_sam2")
+    assert spec.kind == "custom", "postprocess would put it in the profile post-step picker"
+    assert "VorchSAM2BoxMatte" in spec.requires_nodes
+    # `LoadVideo` also emits an output descriptor (the file it read), so the matte must pin node 6
+    # or vorch could resolve the step to the clip it was handed.
+    assert spec.output_nodes == ["6"]
+
+    installed = {
+        "LoadVideo": {"input": {"required": {"file": [["clip.mp4"]]}}},
+        "GetVideoComponents": {"input": {"required": {"video": ["VIDEO"]}}},
+        "MaskToImage": {"input": {"required": {"mask": ["MASK"]}}},
+        "CreateVideo": {"input": {"required": {"images": ["IMAGE"], "fps": ["FLOAT"]}}},
+        "SaveVideo": {"input": {"required": {
+            "video": ["VIDEO"], "filename_prefix": ["STRING"],
+            "format": [["mp4"]], "codec": [["h264"]]}}},
+        "VorchSAM2BoxMatte": {"input": {"required": {
+            "images": ["IMAGE"], "ckpt_name": [["sam2.1_hiera_small.pt"]],
+            "box_x": ["FLOAT"], "box_y": ["FLOAT"], "box_w": ["FLOAT"], "box_h": ["FLOAT"],
+            "threshold": ["FLOAT"], "dilate": ["INT"], "feather": ["INT"],
+            "offload": ["BOOLEAN"]}}},
+    }
+    assert reg.validate(spec, object_info=installed) == []
+
+    no_symlink = {k: v for k, v in installed.items() if k != "VorchSAM2BoxMatte"}
+    problems = reg.validate(spec, object_info=no_symlink)
+    assert any("VorchSAM2BoxMatte" in p for p in problems), problems
+
+    # The checkpoint half of the install. This works only because the node calls its input
+    # `ckpt_name`, which is in `registry.MODEL_FIELDS`, so the template literal becomes a derived
+    # model requirement. `enum_from` alone would NOT catch it: that only checks the class exists.
+    assert ("3", "VorchSAM2BoxMatte", "ckpt_name", "sam2.1_hiera_small.pt") in spec.requires_models
+    no_ckpt = dict(installed)
+    no_ckpt["VorchSAM2BoxMatte"] = {"input": {"required": dict(
+        installed["VorchSAM2BoxMatte"]["input"]["required"], ckpt_name=[[]])}}
+    problems = reg.validate(spec, object_info=no_ckpt)
+    assert any("sam2.1_hiera_small.pt" in p and "not installed" in p for p in problems), problems

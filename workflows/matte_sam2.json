@@ -1,0 +1,69 @@
+{
+  "1": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "file": "clip.mp4"
+    }
+  },
+  "2": {
+    "class_type": "GetVideoComponents",
+    "inputs": {
+      "video": [
+        "1",
+        0
+      ]
+    }
+  },
+  "3": {
+    "class_type": "VorchSAM2BoxMatte",
+    "inputs": {
+      "images": [
+        "2",
+        0
+      ],
+      "ckpt_name": "sam2.1_hiera_small.pt",
+      "box_x": 0.0,
+      "box_y": 0.0,
+      "box_w": 1.0,
+      "box_h": 1.0,
+      "threshold": 0.5,
+      "dilate": 2,
+      "feather": 4,
+      "offload": true
+    }
+  },
+  "4": {
+    "class_type": "MaskToImage",
+    "inputs": {
+      "mask": [
+        "3",
+        0
+      ]
+    }
+  },
+  "5": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "4",
+        0
+      ],
+      "fps": [
+        "2",
+        2
+      ]
+    }
+  },
+  "6": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "5",
+        0
+      ],
+      "filename_prefix": "video/vorch_matte",
+      "format": "mp4",
+      "codec": "h264"
+    }
+  }
+}
