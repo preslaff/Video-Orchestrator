@@ -1,8 +1,9 @@
 # Layered compositing — can we build the layered architecture tool?
 
-> Status: plan, 2026-10-13. **Phase 1 is specified; phases 2+ are sketched with their cost, not
-> designed.** Machine facts were checked on the box that day and are marked as measured; anything
-> estimated says so. No code has been written.
+> Status: in progress, 2026-10-13. **P1.0 and P1.1 are done** (the lock endpoint runs off the
+> event loop; SAM2 is installed and the VRAM gate passed — see the gate result below). P1.2 onward
+> is specified; phases 2+ are sketched with their cost, not designed. Machine facts were checked on
+> the box and are marked as measured; anything estimated says so.
 
 ## The question, and the answer
 
@@ -180,14 +181,43 @@ Verified HTTP 200, **184 MB**, into `~/comfy/ComfyUI/models/sams/`. Configs ship
 at `sam2/configs/sam2.1/sam2.1_hiera_s.yaml`. The 2.0 URLs are **commented out** in upstream's
 `checkpoints/download_ckpts.sh` — upstream now ships 2.1 only.
 
-**Measure VRAM in this gate, not later.** Per `CLAUDE.md` invariant 1 the card is 16303 MiB and the
-checkpoint size is not the risk: video propagation holds per-frame features for the whole sequence,
-so the number to record is peak VRAM for an 81-frame propagation at the project's render size.
-Prefer `tiny`/`small`. If it is bad, propagate at reduced resolution and upscale the mask — it is
-feathered anyway.
+### Gate result: **GO**, and cheaper than feared (measured 2026-10-13)
 
-**Go/no-go.** If `python -c "from sam2.build_sam import build_sam2_video_predictor"` fails in that
-venv, stop. The fallback is the SAM **v1** already on disk, prompted per frame by the box
+The install went exactly as the dry run promised — `Would install SAM-2-1.0 hydra-core-1.3.7
+iopath-0.1.10 portalocker-4.4.0`, **torch and torchvision untouched**. (`portalocker` is a
+transitive of `iopath`, one more than this plan first predicted.) Back out with
+`pip uninstall SAM-2 hydra-core iopath portalocker`.
+
+Peak VRAM for an 81-frame propagation of `sam2.1_hiera_small`, prompted by one box on frame 0,
+every frame tracked:
+
+| render size | in VRAM | with CPU offload | wall time |
+|---|---|---|---|
+| 832x480 | 1747 MiB | **742 MiB** | 7.5 s |
+| 480x832 | 1749 MiB | **741 MiB** | 7.4 s |
+| 960x960 | 1751 MiB | **744 MiB** | 7.5 s |
+
+Two findings that matter more than the absolute number:
+
+- **Peak VRAM is independent of the render size.** SAM2 resizes every frame to the model's own
+  `image_size` internally, so a 960x960 clip costs the same as 832x480. The worry that drove this
+  into a gate — that propagation holds per-frame features for the whole sequence — is real but
+  bounded, and bounded at the model's resolution, not the clip's.
+- **`offload_video_to_cpu=True, offload_state_to_cpu=True` costs nothing in time** (7.4–7.6 s
+  either way) and cuts peak VRAM by 58 %. So the node should offload by default; there is no
+  trade to weigh.
+
+Against a 16303 MiB card where ComfyUI idles at 222 MiB, **742 MiB is not a constraint** — it is
+less than Gemma's 1838 MiB resident floor. The contingency of propagating at reduced resolution and
+upscaling the mask is not needed and should not be built.
+
+One expected message, confirmed benign: `cannot import name '_C' from 'sam2'` — the skipped CUDA
+extension, exactly as upstream's `setup.py` says ("Skipping the post-processing step… doesn't
+affect the results in most cases"). All 81 frames were still tracked.
+
+**The go/no-go check** was `python -c "from sam2.build_sam import build_sam2_video_predictor"`
+in that venv; it passed, and `torch.cuda.is_available()` is still `True`. Had it failed, the plan
+was to stop. The fallback is the SAM **v1** already on disk, prompted per frame by the box
 `_follow_regions` already tracks: no install at all, harder edges, temporal coherence from the
 tracker rather than the model. It was the cheaper route and was considered; SAM2 was chosen for
 genuine video propagation. Nothing but notes is committed in this step.
