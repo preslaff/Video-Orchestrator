@@ -147,3 +147,101 @@ def test_missing_inputs_and_empty_marks_are_errors(tmp_path):
                            tmp_path / "o.mp4")
     with pytest.raises(ValueError, match="no regions"):
         media.lock_regions(clip, source, [], tmp_path / "o.mp4")
+
+
+def _matte(dest, *, w: int, h: int, n: int, radius: int, cx: int, cy: int) -> None:
+    """A greyscale clip whose white part is a **circle** — a shape no rectangle can express.
+
+    Written through a rawvideo pipe rather than ffmpeg's ``geq``, which is not always compiled in.
+    """
+    import numpy as np
+
+    yy, xx = np.mgrid[0:h, 0:w]
+    disc = ((xx - cx) ** 2 + (yy - cy) ** 2 <= radius * radius)
+    plane = np.where(disc, 255, 0).astype(np.uint8)
+    p = subprocess.Popen(
+        ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gray",
+         "-s", f"{w}x{h}", "-r", "8", "-i", "-", "-c:v", "libx264", "-crf", "0",
+         "-pix_fmt", "yuv420p", str(dest)], stdin=subprocess.PIPE)
+    for _ in range(n):
+        p.stdin.write(plane.tobytes())
+    p.stdin.close()
+    assert p.wait() == 0
+
+
+def test_a_matte_locks_the_shape_and_not_the_rectangle_around_it(tmp_path):
+    """**The test that proves a matte.**
+
+    A rectangle cannot pass this. The mark is a square box; the matte inside it is a circle. So a
+    pixel in the box but outside the circle has to come from the *render*, while the middle of the
+    circle comes from the *keyframe*. That one pair of assertions is the entire feature.
+    """
+    clip, source, matte = tmp_path / "clip.mp4", tmp_path / "kf.png", tmp_path / "m.mp4"
+    _lavfi(clip, "color=c=blue:s=128x128:rate=8:duration=1", "-pix_fmt", "yuv420p")
+    _lavfi(source, "color=c=red:s=128x128", "-frames:v", "1")
+    _matte(matte, w=128, h=128, n=8, radius=24, cx=64, cy=64)
+
+    box = media.Region(x=0.25, y=0.25, w=0.5, h=0.5)      # 32..96 px, a square
+    out = media.lock_regions(clip, source, [box], tmp_path / "locked.mp4",
+                             feather=0, relight=0, mattes=[matte])
+
+    assert media.probe(out).nb_frames == media.probe(clip).nb_frames
+    for frame in (0, 4, 7):
+        assert _close(_pixel(out, 63, 63, frame), (255, 0, 0)), \
+            "the middle of the circle must come from the keyframe"
+        # (36, 36) is inside the 32..96 box but ~39 px from the centre, outside the r=24 circle.
+        assert _close(_pixel(out, 36, 36, frame), (0, 0, 255)), \
+            "inside the box but outside the shape must stay as rendered — a rectangle fails here"
+        assert _close(_pixel(out, 4, 4, frame), (0, 0, 255)), "outside the box, untouched"
+
+    # And the control, so this test proves the matte rather than merely passing: the same lock
+    # without one paints the whole box, so that middle pixel comes from the keyframe instead.
+    plain = media.lock_regions(clip, source, [box], tmp_path / "plain.mp4",
+                               feather=0, relight=0)
+    assert _close(_pixel(plain, 36, 36, 4), (255, 0, 0)), \
+        "without a matte the rectangle covers this pixel — which is what the matte changes"
+
+
+def test_a_matte_of_the_wrong_size_is_refused_rather_than_rescaled(tmp_path):
+    """A matte is sliced frame-aligned, never resampled, so a size mismatch has no safe meaning."""
+    clip, source, matte = tmp_path / "clip.mp4", tmp_path / "kf.png", tmp_path / "m.mp4"
+    _lavfi(clip, "color=c=blue:s=128x128:rate=8:duration=1", "-pix_fmt", "yuv420p")
+    _lavfi(source, "color=c=red:s=128x128", "-frames:v", "1")
+    _matte(matte, w=64, h=64, n=8, radius=12, cx=32, cy=32)
+
+    with pytest.raises(media.MediaError, match="but the clip is 128x128"):
+        media.lock_regions(clip, source, [media.Region(x=0.25, y=0.25, w=0.5, h=0.5)],
+                           tmp_path / "locked.mp4", mattes=[matte])
+
+
+def test_mattes_must_line_up_with_regions_and_need_the_tracker(tmp_path):
+    """Two refusals that are better loud than guessed at."""
+    clip, source, matte = tmp_path / "clip.mp4", tmp_path / "kf.png", tmp_path / "m.mp4"
+    _lavfi(clip, "color=c=blue:s=128x128:rate=8:duration=1", "-pix_fmt", "yuv420p")
+    _lavfi(source, "color=c=red:s=128x128", "-frames:v", "1")
+    _matte(matte, w=128, h=128, n=8, radius=24, cx=64, cy=64)
+    region = media.Region(x=0.25, y=0.25, w=0.5, h=0.5)
+
+    with pytest.raises(ValueError, match="they must align"):
+        media.lock_regions(clip, source, [region], tmp_path / "a.mp4", mattes=[matte, matte])
+
+    # The untracked path is a `drawbox` filtergraph; there is nowhere in it for a shape.
+    with pytest.raises(ValueError, match="needs track=True"):
+        media.lock_regions(clip, source, [region], tmp_path / "b.mp4",
+                           track=False, mattes=[matte])
+
+
+def test_a_matte_shorter_than_the_clip_holds_its_last_frame(tmp_path):
+    """A clip extended after its matte was cut should degrade, not desync or crash."""
+    clip, source, matte = tmp_path / "clip.mp4", tmp_path / "kf.png", tmp_path / "m.mp4"
+    _lavfi(clip, "color=c=blue:s=128x128:rate=8:duration=1", "-pix_fmt", "yuv420p")
+    _lavfi(source, "color=c=red:s=128x128", "-frames:v", "1")
+    _matte(matte, w=128, h=128, n=3, radius=24, cx=64, cy=64)       # 3 planes for 8 frames
+
+    out = media.lock_regions(clip, source, [media.Region(x=0.25, y=0.25, w=0.5, h=0.5)],
+                             tmp_path / "locked.mp4", feather=0, relight=0, mattes=[matte])
+
+    assert media.probe(out).nb_frames == media.probe(clip).nb_frames
+    for frame in (0, 7):                                           # first, and past the matte's end
+        assert _close(_pixel(out, 63, 63, frame), (255, 0, 0))
+        assert _close(_pixel(out, 36, 36, frame), (0, 0, 255))

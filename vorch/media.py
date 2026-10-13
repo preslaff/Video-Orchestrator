@@ -961,6 +961,7 @@ def lock_regions(
     track: bool = True,
     relight: float = 0.18,
     timeout: float | None = None,
+    mattes: "Sequence[Path | None] | None" = None,
 ) -> Path:
     """Paste ``regions`` of ``source`` over every frame of ``video``.
 
@@ -975,6 +976,16 @@ def lock_regions(
     ``track=False`` is the exact, cheap case: one ffmpeg overlay at a fixed rectangle, correct
     only while nothing moves. Audio is copied through either way, which matters for the models
     that generate their own.
+
+    ``mattes`` makes a region a *shape* instead of a rectangle: one entry per region, each a
+    greyscale video the size and length of ``video`` (or ``None`` to keep the rectangle). The box
+    still decides **where** the source pixels come from and how much to magnify them — which a
+    matte cannot say, and which ``_relight`` needs a box for — while the matte decides which of
+    them land. See ``docs/layered-compositing-plan.md``.
+
+    This function stays free of any ComfyUI knowledge: a matte arrives as a path, and whoever
+    produced it is not this module's business. That is what keeps ``tests/test_media_lock.py``
+    able to synthesise its own inputs.
     """
     video, source, dest = Path(video).expanduser(), Path(source).expanduser(), Path(dest)
     for p in (video, source):
@@ -982,13 +993,20 @@ def lock_regions(
             raise FileNotFoundError(f"not found: {p}")
     if not regions:
         raise ValueError("no regions to lock")
+    if mattes is not None and len(mattes) != len(regions):
+        raise ValueError(f"{len(mattes)} matte(s) for {len(regions)} region(s): they must align")
+    if mattes and any(m is not None for m in mattes) and not track:
+        # The untracked path is a `drawbox` string in a filtergraph (below); there is nowhere in
+        # it for a per-pixel shape. Refusing beats quietly pasting the rectangle instead.
+        raise ValueError("a matte needs track=True; the untracked path can only paste rectangles")
     info = probe(video)
     w, h = info.width, info.height
     if not (w and h):
         raise MediaError(f"cannot read the size of {video}")
     if track:
         return _lock_tracked(video, source, regions, dest, info=info, feather=feather,
-                             crf=crf, preset=preset, relight=relight, timeout=timeout)
+                             crf=crf, preset=preset, relight=relight, timeout=timeout,
+                             mattes=list(mattes) if mattes else [None] * len(regions))
     # The mask is built from the scaled source itself rather than a `color` source, so there is
     # no second stream whose duration has to be matched to the clip's.
     boxes = "".join(
@@ -1141,9 +1159,34 @@ def _follow_regions(video: Path, marks: list[dict], w: int, h: int) -> list[list
     return [tracking.smooth(t) for t in tracks]
 
 
+def _matte_reader(path: Path, *, w: int, h: int, frames: int | None) -> subprocess.Popen:
+    """A decode pipe handing out one ``w*h`` greyscale plane per frame of a matte.
+
+    Separate from the frame pipe because that one is ``rgb24`` and reshapes to three channels; a
+    matte is one. Read as ``gray``, which is also what makes the range correct for free: an
+    untagged YUV stream stores a white mask as 235, and ffmpeg's yuv->gray conversion expands it
+    back to 255 on the way out (measured — see ``MediaInfo.color_range`` and
+    ``tests/test_media_assemble.py``). Taking the Y plane straight from a ``yuv420p`` pipe would
+    *not* do that, and the mask would silently go 8% translucent.
+    """
+    mi = probe(path)
+    if (mi.width, mi.height) != (w, h):
+        raise MediaError(
+            f"matte {path.name} is {mi.width}x{mi.height} but the clip is {w}x{h}; a matte is "
+            "sliced frame-aligned, never rescaled, so the sizes have to match")
+    if frames and mi.nb_frames and mi.nb_frames < frames:
+        # Not fatal: the last matte frame is held below, which is right for a clip that was
+        # extended rather than re-matted. Worth a line, because it also looks like a stale cache.
+        log.warning("matte %s has %d frames for a %d frame clip; holding its last frame",
+                    path.name, mi.nb_frames, frames)
+    return subprocess.Popen(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
 def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Path, *,
                   info: MediaInfo, feather: int, crf: int, preset: str, relight: float,
-                  timeout: float | None) -> Path:
+                  timeout: float | None, mattes: "list[Path | None] | None" = None) -> Path:
     """``lock_regions`` for a shot that moves: find each region per frame, then paste it.
 
     Frames are streamed — decoded on one pipe, composited, written straight to the encoder on
@@ -1193,6 +1236,21 @@ def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Pa
 
     nbytes, frames = w * h * 3, 0
     weak = sum(1 for t in tracks for p in t if p.confidence < tracking.MIN_CONFIDENCE)
+    mattes = mattes or [None] * len(regions)
+    # How much of each matte fell outside the box the tracker put the patch in. Those pixels have
+    # no source to draw from, so they stay as rendered: the signal that the drawn rectangle is
+    # too tight for the shape SAM2 actually found.
+    spilled = 0.0
+    readers: list[subprocess.Popen | None] = []
+    try:
+        for m, mt in zip(marks, mattes):
+            readers.append(_matte_reader(mt, w=w, h=h, frames=info.nb_frames) if mt else None)
+            m["matte"] = None
+    except MediaError:
+        for r in readers:
+            if r is not None:
+                r.kill()
+        raise
     try:
         with subprocess.Popen(decode, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as src, \
              subprocess.Popen(encode, stdin=subprocess.PIPE, stderr=subprocess.PIPE) as out:
@@ -1202,15 +1260,27 @@ def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Pa
                 if len(raw) < nbytes:
                     break
                 frame = np.frombuffer(raw, np.uint8).reshape(h, w, 3).astype(np.float32)
-                for m, path in zip(marks, tracks):
+                for m, path, reader in zip(marks, tracks, readers):
                     i = min(frames, len(path) - 1)
                     at = path[i]
+                    if reader is not None:
+                        assert reader.stdout is not None
+                        plane = reader.stdout.read(w * h)
+                        if len(plane) == w * h:       # short matte: hold the last plane
+                            m["matte"] = (np.frombuffer(plane, np.uint8)
+                                          .reshape(h, w).astype(np.float32) / 255.0)
+                        if m["matte"] is not None:
+                            x0, y0, x1, y1 = tracking.window(at, h, w)
+                            total = float(m["matte"].sum())
+                            if total > 0:
+                                inside = float(m["matte"][y0:y1, x0:x1].sum())
+                                spilled = max(spilled, 1.0 - inside / total)
                     # The blend must cover the same fraction of the label at every scale, or
                     # the seam that is invisible at 1x becomes a bright edge at 3x.
                     grown = feather * at.w / m["w0"] if feather else 0.0
                     gain = m["gain"][min(i, len(m["gain"]) - 1)]
                     patch = m["patch"] * gain if gain != 1.0 else m["patch"]
-                    tracking.paste(frame, patch, at, feather=grown)
+                    tracking.paste(frame, patch, at, feather=grown, matte=m["matte"])
                 out.stdin.write(frame.clip(0, 255).astype(np.uint8).tobytes())
                 frames += 1
             out.stdin.close()
@@ -1224,12 +1294,23 @@ def _lock_tracked(video: Path, source: Path, regions: Sequence[Region], dest: Pa
     except MediaError:
         part.unlink(missing_ok=True)
         raise
+    finally:
+        for r in readers:
+            if r is None:
+                continue
+            if r.stdout is not None:
+                r.stdout.close()
+            r.kill()
+            r.wait()
     if not frames or not part.is_file() or part.stat().st_size == 0:
         part.unlink(missing_ok=True)
         raise MediaError(f"no frames were locked in {video.name}")
     os.replace(part, dest)
     # A weak frame is not a failure — the placement holds — but it is worth seeing in the log
     # when a paste looks like it drifted.
-    log.info("locked %d region(s) of %s onto %d frames of %s%s -> %s", len(regions), source.name,
-             frames, video.name, f" ({weak} weak)" if weak else "", dest)
+    shaped = sum(1 for mt in mattes if mt)
+    log.info("locked %d region(s)%s of %s onto %d frames of %s%s%s -> %s",
+             len(regions), f" ({shaped} by matte)" if shaped else "", source.name, frames,
+             video.name, f" ({weak} weak)" if weak else "",
+             f" ({spilled:.0%} of a matte fell outside its box)" if spilled > 0.02 else "", dest)
     return dest

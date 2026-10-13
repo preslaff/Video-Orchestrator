@@ -271,18 +271,40 @@ def _edge_alpha(centres: np.ndarray, lo: float, hi: float, feather: float) -> np
     return np.clip((centres - lo) / span, 0, 1) * np.clip((hi - centres) / span, 0, 1)
 
 
-def paste(frame: np.ndarray, patch: np.ndarray, at: Placement, *, feather: float = 4) -> None:
+def window(at: Placement, height: int, width: int) -> tuple[int, int, int, int]:
+    """The whole-pixel ``(x0, y0, x1, y1)`` a fractional placement touches, clipped to the frame.
+
+    Shared so that a caller measuring what a paste will cover computes the same box the paste
+    does, instead of a second version of the same arithmetic that can drift from it.
+    """
+    x0, y0 = max(0, int(np.floor(at.x))), max(0, int(np.floor(at.y)))
+    x1, y1 = min(width, int(np.ceil(at.x + at.w))), min(height, int(np.ceil(at.y + at.h)))
+    return x0, y0, x1, y1
+
+
+def paste(frame: np.ndarray, patch: np.ndarray, at: Placement, *, feather: float = 4,
+          matte: np.ndarray | None = None) -> None:
     """Alpha-blend ``patch`` into ``frame`` (both HxWx3) at ``at``, in place.
 
     ``at`` may be fractional: the patch is resampled straight onto the destination pixel grid,
     so scale and sub-pixel position are one operation and neither quantises. Clipped to the
     frame, so a region leaving the edge simply draws what fits.
+
+    ``matte`` turns the rectangle into a *shape*: a frame-sized HxW array in 0..1 that multiplies
+    the edge ramp, so only the pixels it marks are taken from ``patch``. It is **sliced, never
+    resampled** — it is already frame-aligned, because it was segmented from these very frames
+    (``comfy_nodes/vorch_matte``). Cropping it through ``at`` instead would superimpose two
+    independent motion estimates, this module's correlation search and SAM2's propagation; a two
+    pixel disagreement would then put a crescent of render inside the lock and a crescent of
+    keyframe outside it, along the object's silhouette — the most visible place it could land.
+
+    Multiplying rather than replacing keeps the edge ramp doing its job, so a shape leaving the
+    frame still fades at the boundary instead of being cut off square.
     """
     fh, fw = frame.shape[:2]
     if at.w <= 0 or at.h <= 0:
         return
-    x0, y0 = max(0, int(np.floor(at.x))), max(0, int(np.floor(at.y)))
-    x1, y1 = min(fw, int(np.ceil(at.x + at.w))), min(fh, int(np.ceil(at.y + at.h)))
+    x0, y0, x1, y1 = window(at, fh, fw)
     if x1 <= x0 or y1 <= y0:
         return
     ph, pw = patch.shape[:2]
@@ -295,6 +317,9 @@ def paste(frame: np.ndarray, patch: np.ndarray, at: Placement, *, feather: float
                         (np.arange(y0, y1 + 1, dtype=float) - at.y) / at.h * ph,
                         (np.arange(x0, x1 + 1, dtype=float) - at.x) / at.w * pw)
     alpha = (_edge_alpha(yc, at.y, at.y + at.h, feather)[:, None]
-             * _edge_alpha(xc, at.x, at.x + at.w, feather)[None, :])[..., None]
+             * _edge_alpha(xc, at.x, at.x + at.w, feather)[None, :])
+    if matte is not None:
+        alpha = alpha * matte[y0:y1, x0:x1]
+    alpha = alpha[..., None]
     region = frame[y0:y1, x0:x1]
     region[:] = region * (1.0 - alpha) + sub * alpha
