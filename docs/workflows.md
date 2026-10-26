@@ -14,7 +14,6 @@ validating against a live ComfyUI:
 |---|---|---|---|
 | `api_wan_t2i` | keyframe | $0.03 | the cheap workhorse; literal sizes 768–1440 |
 | `api_gpt_image_2_t2i` | keyframe | $0.006–0.02 | cheapest per image at `quality: low`; strong instruction-following |
-| `api_dalle3_t2i` | keyframe | $0.04–0.12 | three sizes only, but reliable |
 | `api_seedream5_pro_t2i` | keyframe | $0.045–0.09 | literal sizes up to 4K |
 | `api_qwen3_t2i` | keyframe | $0.057–0.107 | literal sizes, and a real negative prompt |
 | `api_ideogram_v4_t2i` | keyframe | $0.043–0.143 | by far the best at type **inside** the image, Cyrillic included |
@@ -23,6 +22,9 @@ validating against a live ComfyUI:
 | `api_nano_banana2_edit` | edit | $0.041–0.185 | reference-locked edit |
 | `api_seedream5_pro_edit` | edit | $0.045–0.09 | SeedEdit |
 | `api_flux_kontext_max_edit` | edit | $0.08–0.12 | Kontext Max, the reference-locked standard |
+
+`api_dalle3_t2i` was removed on 2026-10-26: ComfyUI dropped its `OpenAIDalle3` node (PR #16121)
+when OpenAI retired DALL·E 3, so from v0.42 it could no longer run.
 
 They need `VORCH_COMFY_API_KEY` (see the README). Prices were read from ComfyUI's own
 `price_badge` on 2026-09-30 and are what **api.comfy.org** bills, which is not the provider's

@@ -22,7 +22,7 @@ def test_modal_scripts_compile_and_pin_the_local_comfy_version():
     servers = [l for l in src.splitlines() if l.startswith("@modal.web_server(")]
     assert len(servers) == 2 and all("requires_proxy_auth=True" in l for l in servers)
     assert "min_containers=" not in src  # cost: never keep-warm in the committed file
-    assert 'COMFY_VERSION = "v0.34.0"' in src
+    assert 'COMFY_VERSION = "v0.42.5"' in src
 
 
 EXPECTED = {  # name -> (kind, backend)

@@ -24,7 +24,7 @@ def test_the_curated_set_is_present_and_loads():
     names = {s.name for s in _hosted()}
     assert len(names) >= 10, names
     # one per provider worth having, across both kinds
-    assert {"api_dalle3_t2i", "api_wan_t2i", "api_ideogram_v4_t2i", "api_nano_banana2_t2i",
+    assert {"api_wan_t2i", "api_ideogram_v4_t2i", "api_nano_banana2_t2i",
             "api_seedream5_pro_t2i", "api_gpt_image_2_t2i"} <= names
     assert {"api_flux_kontext_max_edit", "api_nano_banana2_edit", "api_flux_erase"} <= names
 
