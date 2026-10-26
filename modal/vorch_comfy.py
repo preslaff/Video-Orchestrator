@@ -28,7 +28,7 @@ import urllib.request
 
 import modal
 
-COMFY_VERSION = "v0.34.0"  # local moved to v0.42.5 on 2026-10-26; bump this and redeploy to match
+COMFY_VERSION = "v0.42.5"  # == local ComfyUI (`vorch setup check` shows it); bump both together
 COMFY_DIR = "/root/comfy/ComfyUI"
 PORT = 8188
 MINUTES = 60

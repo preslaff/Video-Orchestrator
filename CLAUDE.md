@@ -95,7 +95,7 @@ LoRAs, 6.3× faster, less motion) is opt-in only.
 **ComfyUI is v0.42.5** (FLUX 3 needs ≥ 0.41): the comfy service runs `~/comfy/ComfyUI-next` (a git
 worktree of `~/comfy/ComfyUI`) with `~/comfy/venv-next`; its `models/`, `input/` and `output/` are
 symlinks into `~/comfy/ComfyUI`, so `VORCH_COMFY_ROOT` and every path below are unchanged. The old
-v0.34.0 checkout and venv are the fallback. The Modal image is still pinned to v0.34.0.
+v0.34.0 checkout and venv are the fallback. The Modal image is pinned to the same v0.42.5 (redeployed and verified 2026-10-26).
 
 **Asset/reference filenames are runtime inputs, never hardcoded.** The `.inputs.image` values currently in the workflow JSONs (`Joro.jpg`, `maj.jpeg`, `FaceSwap_*.png`, etc.) and the names in `NOTES.md` are inert leftover defaults — at runtime the orchestrator overwrites them by node ID, exactly like prompts and seeds (invariant #2). The user (or the pipeline) supplies the master face, identity references, and chained intermediate files dynamically; treat `assets/jena-cropped.jpeg` as the current sample master, not fixed config.
 

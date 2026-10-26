@@ -5,7 +5,7 @@ default; a workflow runs on Modal only when its registry YAML says `backend: mod
 
 | file | purpose |
 |---|---|
-| `vorch_comfy.py` | the Modal app: ComfyUI v0.34.0 (pinned to the local version) as two proxy-authenticated web servers, `comfy_l40s` and `comfy_h100`, models from the `vorch-models` Volume |
+| `vorch_comfy.py` | the Modal app: ComfyUI v0.42.5 (pinned to the local version; v0.34.0 until 2026-10-26) as two proxy-authenticated web servers, `comfy_l40s` and `comfy_h100`, models from the `vorch-models` Volume |
 | `download_models.py` | fills the Volume from Hugging Face (`wan22_fp16`, `wan22_fp8`) |
 | `workflows/` | registry entries for the cloud models: `animate_wan22_fp16` (H100) / `animate_wan22_fp8` (L40S) — the built-in `animate` graph with full-precision loaders; `animate_ltx25` (H100; LTX-2.5 two-stage with audio, sizes /32, 8n+1 frames, 24 fps); `keyframe_flux2_4b` (L40S, Apache 2.0) / `keyframe_flux2_9b` (L40S, **non-commercial**); `animate_wan_animate2` (L40S post-step: Wan-Animate-2 puts the master face/body into the clip) |
 | `upload_local_models.sh` | copies ReActor's models (inswapper, GFPGAN, CodeFormer, buffalo_l) from the local ComfyUI into the Volume for the remote `faceswap_video` variant |
@@ -65,6 +65,14 @@ Modal's side; `vorch setup check --profile <cloud profile>` probed `comfy:modal-
 L40S in 6 min 9 s from face swap to downloaded `s00_clip_00001_.modal-l40s.mp4` (≈ $0.20 of GPU
 time + the 10-minute idle tail). Gotcha fixed on the way: a Volume cannot be mounted over
 ComfyUI's stock `models/` folder, so the image removes it.
+
+### ComfyUI v0.42.5 (2026-10-26)
+
+Bumped `COMFY_VERSION` from v0.34.0 to match the local upgrade (FLUX 3 needs ≥ 0.41). `modal deploy`
+rebuilt the image in 99 s, same URLs. `vorch setup check --deep` saw 0.42.5 on both the L40S and the
+H100 and validated all seven cloud workflows online, ReActor included; a `keyframe_flux2_4b` render
+on the L40S came back in 31 s round trip. Not re-rendered on the new version: the Wan, LTX-2.5 and
+Wan-Animate-2 graphs (validated, not run).
 
 ### Phase C (2026-09-05)
 

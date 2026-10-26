@@ -39,7 +39,7 @@ Decisions:
 └──────────────────────────────────────────────────────────────────────────────────────┘
                                                               ▲ Modal-Key / Modal-Secret
 ┌─ Modal app "vorch-comfy" ────────────────────────────────────┴───────────────────────┐
-│  comfy_l40s  (L40S 48 GB)  ── ComfyUI 0.34 + custom nodes ── Volume vorch-models (~150 GB)│
+│  comfy_l40s  (L40S 48 GB)  ── ComfyUI 0.42.5 + custom nodes ── Volume vorch-models (~150 GB)│
 │  comfy_h100  (H100 80 GB)  ── same image ─────────────────────── (Wan fp16, LTX bf16)    │
 │  @modal.web_server(8188, requires_proxy_auth=True), max_containers=1, scaledown 10 min  │
 └──────────────────────────────────────────────────────────────────────────────────────┘
@@ -169,7 +169,7 @@ Runbook: [`modal/README.md`](../modal/README.md). Files:
 
 | file | what |
 |---|---|
-| `modal/vorch_comfy.py` | app `vorch-comfy`: ComfyUI **v0.34.0** (git clone at the tag, pinned to the local version) on `debian_slim` + `ffmpeg`; two functions `comfy_l40s` (L40S, 64 GB RAM) and `comfy_h100` (H100, 128 GB RAM), each `@modal.web_server(8188, startup_timeout=600, requires_proxy_auth=True)` with `@modal.concurrent(max_inputs=8)`, `max_containers=1`, `scaledown_window=600`, `timeout=24h`; the `vorch-models` Volume mounted at `models/`; ComfyUI started with `--listen 0.0.0.0 --max-upload-size 1024` and awaited on `/system_stats`. No custom nodes in Phase B (the Wan templates are core nodes only); `CUSTOM_NODES` takes `(git url, ref)` pairs for Phase C. |
+| `modal/vorch_comfy.py` | app `vorch-comfy`: ComfyUI **v0.42.5** (v0.34.0 until 2026-10-26) (git clone at the tag, pinned to the local version) on `debian_slim` + `ffmpeg`; two functions `comfy_l40s` (L40S, 64 GB RAM) and `comfy_h100` (H100, 128 GB RAM), each `@modal.web_server(8188, startup_timeout=600, requires_proxy_auth=True)` with `@modal.concurrent(max_inputs=8)`, `max_containers=1`, `scaledown_window=600`, `timeout=24h`; the `vorch-models` Volume mounted at `models/`; ComfyUI started with `--listen 0.0.0.0 --max-upload-size 1024` and awaited on `/system_stats`. No custom nodes in Phase B (the Wan templates are core nodes only); `CUSTOM_NODES` takes `(git url, ref)` pairs for Phase C. |
 | `modal/download_models.py` | `modal run … --only wan22_fp16|wan22_fp8|all`: `hf_hub_download` from `Comfy-Org/Wan_2.2_ComfyUI_Repackaged` into `models/<subdir>/` on the Volume (size-checked skip, `volume.commit()`); `HF_TOKEN` passed from the local shell for gated repos. |
 | `modal/workflows/` | `animate_wan22_fp16` (→ `modal-h100`) and `animate_wan22_fp8` (→ `modal-l40s`): the built-in `animate` graph with `UNETLoader`/`CLIPLoader` instead of the GGUF loaders, same node ids and params, sizes up to 1280. Copied into `~/vorch/workflows/`. |
 | `modal/profiles/` | `{name, base, overrides}` YAMLs for `vorch profiles --import`: cloud cinematic 16:9 (fp16, 81 frames), cloud cinematic 720p, cloud social 9:16 (fp8 on L40S). Klein and ReActor stay local in all of them. |
