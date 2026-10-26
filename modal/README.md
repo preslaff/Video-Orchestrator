@@ -71,8 +71,10 @@ ComfyUI's stock `models/` folder, so the image removes it.
 Bumped `COMFY_VERSION` from v0.34.0 to match the local upgrade (FLUX 3 needs ≥ 0.41). `modal deploy`
 rebuilt the image in 99 s, same URLs. `vorch setup check --deep` saw 0.42.5 on both the L40S and the
 H100 and validated all seven cloud workflows online, ReActor included; a `keyframe_flux2_4b` render
-on the L40S came back in 31 s round trip. Not re-rendered on the new version: the Wan, LTX-2.5 and
-Wan-Animate-2 graphs (validated, not run).
+on the L40S came back in 31 s round trip. `animate_wan22_fp8` rendered on the L40S too — 832×480 × 49,
+the same frame, prompt and seed as local job 7f3e52aa's scene 1: 4 min 16 s from upload to downloaded
+clip, against ~7.5 min for the local Q5 GGUF, near-identical motion, no artefacts. Not re-rendered on
+the new version: Wan fp16, LTX-2.5 and Wan-Animate-2 (validated, not run).
 
 ### Phase C (2026-09-05)
 
