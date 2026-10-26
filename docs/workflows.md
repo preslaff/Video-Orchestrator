@@ -42,11 +42,13 @@ Two local entries sit beside the originals; pick them in a profile, the job wiza
 it at 16 steps / cfg 1, on the strength of the A/B below — and `keyframe` (FLUX.2) stays one
 choice away for the grainier, film-like look. `animate` stays the video default.
 
-A scene that picks the *other* keyframe model renders with that workflow's own template sampler
-settings (FLUX.2 20 / cfg 5, FLUX 3 16 / cfg 1), not the profile's: those were chosen for the
-profile's model, and FLUX.2 at cfg 1 or FLUX 3 at cfg 5 ruins the frame
-(`Orchestrator.scene_params`). A user profile switched between the two in the editor does not get
-that help — change its steps and cfg along with the workflow.
+A keyframe model's steps and cfg do not transfer — FLUX.2 at cfg 1 or FLUX 3 at cfg 5 ruins the
+frame — so each keyframe YAML declares the numbers vorch runs it at as the param `default`
+(`keyframe` 24 / 5.0, `keyframe_flux3` 16 / 1.0). The profile editor applies them when you switch
+its workflow, and a scene that picks the *other* model than its profile renders with them rather
+than the profile's (`Orchestrator.scene_params`). A workflow that declares no `default` keeps the
+editor's numbers and, per scene, renders with its template's own. Give a new local keyframe
+workflow its `default`s when its template's sampler values are not the ones to run it at.
 
 | workflow | kind | instead of | what changes |
 |---|---|---|---|

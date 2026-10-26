@@ -51,11 +51,15 @@ def test_another_keyframe_model_renders_with_its_own_sampler_settings(make_store
 
         flux2 = o.scene_params(Scene(index=0, keyframe_workflow="keyframe")).keyframe_kwargs()
         assert flux2["workflow"] == "keyframe"
-        assert flux2["steps"] is None and flux2["cfg"] is None and "unet" not in flux2
+        assert (flux2["steps"], flux2["cfg"]) == (24, 5.0) and "unet" not in flux2   # its YAML defaults
         assert flux2["negative"] == o.params.keyframe_negative     # FLUX.2 does use it
 
         same = o.scene_params(Scene(index=0, keyframe_workflow="keyframe_flux3")).keyframe_kwargs()
         assert (same["steps"], same["cfg"]) == (16, 1.0)            # naming the profile's own: no change
+
+        # a workflow that declares no defaults renders with its template's values (nothing sent)
+        hosted = o.scene_params(Scene(index=0, keyframe_workflow="api_wan_t2i")).keyframe_kwargs()
+        assert hosted["steps"] is None and hosted["cfg"] is None
     finally:
         store.close()
 

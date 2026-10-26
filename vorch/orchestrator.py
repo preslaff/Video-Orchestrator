@@ -830,8 +830,12 @@ class Orchestrator:
             if scene.keyframe_workflow != self.params.keyframe_workflow:
                 # The profile's steps/cfg/unet were chosen for ITS model: FLUX 3 is distilled
                 # (16 / cfg 1), FLUX.2 is not (24 / cfg 5). Sent to the other model they ruin
-                # the frame, so the scene's workflow renders with its own template values.
-                changes.update(steps=None, cfg=None, unet=None)
+                # the frame, so the scene's workflow renders with the settings its YAML declares
+                # as `default`, or its template's own when it declares none (None = not sent).
+                params = registry.load_registry().get(scene.keyframe_workflow).params
+                changes.update(unet=None, **{
+                    n: params[n].default if n in params else None for n in ("steps", "cfg")
+                })
         return self.params.with_(**changes) if changes else self.params
 
     @staticmethod

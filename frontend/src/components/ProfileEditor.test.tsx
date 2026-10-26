@@ -19,6 +19,8 @@ const profile = {
 
 const WORKFLOWS = {
   workflows: [{ name: 'animate', kind: 'animate' }, { name: 'keyframe', kind: 'keyframe' },
+              { name: 'keyframe_flux3', kind: 'keyframe', params: { steps: { default: 16 }, cfg: { default: 1.0 } } },
+              { name: 'api_wan_t2i', kind: 'keyframe', params: {} },
               { name: 'identity_edit', kind: 'edit' }, { name: 'faceswap', kind: 'faceswap' }],
   errors: {}, kinds: ['keyframe', 'animate'], user_dir: '~/vorch/workflows',
 }
@@ -83,5 +85,23 @@ describe('ProfileEditor render cost', () => {
     expect(cost).toHaveTextContent(/2\.6× the tested 16 GB budget/)
     expect(cost).toHaveTextContent(/expect RAM offload, long renders or OOM/)
     expect(cost).toHaveTextContent(/~\d+–\d+ min per clip/)   // the wait that number costs
+  })
+})
+
+describe('ProfileEditor keyframe workflow', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("switching model applies that workflow's own steps and cfg", async () => {
+    renderEditor()
+    const user = userEvent.setup()
+    const pick = screen.getAllByLabelText('workflow')[0]
+    await screen.findByRole('option', { name: 'keyframe_flux3' })
+    await user.selectOptions(pick, 'keyframe_flux3')
+    expect(screen.getByLabelText('steps')).toHaveValue(16)
+    expect(screen.getByLabelText('cfg')).toHaveValue(1)
+
+    await user.selectOptions(pick, 'api_wan_t2i')              // declares none: keep what is there
+    expect(screen.getByLabelText('steps')).toHaveValue(16)
+    expect(screen.getByLabelText('cfg')).toHaveValue(1)
   })
 })

@@ -59,6 +59,13 @@ export function ProfileEditor({ profile, mode }: { profile: OutputProfile; mode:
   const byKind = (kind: string) => workflows.data?.workflows.filter((w) => w.kind === kind).map((w) => w.name) ?? []
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((x) => ({ ...x, [k]: v }))
+  // A keyframe model's steps/cfg do not transfer: FLUX 3 is distilled (16 / cfg 1), FLUX.2 is not
+  // (24 / cfg 5). Switching applies the numbers the new workflow's YAML declares as `default`.
+  const pickKeyframeWorkflow = (name: string) => {
+    const p = workflows.data?.workflows.find((w) => w.name === name)?.params
+    const dflt = (k: 'steps' | 'cfg') => (typeof p?.[k]?.default === 'number' ? (p[k].default as number) : d.keyframe[k])
+    set('keyframe', { ...d.keyframe, workflow: name, steps: dflt('steps'), cfg: dflt('cfg') })
+  }
   /** What this size costs: VRAM headroom and how long one clip takes. The numbers come from
    *  measured runs; a legal size can still be one nobody wants to wait for. */
   const renderCost = (v: Draft['video']) => {
@@ -147,7 +154,7 @@ export function ProfileEditor({ profile, mode }: { profile: OutputProfile; mode:
         </Card>
         <Card title="Keyframe (Klein)">
           <div className="grid gap-3 sm:grid-cols-3">
-            <label className="block sm:col-span-3"><span className="text-xs text-neutral-500">workflow</span><select value={d.keyframe.workflow} onChange={(e) => set('keyframe', { ...d.keyframe, workflow: e.target.value })} className={sel}>{[d.keyframe.workflow, ...byKind('keyframe')].filter((v, i, a) => a.indexOf(v) === i).map((w) => <option key={w} value={w}>{w}</option>)}</select></label>
+            <label className="block sm:col-span-3"><span className="text-xs text-neutral-500">workflow</span><select value={d.keyframe.workflow} onChange={(e) => pickKeyframeWorkflow(e.target.value)} className={sel}>{[d.keyframe.workflow, ...byKind('keyframe')].filter((v, i, a) => a.indexOf(v) === i).map((w) => <option key={w} value={w}>{w}</option>)}</select></label>
             <label className="block"><span className="text-xs text-neutral-500">width</span><input type="number" step={16} value={shown(d.keyframe.width)} onChange={(e) => set('keyframe', { ...d.keyframe, width: num(e.target.value) })} className={inp} /></label>
             <label className="block"><span className="text-xs text-neutral-500">height</span><input type="number" step={16} value={shown(d.keyframe.height)} onChange={(e) => set('keyframe', { ...d.keyframe, height: num(e.target.value) })} className={inp} /></label>
             <label className="block"><span className="text-xs text-neutral-500">steps</span><input type="number" min={1} value={shown(d.keyframe.steps)} onChange={(e) => set('keyframe', { ...d.keyframe, steps: num(e.target.value) })} className={inp} /></label>
