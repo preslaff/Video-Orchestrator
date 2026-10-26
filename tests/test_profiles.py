@@ -24,7 +24,7 @@ def test_builtins_load_validate_and_map_to_genparams():
     assert GenParams.from_profile(s).variants_per_scene == 4
     v = b["social_9x16"]
     assert (v.keyframe.width, v.keyframe.height, v.video.width, v.video.height) == (576, 1024, 480, 832)
-    assert v.workflows_used() == ["keyframe", "animate", "faceswap"]
+    assert v.workflows_used() == ["keyframe_flux3", "animate", "faceswap"]
 
 
 def test_gates_for_kind():

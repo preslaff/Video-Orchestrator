@@ -40,6 +40,26 @@ def test_scene_params_overrides_only_what_the_scene_names(make_store):
         store.close()
 
 
+def test_another_keyframe_model_renders_with_its_own_sampler_settings(make_store):
+    """FLUX 3 is distilled (16 / cfg 1), FLUX.2 is not (24 / cfg 5): the profile's numbers belong
+    to the profile's model, so a scene on the other one must not inherit them."""
+    store = make_store()
+    try:
+        o = Orchestrator(store, profile=profiles.default_profile())
+        assert o.params.keyframe_workflow == "keyframe_flux3"
+        assert (o.params.steps, o.params.cfg) == (16, 1.0)
+
+        flux2 = o.scene_params(Scene(index=0, keyframe_workflow="keyframe")).keyframe_kwargs()
+        assert flux2["workflow"] == "keyframe"
+        assert flux2["steps"] is None and flux2["cfg"] is None and "unet" not in flux2
+        assert flux2["negative"] == o.params.keyframe_negative     # FLUX.2 does use it
+
+        same = o.scene_params(Scene(index=0, keyframe_workflow="keyframe_flux3")).keyframe_kwargs()
+        assert (same["steps"], same["cfg"]) == (16, 1.0)            # naming the profile's own: no change
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("name,msg", [
     ("no_such_model", "unknown keyframe workflow"),
     ("identity_edit", "is kind 'edit', not 'keyframe'"),   # right name, wrong kind

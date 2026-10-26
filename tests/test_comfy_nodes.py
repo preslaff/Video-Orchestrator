@@ -4,8 +4,8 @@ The node lives in ComfyUI's world, not vorch's: it needs torch, and vorch's runt
 packages by design (``pyproject.toml``). So the helper tests are marked and **skip here**. To run
 them you need ComfyUI's interpreter *and* a pytest in it, which it does not have by default:
 
-    ~/WORK/LTX-Colab/venv/bin/python -m pip install pytest     # not installed by default
-    ~/WORK/LTX-Colab/venv/bin/python -m pytest -q tests/test_comfy_nodes.py
+    ~/comfy/venv-next/bin/python -m pip install pytest     # not installed by default
+    ~/comfy/venv-next/bin/python -m pytest -q tests/test_comfy_nodes.py
 
 Be honest about what that means: as the machine stands, those two skip everywhere. Their
 assertions were verified by running the node directly in the comfy venv against a synthetic moving

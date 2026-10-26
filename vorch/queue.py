@@ -887,7 +887,8 @@ def _scene_prompts(orch: Orchestrator, job: Job, scene):
     """The keyframe and animation prompts for one scene, written the way the storyboard writes them.
 
     Same context as ``_phase_storyboard``: the job's profile decides format, style and negatives,
-    and the project's assets are offered only when the job is in edit mode.
+    and the project's assets are offered only when the job is in edit mode. The scene's own
+    keyframe workflow, when it has one, decides the prompt's dialect (FLUX 3 vs FLUX.2).
     """
     project = projects_mod.load(orch.store, job.project_id) if job.project_id else None
     asset_list = tuple(
@@ -895,7 +896,7 @@ def _scene_prompts(orch: Orchestrator, job: Job, scene):
         if a.kind in ("master_face", "reference", "product", "logo")
     )
     context = storyboard.PromptContext.from_params(
-        orch.params, assets=asset_list if (orch.face_swap or job.mode == "edit") else (),
+        orch.scene_params(scene), assets=asset_list if (orch.face_swap or job.mode == "edit") else (),
         edit_mode=job.mode == "edit",
     )
     brief = storyboard.SceneBrief(scene=scene.index + 1, description=scene.description,

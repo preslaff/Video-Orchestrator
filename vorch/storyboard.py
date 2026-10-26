@@ -2,7 +2,7 @@
 
 Three tasks, all returning structured JSON the orchestrator chains:
 1. ``generate_storyboard`` — idea -> list of scene briefs.
-2. ``keyframe_prompt`` — scene brief -> FLUX.2 Klein image prompt.
+2. ``keyframe_prompt`` — scene brief -> keyframe image prompt (FLUX.2 or FLUX 3 Klein).
 3. ``animation_prompt`` — scene brief -> Wan motion prompt.
 
 System prompts are Bulgarian (Georgi's working language, and what the prompts
@@ -18,7 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from . import formats
+from . import formats, registry
 from .clients import gemma
 
 log = logging.getLogger("vorch.storyboard")
@@ -93,6 +93,7 @@ class PromptContext:
     clip_seconds: float = 3.06
     style_positive: str = ""            # technique vocabulary that goes first in the prompt
     style_negative: str = ""            # Klein negative
+    keyframe_workflow: str = "keyframe"  # picks the keyframe prompt's dialect (_keyframe_system)
     wan_positive: str = "cinematic"     # how the motion prompt should end
     wan_negative: str = ""              # Wan negative
     assets: tuple[tuple[str, str, str], ...] = ()   # (asset id, kind, label) the storyboard may assign
@@ -112,6 +113,7 @@ class PromptContext:
             clip_seconds=params.clip_seconds,
             style_positive=params.style_prefix,
             style_negative=params.keyframe_negative,
+            keyframe_workflow=params.keyframe_workflow,
             wan_positive=params.animation_suffix or "cinematic",
             wan_negative=params.animate_negative,
         )
@@ -288,6 +290,34 @@ _SYSTEM_KEYFRAME = """Ти пишеш промпти за FLUX.2 Klein image м�
 - Спазвай зададения формат/кадриране
 - Течлива проза на английски. Връщаш само JSON."""
 
+# FLUX 3 Klein reads long, literal captions (a Qwen3-VL encoder, not FLUX.2's short-prompt
+# habits). These are BFL's own prompt-upsampler rules (the system prompt of their
+# qwen3.5_9b_flux3_prompt_upsampler), with the output changed from a bare caption to our JSON.
+# Kept in English, unlike the prompts above: this exact text is what was measured — Gemma
+# with it fixed a cropped "full figure" just as BFL's upsampler did, for 15-17 s on CPU and
+# no VRAM (docs/workflows.md §0a). A translation would be an untested prompt.
+_SYSTEM_KEYFRAME_FLUX3 = """You write the prompt for FLUX 3 Image Klein, a text-to-image model. Expand the scene brief into ONE detailed, self-contained caption: the exact text the image model receives. The caption has no greetings, explanations, refusals, questions, Markdown, headings, coordinates, ids or angle-bracket tokens. The request begins with a "TARGET CANVAS: W:H" line: compose for that canvas (wide spreads content sideways, tall stacks it) and never mention the ratio or the canvas.
+
+Fidelity and planning: keep every explicit subject, attribute, count, spatial constraint, style cue and piece of wording; never contradict, substitute, drop or narrow the request, and keep an abstract concept abstract. Decide everything left open as ONE concrete, consistent plan; never offer alternatives or hedge. Never re-express a stated constraint through another mechanism; add camera optics (depth of field, bokeh, blur) only when asked for or implied. Without a stated style, plan an actual photograph and open with the medium convention ("Full-color outdoor photograph, ...", "Full-color indoor photograph, ...", "Studio photograph, ...", "Close-up photograph, ..."); keep "Photorealistic" for renders, and turn "photorealistic" or "realistic" requests for photos into the photograph convention. Give a photograph a few ordinary, non-ideal specifics drawn from the scene's own objects instead of the stock-photo ideal. Do not invent names, brands, logos or celebrities; keep user-named ones. A long request keeps its content but not its wording: drop appraisal and sales vocabulary, turn moods into observable physical facts, and add only new concrete content with positions. Time of day is lighting, not rendered text.
+
+Caption format: one continuous prose block in the generative voice, never "this image shows", "we can see" or "is visible". Lead with medium and style, then scene, lighting and camera, then the subjects with concrete colors, materials and state. Every person in focus gets an observable profile: ethnicity, gender, age range, skin tone ("fair skin", "brown skin"), hair and clothing. Make the layout reconstructable from words: frame-relative positions (frame-left, frame-right, upper, lower, foreground, midground, background), sentence-initial anchors ("On the left, ...", "In the background, ..."), relations (holds, faces, behind) and a consistent order; describe up to about ten instances one by one, beyond that give the exact count and arrangement. Out-of-focus or distant planes are shapes, colors and silhouettes, never identities or readable text, and the background takes about a sixth of the caption. Be definite: no hedging adverbs, no quality or emotion judgments, no closing sentence about mood; state negations as what is present. Rendered text: transcribe every wording verbatim inside double quotes in its original language and script, keep the line breaks of multi-line text, and give its typography, color and placement; author concrete, domain-correct wording when the request needs text it does not supply, and name canonical structures (calendar, keyboard, periodic table) exactly with their full layout. All prose is English; only quoted text keeps its language. Typical length is 100 to 350 words, more for complex scenes.
+
+Return only JSON: {"positive": "<the caption>", "negative": "<the negative you are given, unchanged>"}."""
+
+# A 100-350 word caption plus the JSON around it; FLUX.2's 600 would cut it off mid-sentence.
+_FLUX3_MAX_TOKENS = 1200
+
+
+def _keyframe_system(workflow: str) -> tuple[str, int]:
+    """(system prompt, max_tokens) for the keyframe workflow's model: FLUX 3 by its ``flux3``
+    tag, everything else the FLUX.2 rules (an unknown name included — never fail on a prompt)."""
+    try:
+        tags = registry.load_registry().get(workflow).tags
+    except (KeyError, registry.RegistryError):
+        tags = []
+    return (_SYSTEM_KEYFRAME_FLUX3, _FLUX3_MAX_TOKENS) if "flux3" in tags else (_SYSTEM_KEYFRAME, 600)
+
+
 _SYSTEM_ANIMATION = """Ти пишеш промпти за Wan 2.2 image-to-video. Правила:
 - Описвай ДВИЖЕНИЕ и КАМЕРА, не статичната сцена (тя вече е в keyframe-а)
 - ЕДНО доминиращо движение на клип; количеството движение според дължината на клипа
@@ -301,7 +331,8 @@ def keyframe_prompt(
     context: PromptContext | None = None,
     timeout: int = 300,
 ) -> PromptPair:
-    """Scene brief -> FLUX.2 Klein keyframe prompt (positive + negative).
+    """Scene brief -> keyframe prompt (positive + negative), in the dialect of
+    ``context.keyframe_workflow``'s model (``_keyframe_system``).
 
     ``style`` (the job's free-text style) and the profile's ``style_positive``
     both go into the "technique first" slot; the profile negative is merged
@@ -310,13 +341,15 @@ def keyframe_prompt(
     ctx = context or DEFAULT_CONTEXT
     style_line = ", ".join(x for x in (style, ctx.style_positive) if x) or "photorealistic, cinematic"
     negative = ctx.style_negative or DEFAULT_KEYFRAME_NEGATIVE
+    system, max_tokens = _keyframe_system(ctx.keyframe_workflow)
     user = (
-        f"Сцена: {scene.model_dump_json(exclude=PROMPT_EXCLUDE)}\n"
+        (f"TARGET CANVAS: {ctx.aspect}\n" if system is _SYSTEM_KEYFRAME_FLUX3 else "")
+        + f"Сцена: {scene.model_dump_json(exclude=PROMPT_EXCLUDE)}\n"
         f"Стил/техника: {style_line}\n"
         f"Формат: {ctx.aspect} ({ctx.orientation}). Кадриране: {ctx.framing_hint}\n"
         f'Върни JSON: {{"positive": "...", "negative": "{negative}"}}'
     )
-    pair = _prompt_pair(_SYSTEM_KEYFRAME, user, max_tokens=600, timeout=timeout, label="keyframe")
+    pair = _prompt_pair(system, user, max_tokens=max_tokens, timeout=timeout, label="keyframe")
     return PromptPair(positive=pair.positive, negative=merge_negatives(pair.negative, ctx.style_negative))
 
 

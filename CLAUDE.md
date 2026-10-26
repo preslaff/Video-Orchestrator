@@ -85,6 +85,18 @@ The five ComfyUI workflow templates in `workflows/` (names in `NOTES.md` §3 and
 | `ReActor_Face_Swap.json`                      | impose master face                   |
 | `image_flux2_klein_9b_kv_image_edit.json`     | reserve KV-cache edit variant        |
 
+Two more ship beside these (`docs/workflows.md` §0a). **`keyframe_flux3`
+(`image_flux3_klein_distilled_t2i.json`, FLUX 3 Image Klein, 16 steps / cfg 1) is the keyframe
+default in every built-in profile since 2026-10-26**; FLUX.2 `keyframe` stays available per profile
+or per scene, and Gemma writes FLUX 3 prompts with BFL's upsampler rules (`flux3` tag →
+`storyboard._SYSTEM_KEYFRAME_FLUX3`). `animate_fast` (`wan22_i2v_gguf_4step.json`, lightx2v 4-step
+LoRAs, 6.3× faster, less motion) is opt-in only.
+
+**ComfyUI is v0.42.5** (FLUX 3 needs ≥ 0.41): the comfy service runs `~/comfy/ComfyUI-next` (a git
+worktree of `~/comfy/ComfyUI`) with `~/comfy/venv-next`; its `models/`, `input/` and `output/` are
+symlinks into `~/comfy/ComfyUI`, so `VORCH_COMFY_ROOT` and every path below are unchanged. The old
+v0.34.0 checkout and venv are the fallback. The Modal image is still pinned to v0.34.0.
+
 **Asset/reference filenames are runtime inputs, never hardcoded.** The `.inputs.image` values currently in the workflow JSONs (`Joro.jpg`, `maj.jpeg`, `FaceSwap_*.png`, etc.) and the names in `NOTES.md` are inert leftover defaults — at runtime the orchestrator overwrites them by node ID, exactly like prompts and seeds (invariant #2). The user (or the pipeline) supplies the master face, identity references, and chained intermediate files dynamically; treat `assets/jena-cropped.jpeg` as the current sample master, not fixed config.
 
 All workflow JSONs are **ComfyUI API format** (flat dict keyed by node ID), not UI export (which has a `nodes` array and won't work with `/prompt`). Node IDs in the templates can be compound (e.g. `75:73`, `75:68`). Each template has a **sidecar YAML** (`workflows/<name>.yaml`) that is the executable source of truth for which `(node, field)` pairs are replaced — `NOTES.md` §3 is the original prose version. Five entries ship: `keyframe`, `animate`, `faceswap`, `identity_edit`, `kv_edit`.

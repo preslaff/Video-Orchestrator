@@ -52,16 +52,22 @@ services:
     log: gemma.log
 
   comfy:
-    description: ComfyUI — FLUX.2 Klein, Wan 2.2 (GGUF), ReActor
+    description: ComfyUI v0.42.5 — FLUX 3 / FLUX.2 Klein, Wan 2.2 (GGUF), ReActor
     manage: full
-    cwd: ~/comfy/ComfyUI
+    # A git worktree of ~/comfy/ComfyUI at tag v0.42.5 (FLUX 3 needs >= 0.41). Its models/, input/
+    # and output/ are symlinks into ~/comfy/ComfyUI, so VORCH_COMFY_ROOT does not move; only the
+    # code and the venv differ. The old v0.34.0 checkout is the fallback: put the three ~/comfy/ComfyUI
+    # and LTX-Colab/venv paths back. docs/workflows.md §0a has the A/B that justified the switch.
+    cwd: ~/comfy/ComfyUI-next
     # main.py directly, with the interpreter named, rather than `comfy launch`. comfy-cli picks the
     # interpreter from VIRTUAL_ENV (comfy_cli/resolve_python.py) and falls back to the workspace's
     # own venv — which here has almost none of the custom-node dependencies: no gguf, so Wan's
     # UnetLoaderGGUF is missing, and no onnxruntime, so ReActor fails too. Naming the interpreter
     # removes the guess, and it is also what was running before any of this was managed.
-    argv: [~/WORK/LTX-Colab/venv/bin/python, main.py, --enable-manager]
-    match: {cmdline_contains: ["main.py"], cwd: ~/comfy/ComfyUI}
+    # venv-next is a copy of ~/WORK/LTX-Colab/venv with ComfyUI's own requirements upgraded
+    # (same torch 2.11.0+cu130, `pip check` clean).
+    argv: [~/comfy/venv-next/bin/python, main.py, --enable-manager]
+    match: {cmdline_contains: ["main.py"], cwd: ~/comfy/ComfyUI-next}
     health: {probe: http, url: "${VORCH_COMFY_URL}/system_stats", timeout: 5}
     ready_timeout: 300                 # custom nodes import slowly
     # 222 MiB idle. needs_mb is VRAM that must be FREE ON THE CARD before a heavy render, not the

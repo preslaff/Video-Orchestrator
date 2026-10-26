@@ -3,7 +3,8 @@ name: Social vertical 9:16
 purpose: social_vertical
 kind: video
 aspect: "9:16"
-keyframe: {workflow: keyframe, width: 576, height: 1024, steps: 24, cfg: 5.0}
+# FLUX 3 Klein is step- and guidance-distilled: 16 steps, cfg 1 (negative has no effect). FLUX.2 = workflow: keyframe, 24 / 5.0
+keyframe: {workflow: keyframe_flux3, width: 576, height: 1024, steps: 16, cfg: 1.0}
 video: {workflow: animate, width: 480, height: 832, length: 49, fps: 16}
 style:
   keyframe_prefix: ""

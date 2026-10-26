@@ -136,6 +136,32 @@ def test_animation_prompt_uses_clip_length_and_suffix(monkeypatch):
     assert pair.negative == "jitter, warped face"
 
 
+def test_flux3_keyframes_get_bfls_caption_rules_and_room_to_write_them(monkeypatch):
+    seen = []
+    monkeypatch.setattr(storyboard.gemma, "complete_text",
+                        lambda system, user, **kw: seen.append((system, user, kw["max_tokens"]))
+                        or '{"positive": "Studio photograph, ...", "negative": "n"}')
+    ctx = storyboard.PromptContext(aspect="9:16", keyframe_workflow="keyframe_flux3")
+    keyframe_prompt(SceneBrief(scene=1, description="d"), context=ctx)
+    system, user, max_tokens = seen[0]
+    assert "FLUX 3" in system and "frame-left" in system and "verbatim inside double quotes" in system
+    assert user.startswith("TARGET CANVAS: 9:16\n") and max_tokens == 1200
+
+    for other in ("keyframe", "api_ideogram_v4_t2i", "not_installed"):   # FLUX.2 rules, as before
+        seen.clear()
+        keyframe_prompt(SceneBrief(scene=1, description="d"),
+                        context=storyboard.PromptContext(keyframe_workflow=other))
+        assert seen[0][0] == storyboard._SYSTEM_KEYFRAME and "TARGET CANVAS" not in seen[0][1]
+        assert seen[0][2] == 600
+
+
+def test_context_carries_the_keyframe_workflow():
+    from vorch.genparams import GenParams
+
+    p = GenParams.for_aspect("16:9", keyframe_workflow="keyframe_flux3")
+    assert storyboard.PromptContext.from_params(p).keyframe_workflow == "keyframe_flux3"
+
+
 def test_default_context_keeps_legacy_prompts(monkeypatch):
     calls = _capture(monkeypatch, '{"positive": "p", "negative": "n"}')
     keyframe_prompt(SceneBrief(scene=1, description="d"))

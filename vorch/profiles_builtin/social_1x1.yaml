@@ -3,7 +3,8 @@ name: Social square 1:1
 purpose: social_square
 kind: video
 aspect: "1:1"
-keyframe: {workflow: keyframe, width: 768, height: 768, steps: 24, cfg: 5.0}
+# FLUX 3 Klein is step- and guidance-distilled: 16 steps, cfg 1 (negative has no effect). FLUX.2 = workflow: keyframe, 24 / 5.0
+keyframe: {workflow: keyframe_flux3, width: 768, height: 768, steps: 16, cfg: 1.0}
 video: {workflow: animate, width: 640, height: 640, length: 49, fps: 16}
 style:
   keyframe_prefix: ""

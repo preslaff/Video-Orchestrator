@@ -26,6 +26,7 @@ import shutil
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -821,11 +822,16 @@ class Orchestrator:
         workflow (``pipeline.stage_references``), so a scene on another workflow must stage to
         that workflow's backend.
         """
-        changes: dict[str, str] = {}
+        changes: dict[str, Any] = {}
         if scene.edit_workflow:
             changes["edit_workflow"] = scene.edit_workflow
         if scene.keyframe_workflow:
             changes["keyframe_workflow"] = scene.keyframe_workflow
+            if scene.keyframe_workflow != self.params.keyframe_workflow:
+                # The profile's steps/cfg/unet were chosen for ITS model: FLUX 3 is distilled
+                # (16 / cfg 1), FLUX.2 is not (24 / cfg 5). Sent to the other model they ruin
+                # the frame, so the scene's workflow renders with its own template values.
+                changes.update(steps=None, cfg=None, unet=None)
         return self.params.with_(**changes) if changes else self.params
 
     @staticmethod

@@ -33,6 +33,75 @@ They live apart from the local workflows so a ComfyUI built without `comfy_api_n
 clean registry, and none of them takes a local workflow's name — a hosted entry called `keyframe`
 would quietly send every job to a paid API.
 
+## 0a. Local alternatives to the built-ins
+
+Two local entries sit beside the originals; pick them in a profile, the job wizard or per scene
+(§1a). **Since 2026-10-26 `keyframe_flux3` is the keyframe default** — every built-in profile uses
+it at 16 steps / cfg 1, on the strength of the A/B below — and `keyframe` (FLUX.2) stays one
+choice away for the grainier, film-like look. `animate` stays the video default.
+
+A scene that picks the *other* keyframe model renders with that workflow's own template sampler
+settings (FLUX.2 20 / cfg 5, FLUX 3 16 / cfg 1), not the profile's: those were chosen for the
+profile's model, and FLUX.2 at cfg 1 or FLUX 3 at cfg 5 ruins the frame
+(`Orchestrator.scene_params`). A user profile switched between the two in the editor does not get
+that help — change its steps and cfg along with the workflow.
+
+| workflow | kind | instead of | what changes |
+|---|---|---|---|
+| `animate_fast` | animate | `animate` | the same Wan 2.2 Q5 GGUF experts, each behind lightx2v's official 4-step I2V distill LoRA (`wan2.2_i2v_A14b_{high,low}_noise_lora_rank64_lightx2v_4step_1022`); 4 steps, split 2, cfg 1, so the negative prompt does nothing |
+| `keyframe_flux3` | keyframe | `keyframe` | FLUX 3 Image Klein distilled (5.6B, int8) + Qwen3-VL-4B int8, 16 steps / cfg 1; the official template flattened, without its optional 9B prompt upsampler |
+
+**`animate_fast`, measured 2026-10-25** on the RTX 5070 Ti, ComfyUI 0.42.5, 480×832 × 81 frames,
+same keyframe and seed, model load included: **138 s** against **871 s** for `animate` (6.3×), peak
+VRAM 13603 vs 13579 MiB, so the LoRAs cost nothing that matters. Both clips were clean (hands, bag
+straps, jewellery stable). The 4-step clip moves **less** — a smaller camera move, the subject
+holds her pose where the 20-step one lifts the bag to her shoulder — and looks slightly more
+polished. That is the known price of a step distill: use it for drafts and iteration, keep
+`animate` for shots whose point is large motion. Raising its steps or cfg toward 20 / 3.5 defeats
+the distill rather than improving it. The full-weight lightx2v distills (15–57 GB per expert) do
+not fit this card; the LoRAs over the GGUFs we already have do.
+
+**`keyframe_flux3` needs ComfyUI ≥ 0.41** (FLUX 3 support, PR #17064). Licence: the **FLUX
+Kommunity License** — free commercial use only under $5M annual revenue — where FLUX.2 Klein 4B is
+Apache 2.0.
+
+**`keyframe_flux3` against `keyframe`, measured 2026-10-26** on the same card and ComfyUI, three
+prompts from our failure classes × two seeds, FLUX.2 at production settings (24 steps / cfg 5,
+profile negative), FLUX 3 at its defaults: **2.0 s against 6.0 s per image** warm (4.5 vs 10.3 s with
+the model load), **peak VRAM 11909 vs 14605 MiB**. Hands on a bag handle: FLUX 3 drew both hands
+and an actual silk scarf tied on the handle in both seeds; FLUX.2 gave a ribbon and, unasked,
+elderly hands. Strap over the shoulder: both connected the strap in all four images; FLUX 3 also
+got the hands right (coffee in the left), and neither model kept the head in a "full-figure" frame.
+Label: **FLUX.2 wrote "Hyaluronic Serram" in both seeds; FLUX 3 spelled "AURELIA / Hyaluronic Serum
+/ 30 ml" correctly in both**. Both decode through the same `flux2-vae`, so a misspelt keyframe
+label is the image model's doing, and a better keyframe model fixes it. That does not touch the
+finding in `docs/model-tuning-options.md`, which is about type **in video** — Wan's VAE compresses
+8× and loses the glyphs whatever the keyframe got right, which is what `locked_regions` is for.
+Look: FLUX 3 is cleaner and more commercial, FLUX.2 grainier and more film-like — a matter of
+brief, not of quality.
+
+**Who rewrites the prompt for FLUX 3, measured the same day** (same prompts and seeds, Gemma
+resident as in production): BFL's prompt upsampler (`qwen3.5_9b_flux3_prompt_upsampler_w4a8`, 6.7 GB,
+the template's `TextGenerate` branch) against Gemma given **the upsampler's own system prompt**.
+Both rewrites fixed the one thing the raw prompt failed — "full figure" finally kept the head in
+frame (the upsampler went head to shoes) — and kept the hands, the tied scarf, the connected strap
+and the label spelling right. Cost: the upsampler ~3.5–4 s per prompt on the GPU but a **peak of
+15608 MiB** with Gemma resident, ~700 MiB from the ceiling; Gemma 15–17 s on the CPU and no VRAM
+beyond its resident 1.5 GB (peak 13624 MiB). The upsampler's rewrites are deterministic and
+detailed enough that the two seeds came out nearly identical, which costs variants. Gemma 4 needs
+thinking off (`clients/gemma.complete_text` does it) or it spends `max_tokens` reasoning and answers
+with an empty string — the first run of this test rendered five images from nothing. Small sample:
+three prompts, two seeds.
+
+**So Gemma writes FLUX 3 prompts with BFL's rules** (`storyboard._SYSTEM_KEYFRAME_FLUX3`, in force
+whenever the keyframe workflow carries the `flux3` tag; FLUX.2 keeps its own Bulgarian rules). The
+rules are the upsampler's system prompt with the output changed to our `{"positive","negative"}`
+JSON, kept in English because that is the text that was measured; the request opens with
+`TARGET CANVAS: <aspect>` as the upsampler expects, and the budget is 1200 tokens against FLUX.2's
+600. The upsampler itself is downloaded but not wired in. A live check through the default profile
+("a woman in a long coat walks toward the camera on a rainy street, full figure", 16:9): 181 words
+in 19.7 s, a 4.0 s render, head to boots in frame.
+
 ## 1. Or import any of the others in bulk
 
 ComfyUI ships an example workflow for every hosted provider it proxies (`api_*`), and serves them

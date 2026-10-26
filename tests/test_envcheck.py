@@ -31,7 +31,9 @@ def _object_info_for_builtins() -> dict:
             info.setdefault(cls, {"input": {"required": {}}})
         for _, cls, fld, val in spec.requires_models:
             req = info.setdefault(cls, {"input": {"required": {}}})["input"]["required"]
-            req.setdefault(fld, [[], {}])[0].append(val)
+            files = req.setdefault(fld, [[], {}])[0]
+            if val not in files:  # built-ins share model files; a real /object_info lists each once
+                files.append(val)
         for p in spec.params.values():
             if p.enum_from:
                 info.setdefault(p.enum_from["class_type"], {"input": {"required": {}}})

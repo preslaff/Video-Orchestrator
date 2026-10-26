@@ -126,9 +126,10 @@ python -m vorch status  # who is up, whose they are, and who holds the GPU
 The commands below are what it runs, and `python -m vorch services list` prints them for you; run
 them by hand whenever you prefer.
 
-1. **ComfyUI** on `:8188` with the FLUX.2 Klein, Wan 2.2 (GGUF) and ReActor models:
+1. **ComfyUI** (v0.42.5) on `:8188` with the FLUX 3 / FLUX.2 Klein, Wan 2.2 (GGUF) and ReActor
+   models (`models/`, `input/`, `output/` are symlinks into `~/comfy/ComfyUI`):
    ```bash
-   cd ~/comfy/ComfyUI && ~/WORK/LTX-Colab/venv/bin/comfy launch
+   cd ~/comfy/ComfyUI-next && ~/comfy/venv-next/bin/python main.py --enable-manager
    ```
 2. **Gemma** (llama-server) on `:8080`, on the CPU so it never competes with ComfyUI for GPU
    *compute*, and **with the vision projector** — without `--mmproj` every verdict is meaningless:

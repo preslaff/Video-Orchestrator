@@ -3,7 +3,8 @@ name: Cinematic 16:9
 purpose: cinematic
 kind: video
 aspect: "16:9"
-keyframe: {workflow: keyframe, width: 1024, height: 576, steps: 24, cfg: 5.0}
+# FLUX 3 Klein is step- and guidance-distilled: 16 steps, cfg 1 (negative has no effect). FLUX.2 = workflow: keyframe, 24 / 5.0
+keyframe: {workflow: keyframe_flux3, width: 1024, height: 576, steps: 16, cfg: 1.0}
 video: {workflow: animate, width: 832, height: 480, length: 49, fps: 16}
 style:
   keyframe_prefix: ""

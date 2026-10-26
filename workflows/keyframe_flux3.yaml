@@ -1,0 +1,24 @@
+# Built-in: FLUX 3 Image Klein (5.6B, step-distilled) text-to-image keyframe — an alternative to
+# FLUX.2 `keyframe`, chosen per profile, job or scene. Flattened from ComfyUI's official
+# image_flux3_klein_distilled_t2i template without its optional 9B prompt upsampler (Gemma writes
+# the prompts). Needs ComfyUI >= 0.41 (FLUX 3 support, PR #17064). Measured against `keyframe`
+# in docs/workflows.md §0a: 3x faster, less VRAM, and it spells short labels FLUX.2 garbles.
+# FLUX Kommunity License: free commercial use only under $5M annual revenue.
+name: keyframe_flux3
+kind: keyframe
+template: image_flux3_klein_distilled_t2i.json
+description: FLUX 3 Image Klein distilled text-to-image (int8, 16 steps / cfg 1)
+tags: [klein, flux3, t2i, image]
+outputs: {type: image, nodes: ["9"]}
+params:
+  positive:        {node: "4", field: text,         type: str,   required: true}
+  negative:        {node: "5", field: text,         type: str}
+  seed:            {node: "7", field: seed,         type: int,   required: true}
+  width:           {node: "6", field: width,        type: int,   constraint: multiple_of_16, min: 256, max: 2048}
+  height:          {node: "6", field: height,       type: int,   constraint: multiple_of_16, min: 256, max: 2048}
+  steps:           {node: "7", field: steps,        type: int,   min: 1}
+  cfg:             {node: "7", field: cfg,          type: float}
+  unet:            {node: "1", field: unet_name,    type: enum,  enum_from: {class_type: UNETLoader, input: unet_name}}
+  batch_size:      {node: "6", field: batch_size,   type: int,   min: 1, max: 4}
+  sampler:         {node: "7", field: sampler_name, type: enum,  enum_from: {class_type: KSampler, input: sampler_name}}
+  filename_prefix: {node: "9", field: filename_prefix, type: str}
